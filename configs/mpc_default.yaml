@@ -1,0 +1,15 @@
+mpc:
+  horizon: 20
+  n_candidates: 500
+  n_elite: 50
+  n_iterations: 3
+  initial_std: 0.3
+
+  control_bounds:
+    F_in: [10.0, 100.0]
+    Tc_in: [280.0, 320.0]
+
+  cost_weights:
+    state: [0.0, 0.0, 10.0, 0.0]  # primarily track temperature
+    control_effort: [0.01, 0.1]
+    terminal: 5.0

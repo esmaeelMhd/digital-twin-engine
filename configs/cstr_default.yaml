@@ -1,0 +1,28 @@
+cstr:
+  V: 100.0
+  Vc: 20.0
+  k0: 7.2e10
+  Ea_over_R: 8750.0
+  dH_rxn: -50000.0
+  rho: 1000.0
+  Cp: 0.239
+  UA: 50000.0
+  rho_c: 1000.0
+  Cp_c: 4.18
+  Fc: 15.0
+
+simulation:
+  dt: 0.1
+  t_span: [0.0, 100.0]
+
+initial_conditions:
+  Ca: 0.5
+  Cb: 0.5
+  T: 350.0
+  Tc: 300.0
+
+operating_ranges:
+  F_in: [10.0, 100.0]
+  Tc_in: [280.0, 320.0]
+  Ca_in: [0.5, 2.0]
+  T_in: [290.0, 350.0]
