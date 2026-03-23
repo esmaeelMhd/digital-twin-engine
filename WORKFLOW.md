@@ -136,6 +136,32 @@ Epoch 100/100: train_loss=0.089, val_loss=0.095
 
 ---
 
+### 3.3 Optional: Autoresearch Loop (5 minutes per experiment)
+
+If you want to apply the `karpathy/autoresearch` idea to this repo, use the bounded experiment harness:
+
+```bash
+python scripts/autoresearch.py \
+  --config configs/autoresearch_default.yaml \
+  --description baseline \
+  --data_dir data/test/
+```
+
+For production experiments, point `--data_dir` at `data/cstr/`.
+
+**What the harness does:**
+- Runs `scripts/train.py` with a fixed wall-clock budget
+- Forces regular validation so each run emits a comparable `best_val_loss`
+- Stores run logs and model artifacts under `outputs/autoresearch/runs/<run_id>/`
+- Appends the result to `outputs/autoresearch/results.tsv`
+- Promotes the run into `outputs/autoresearch/baseline/` only if it improves the metric
+
+**Agent workflow:** See `program.md` for the autonomous keep/discard loop instructions.
+
+**Checkpoint:** ✅ Baseline established, experiments can iterate autonomously
+
+---
+
 ## 📈 Phase 4: Model Evaluation (10 minutes)
 
 ### 4.1 Run Evaluation

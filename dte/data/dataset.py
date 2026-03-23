@@ -200,8 +200,13 @@ class TrajectoryDataset:
         Returns:
             Tuple of (train_dataset, val_dataset)
         """
-        n_val = int(self._n_samples * val_fraction)
-        n_train = self._n_samples - n_val
+        n_trajectories = self.data["states"].shape[0]
+        if n_trajectories < 2:
+            raise ValueError("Need at least two trajectories to create a train/validation split.")
+
+        n_val = int(n_trajectories * val_fraction)
+        n_val = max(1, min(n_val, n_trajectories - 1))
+        n_train = n_trajectories - n_val
         
         # Create new datasets with split data
         train_data = {

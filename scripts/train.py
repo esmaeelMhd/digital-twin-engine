@@ -58,6 +58,24 @@ def main():
         help="Random seed"
     )
     parser.add_argument(
+        "--time_budget_minutes",
+        type=float,
+        default=None,
+        help="Optional wall-clock training budget in minutes"
+    )
+    parser.add_argument(
+        "--summary_path",
+        type=str,
+        default=None,
+        help="Path to write machine-readable training summary"
+    )
+    parser.add_argument(
+        "--val_every",
+        type=int,
+        default=None,
+        help="Validation cadence in epochs (overrides config checkpointing.val_every)"
+    )
+    parser.add_argument(
         "--wandb",
         action="store_true",
         help="Use Weights & Biases logging"
@@ -76,6 +94,11 @@ def main():
         config["training"]["n_epochs"] = args.n_epochs
     if args.batch_size is not None:
         config["training"]["batch_size"] = args.batch_size
+    config.setdefault("checkpointing", {})
+    if args.val_every is not None:
+        config["checkpointing"]["val_every"] = args.val_every
+    else:
+        config["checkpointing"].setdefault("val_every", 5)
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -96,6 +119,9 @@ def main():
     print(f"Seed: {args.seed}")
     print(f"Epochs: {config['training']['n_epochs']}")
     print(f"Batch size: {config['training']['batch_size']}")
+    print(f"Validation every: {config['checkpointing']['val_every']} epoch(s)")
+    if args.time_budget_minutes is not None:
+        print(f"Time budget: {args.time_budget_minutes:.2f} minutes")
     print("="*60)
     
     # Initialize PRNG
@@ -113,15 +139,11 @@ def main():
     
     # Split train/val
     val_split = config["training"]["val_split"]
-    n_val = int(full_dataset.n_samples * val_split)
-    n_train = full_dataset.n_samples - n_val
+    train_dataset, val_dataset = full_dataset.split(val_split)
     
     print(f"Total samples: {full_dataset.n_samples}")
-    print(f"Train samples: {n_train}")
-    print(f"Val samples: {n_val}")
-    
-    # Create split datasets (simple approach - first n_train for train, rest for val)
-    train_dataset, val_dataset = full_dataset.split(val_split)
+    print(f"Train samples: {train_dataset.n_samples}")
+    print(f"Val samples: {val_dataset.n_samples}")
     
     # Create CSTR params for physics losses
     cstr_params_dict = {k: float(v) for k, v in cstr_config["cstr"].items()}
@@ -168,6 +190,9 @@ def main():
         n_epochs=config["training"]["n_epochs"],
         output_dir=args.output_dir,
         key=key_train,
+        time_budget_seconds=(
+            args.time_budget_minutes * 60.0 if args.time_budget_minutes is not None else None
+        ),
     )
     
     # Save training history
@@ -179,10 +204,38 @@ def main():
         }
         json.dump(history_json, f, indent=2)
     print(f"\n✓ Training history saved to {history_path}")
+
+    summary = {
+        "best_val_loss": trainer.last_train_summary.get("best_val_loss"),
+        "final_train_loss": history["train_loss"][-1] if history["train_loss"] else None,
+        "final_val_loss": history["val_loss"][-1] if history["val_loss"] else None,
+        "epochs_completed": trainer.last_train_summary.get("epochs_completed", 0),
+        "steps_completed": trainer.last_train_summary.get("steps_completed", trainer.step),
+        "timed_out": trainer.last_train_summary.get("timed_out", False),
+        "training_seconds": trainer.last_train_summary.get("training_seconds"),
+        "time_budget_seconds": (
+            args.time_budget_minutes * 60.0 if args.time_budget_minutes is not None else None
+        ),
+        "seed": args.seed,
+        "batch_size": config["training"]["batch_size"],
+        "n_epochs_requested": config["training"]["n_epochs"],
+        "val_every": config["checkpointing"]["val_every"],
+        "output_dir": args.output_dir,
+    }
+    summary_path = args.summary_path or os.path.join(args.output_dir, "training_summary.json")
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"✓ Training summary saved to {summary_path}")
+    print(f"best_val_loss: {summary['best_val_loss']}")
+    print(f"training_seconds: {summary['training_seconds']}")
+    print(f"epochs_completed: {summary['epochs_completed']}")
+    print(f"timed_out: {summary['timed_out']}")
     
     print("\n" + "="*60)
     print("Training complete!")
     print("="*60)
+
+    return summary
 
 
 if __name__ == "__main__":

@@ -71,6 +71,7 @@ def verify_dte_modules():
         "dte.control.mpc",
         "dte.training.trainer",
         "dte.training.losses",
+        "dte.autoresearch.workflow",
         "dte.utils.plotting",
         "dte.utils.logging",
     ]
@@ -97,6 +98,7 @@ def verify_configs():
         "configs/cstr_default.yaml",
         "configs/training_default.yaml",
         "configs/mpc_default.yaml",
+        "configs/autoresearch_default.yaml",
     ]
     
     missing = []

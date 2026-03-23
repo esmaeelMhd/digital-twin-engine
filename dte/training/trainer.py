@@ -1,6 +1,7 @@
 """Training loop for Digital Twin model."""
 
 from typing import Dict, Optional
+import time
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -66,6 +67,7 @@ class Trainer:
         }
         
         self.best_val_loss = float("inf")
+        self.last_train_summary: Dict[str, float | int | bool | None] = {}
     
     def compute_loss(
         self,
@@ -205,17 +207,25 @@ class Trainer:
         
         return new_model, new_opt_state, loss_dict
     
-    def train_epoch(self, key: PRNGKeyArray) -> Dict[str, float]:
+    def train_epoch(
+        self,
+        key: PRNGKeyArray,
+        deadline: Optional[float] = None,
+    ) -> tuple[Dict[str, float], bool]:
         """Train for one epoch.
         
         Args:
             key: PRNG key
+            deadline: Optional wall-clock deadline in perf_counter seconds
             
         Returns:
-            Dictionary of mean losses
+            Tuple of (mean losses, whether the time budget expired)
         """
-        batch_size = self.config["training"]["batch_size"]
-        n_batches = self.train_dataset.n_samples // batch_size
+        batch_size = min(
+            self.config["training"]["batch_size"],
+            self.train_dataset.n_samples,
+        )
+        n_batches = max(1, self.train_dataset.n_samples // batch_size)
         
         epoch_losses = {
             "total": [],
@@ -227,7 +237,12 @@ class Trainer:
         }
         
         pbar = tqdm(range(n_batches), desc="Training")
+        timed_out = False
         for i in pbar:
+            if deadline is not None and time.perf_counter() >= deadline:
+                timed_out = True
+                break
+
             # Sample batch
             key, subkey = jax.random.split(key)
             batch = self.train_dataset.sample_batch(subkey, batch_size)
@@ -246,11 +261,20 @@ class Trainer:
             
             # Update progress bar
             pbar.set_postfix({"loss": f"{loss_dict['total']:.4f}"})
+
+            if deadline is not None and time.perf_counter() >= deadline:
+                timed_out = True
+                break
         
+        if not epoch_losses["total"]:
+            raise RuntimeError(
+                "No training batches were completed before the time budget expired."
+            )
+
         # Compute mean losses
         mean_losses = {k: float(jnp.mean(jnp.array(v))) for k, v in epoch_losses.items()}
         
-        return mean_losses
+        return mean_losses, timed_out
     
     def validate(self, key: PRNGKeyArray, n_batches: int = 50) -> Dict[str, float]:
         """Validate on validation set.
@@ -265,8 +289,11 @@ class Trainer:
         if self.val_dataset is None:
             return {}
         
-        batch_size = self.config["training"]["batch_size"]
-        n_batches = min(n_batches, self.val_dataset.n_samples // batch_size)
+        batch_size = min(
+            self.config["training"]["batch_size"],
+            self.val_dataset.n_samples,
+        )
+        n_batches = max(1, min(n_batches, self.val_dataset.n_samples // batch_size))
         
         val_losses = {
             "total": [],
@@ -295,32 +322,62 @@ class Trainer:
         
         return mean_losses
     
-    def train(self, n_epochs: int, output_dir: str, key: PRNGKeyArray):
+    def train(
+        self,
+        n_epochs: int,
+        output_dir: str,
+        key: PRNGKeyArray,
+        time_budget_seconds: Optional[float] = None,
+    ):
         """Full training loop.
         
         Args:
             n_epochs: Number of epochs
             output_dir: Output directory for checkpoints
             key: PRNG key
+            time_budget_seconds: Optional wall-clock budget for the training loop
         """
         os.makedirs(output_dir, exist_ok=True)
         
         print(f"\nStarting training for {n_epochs} epochs...")
         print(f"Output directory: {output_dir}")
+        if time_budget_seconds is not None:
+            print(f"Wall-clock budget: {time_budget_seconds:.1f} seconds")
+
+        val_every = self.config.get("checkpointing", {}).get("val_every", 5)
+        start_time = time.perf_counter()
+        deadline = None
+        if time_budget_seconds is not None:
+            deadline = start_time + time_budget_seconds
+        timed_out = False
+        epochs_completed = 0
         
         for epoch in range(n_epochs):
+            if deadline is not None and time.perf_counter() >= deadline:
+                timed_out = True
+                break
+
             print(f"\n{'='*60}")
             print(f"Epoch {epoch+1}/{n_epochs}")
             print(f"{'='*60}")
             
             # Train epoch
             key, subkey = jax.random.split(key)
-            train_losses = self.train_epoch(subkey)
+            train_losses, epoch_timed_out = self.train_epoch(subkey, deadline=deadline)
+            epochs_completed += 1
             
             print(f"\nTrain losses: {train_losses}")
             
             # Validate
-            if self.val_dataset is not None and (epoch + 1) % 5 == 0:
+            should_validate = False
+            if self.val_dataset is not None:
+                should_validate = (
+                    (epoch + 1) % val_every == 0
+                    or epoch == n_epochs - 1
+                    or epoch_timed_out
+                )
+
+            if should_validate:
                 key, subkey = jax.random.split(key)
                 val_losses = self.validate(subkey)
                 print(f"Val losses: {val_losses}")
@@ -339,17 +396,40 @@ class Trainer:
             
             # Record history
             self.history["train_loss"].append(train_losses["total"])
-            if self.val_dataset is not None and (epoch + 1) % 5 == 0:
+            if should_validate:
                 self.history["val_loss"].append(val_losses["total"])
             self.history["step"].append(self.step)
+
+            if epoch_timed_out:
+                timed_out = True
+                break
         
         # Save final model
         final_path = os.path.join(output_dir, "final_model.eqx")
         self.model.save(final_path)
+
+        training_seconds = time.perf_counter() - start_time
+        if deadline is not None and time.perf_counter() >= deadline:
+            timed_out = True
+        best_val_loss = None
+        if self.best_val_loss != float("inf"):
+            best_val_loss = float(self.best_val_loss)
         
         print(f"\n{'='*60}")
         print("Training complete!")
-        print(f"Best validation loss: {self.best_val_loss:.4f}")
+        if best_val_loss is not None:
+            print(f"Best validation loss: {best_val_loss:.4f}")
+        print(f"Epochs completed: {epochs_completed}")
+        print(f"Training seconds: {training_seconds:.2f}")
+        print(f"Timed out: {timed_out}")
         print(f"{'='*60}\n")
+
+        self.last_train_summary = {
+            "epochs_completed": epochs_completed,
+            "timed_out": timed_out,
+            "training_seconds": training_seconds,
+            "best_val_loss": best_val_loss,
+            "steps_completed": self.step,
+        }
         
         return self.history

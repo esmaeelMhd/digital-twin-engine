@@ -122,7 +122,26 @@ Compares AI-MPC vs PID baseline on:
 - Integral Squared Error (ISE)
 - Control effort
 
-### 5. Launch Interactive Dashboard
+### 5. Run Autoresearch
+
+This repo now includes an autonomous experiment loop inspired by `karpathy/autoresearch`.
+
+```bash
+python scripts/autoresearch.py \
+  --config configs/autoresearch_default.yaml \
+  --description baseline \
+  --data_dir data/test/
+```
+
+Each run:
+- trains with a fixed wall-clock budget
+- writes logs and artifacts to `outputs/autoresearch/runs/<run_id>/`
+- appends a row to `outputs/autoresearch/results.tsv`
+- promotes the run into `outputs/autoresearch/baseline/` only if `best_val_loss` improves
+
+The agent-facing operating rules for long-running autonomous experimentation live in `program.md`.
+
+### 6. Launch Interactive Dashboard
 
 ```bash
 streamlit run app/dashboard.py
@@ -141,8 +160,10 @@ digital-twin-engine/
 ├── configs/              # Configuration files
 │   ├── cstr_default.yaml
 │   ├── training_default.yaml
+│   ├── autoresearch_default.yaml
 │   └── mpc_default.yaml
 ├── dte/                  # Main package
+│   ├── autoresearch/     # Autoresearch workflow helpers
 │   ├── simulators/       # Physics simulators
 │   ├── data/             # Data generation & loading
 │   ├── models/           # Neural network models
@@ -153,7 +174,8 @@ digital-twin-engine/
 ├── scripts/              # Executable scripts
 ├── app/                  # Streamlit dashboard
 ├── tests/                # Unit tests
-└── notebooks/            # Jupyter notebooks
+├── notebooks/            # Jupyter notebooks
+└── program.md            # Agent instructions for autonomous research
 ```
 
 ## Technical Details
