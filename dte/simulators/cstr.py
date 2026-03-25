@@ -8,7 +8,7 @@ Implements a continuous stirred-tank reactor with:
 """
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Tuple
+from typing import Dict, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -176,6 +176,94 @@ class CSTRSimulator:
             "controls": control_trajectory,
         }
 
+    def simulate_for_data_generation(
+        self,
+        initial_state: Float[Array, "4"],
+        control_trajectory: Float[Array, "n_steps 2"],
+        disturbance_trajectory: Float[Array, "n_steps 2"],
+        t_span: Tuple[float, float],
+        dt: float = 0.1,
+        n_steps: int = 1000,
+    ) -> Dict[str, Float[Array, "..."]]:
+        """Simulate on a fixed grid for offline data generation.
+
+        This path keeps the same public contract as ``simulate`` but avoids the
+        adaptive-solver overhead that is useful for reference simulations and less
+        useful for large-scale dataset creation on a uniform time grid.
+        """
+        time, states = simulate_data_generation_jit(
+            initial_state,
+            control_trajectory,
+            disturbance_trajectory,
+            _pack_params(self.params),
+            t_span[0],
+            t_span[1],
+        )
+
+        return {
+            "time": time,
+            "states": states,
+            "controls": control_trajectory,
+        }
+
+    def _steady_state_residual(
+        self,
+        T: Float[Array, ""],
+        control: Float[Array, "2"],
+        disturbance: Float[Array, "2"],
+    ) -> Float[Array, ""]:
+        """Energy balance residual after eliminating Ca, Cb, and Tc analytically."""
+        F_in, Tc_in = control[0], control[1]
+        Ca_in, T_in = disturbance[0], disturbance[1]
+
+        V = jnp.asarray(self.params.V)
+        dH_rxn = jnp.asarray(self.params.dH_rxn)
+        rho = jnp.asarray(self.params.rho)
+        Cp = jnp.asarray(self.params.Cp)
+        UA = jnp.asarray(self.params.UA)
+        Fc = jnp.asarray(self.params.Fc)
+        Vc = jnp.asarray(self.params.Vc)
+        rho_c = jnp.asarray(self.params.rho_c)
+        Cp_c = jnp.asarray(self.params.Cp_c)
+
+        flow_over_volume = F_in / V
+        k = self._arrhenius(T)
+        Ca = (flow_over_volume * Ca_in) / (flow_over_volume + k)
+
+        coolant_influence = Fc / Vc
+        heat_exchange = UA / (Vc * rho_c * Cp_c)
+        Tc = (
+            coolant_influence * Tc_in + heat_exchange * T
+        ) / (coolant_influence + heat_exchange)
+
+        reaction_heating = (-dH_rxn / (rho * Cp)) * k * Ca
+        jacket_coupling = (UA / (V * rho * Cp)) * (Tc - T)
+        feed_term = flow_over_volume * (T_in - T)
+
+        return feed_term + reaction_heating + jacket_coupling
+
+    def _steady_state_via_simulation(
+        self,
+        control: Float[Array, "2"],
+        disturbance: Float[Array, "2"],
+        initial_guess: Float[Array, "4"],
+    ) -> Float[Array, "4"]:
+        """Fallback steady-state estimate by long-horizon simulation."""
+        n_steps = 5000
+        control_traj = jnp.tile(control[None, :], (n_steps, 1))
+        disturbance_traj = jnp.tile(disturbance[None, :], (n_steps, 1))
+
+        result = self.simulate(
+            initial_guess,
+            control_traj,
+            disturbance_traj,
+            t_span=(0.0, 500.0),
+            dt=0.1,
+            n_steps=n_steps,
+        )
+
+        return result["states"][-1]
+
     def steady_state(
         self,
         control: Float[Array, "2"],
@@ -195,23 +283,69 @@ class CSTRSimulator:
         if initial_guess is None:
             # Default initial guess
             initial_guess = jnp.array([0.5, 0.5, 350.0, 300.0])
-        
-        # Simulate for long time
-        n_steps = 5000
-        control_traj = jnp.tile(control[None, :], (n_steps, 1))
-        disturbance_traj = jnp.tile(disturbance[None, :], (n_steps, 1))
-        
-        result = self.simulate(
-            initial_guess,
-            control_traj,
-            disturbance_traj,
-            t_span=(0.0, 500.0),
-            dt=0.1,
-            n_steps=n_steps,
+
+        residual_fn = lambda T: self._steady_state_residual(T, control, disturbance)
+        residual_grad = jax.grad(residual_fn)
+
+        T = float(initial_guess[2])
+        converged = False
+
+        for _ in range(25):
+            residual = float(residual_fn(T))
+            if not jnp.isfinite(jnp.asarray(residual)).item():
+                break
+
+            if abs(residual) < 1e-6:
+                converged = True
+                break
+
+            slope = float(residual_grad(T))
+            if not jnp.isfinite(jnp.asarray(slope)).item() or abs(slope) < 1e-8:
+                break
+
+            # Damped Newton step to keep the iterate in a physically reasonable range.
+            step = jnp.clip(residual / slope, -25.0, 25.0)
+            next_T = float(jnp.clip(T - step, 250.0, 500.0))
+
+            if abs(next_T - T) < 1e-6:
+                T = next_T
+                converged = True
+                break
+
+            T = next_T
+
+        final_residual = float(residual_fn(T))
+        if (
+            not converged
+            or not jnp.isfinite(jnp.asarray(final_residual)).item()
+            or abs(final_residual) > 1e-4
+        ):
+            return self._steady_state_via_simulation(control, disturbance, initial_guess)
+
+        F_in = control[0]
+        Tc_in = control[1]
+        Ca_in = disturbance[0]
+
+        V = jnp.asarray(self.params.V)
+        flow_over_volume = F_in / V
+        k = self._arrhenius(T)
+        Ca = (flow_over_volume * Ca_in) / (flow_over_volume + k)
+        Cb = Ca_in - Ca
+
+        coolant_influence = jnp.asarray(self.params.Fc) / jnp.asarray(self.params.Vc)
+        heat_exchange = (
+            jnp.asarray(self.params.UA)
+            / (
+                jnp.asarray(self.params.Vc)
+                * jnp.asarray(self.params.rho_c)
+                * jnp.asarray(self.params.Cp_c)
+            )
         )
-        
-        # Return final state
-        return result["states"][-1]
+        Tc = (
+            coolant_influence * Tc_in + heat_exchange * T
+        ) / (coolant_influence + heat_exchange)
+
+        return jnp.array([Ca, Cb, T, Tc])
 
     def get_conservation_quantities(
         self,
@@ -243,6 +377,244 @@ class CSTRSimulator:
             "total_mass": total_mass,
             "total_energy": total_energy,
         }
+
+
+def _pack_params(params: CSTRParams) -> Float[Array, "11"]:
+    """Pack simulator parameters into an array for JIT-friendly helper functions."""
+    return jnp.array(
+        [
+            params.V,
+            params.Vc,
+            params.k0,
+            params.Ea_over_R,
+            params.dH_rxn,
+            params.rho,
+            params.Cp,
+            params.UA,
+            params.rho_c,
+            params.Cp_c,
+            params.Fc,
+        ]
+    )
+
+
+def pack_params(params: CSTRParams) -> Float[Array, "11"]:
+    """Public wrapper for packing simulator parameters into an array."""
+    return _pack_params(params)
+
+
+def _dynamics_with_params(
+    state: Float[Array, "4"],
+    control: Float[Array, "2"],
+    disturbance: Float[Array, "2"],
+    params: Float[Array, "11"],
+) -> Float[Array, "4"]:
+    """JIT-friendly CSTR dynamics using packed parameter arrays."""
+    V, Vc, k0, Ea_over_R, dH_rxn, rho, Cp, UA, rho_c, Cp_c, Fc = params
+
+    Ca, Cb, T, Tc = state[0], state[1], state[2], state[3]
+    F_in, Tc_in = control[0], control[1]
+    Ca_in, T_in = disturbance[0], disturbance[1]
+
+    k = k0 * jnp.exp(-Ea_over_R / T)
+
+    dCa_dt = (F_in / V) * (Ca_in - Ca) - k * Ca
+    dCb_dt = (F_in / V) * (0.0 - Cb) + k * Ca
+    dT_dt = (
+        (F_in / V) * (T_in - T)
+        + (-dH_rxn / (rho * Cp)) * k * Ca
+        + (UA / (V * rho * Cp)) * (Tc - T)
+    )
+    dTc_dt = (
+        (Fc / Vc) * (Tc_in - Tc)
+        + (UA / (Vc * rho_c * Cp_c)) * (T - Tc)
+    )
+
+    return jnp.array([dCa_dt, dCb_dt, dT_dt, dTc_dt])
+
+
+def _steady_state_residual_with_params(
+    T: Float[Array, ""],
+    control: Float[Array, "2"],
+    disturbance: Float[Array, "2"],
+    params: Float[Array, "11"],
+) -> Float[Array, ""]:
+    """Energy balance residual using packed parameter arrays."""
+    V, Vc, k0, Ea_over_R, dH_rxn, rho, Cp, UA, rho_c, Cp_c, Fc = params
+    F_in, Tc_in = control[0], control[1]
+    Ca_in, T_in = disturbance[0], disturbance[1]
+
+    flow_over_volume = F_in / V
+    k = k0 * jnp.exp(-Ea_over_R / T)
+    Ca = (flow_over_volume * Ca_in) / (flow_over_volume + k)
+
+    coolant_influence = Fc / Vc
+    heat_exchange = UA / (Vc * rho_c * Cp_c)
+    Tc = (
+        coolant_influence * Tc_in + heat_exchange * T
+    ) / (coolant_influence + heat_exchange)
+
+    reaction_heating = (-dH_rxn / (rho * Cp)) * k * Ca
+    jacket_coupling = (UA / (V * rho * Cp)) * (Tc - T)
+    feed_term = flow_over_volume * (T_in - T)
+
+    return feed_term + reaction_heating + jacket_coupling
+
+
+@jax.jit
+def steady_state_from_packed_params_jit(
+    control: Float[Array, "2"],
+    disturbance: Float[Array, "2"],
+    initial_guess: Float[Array, "4"],
+    params: Float[Array, "11"],
+) -> Float[Array, "4"]:
+    """Fast steady-state estimate using packed parameters and damped Newton iterations."""
+    initial_T = jnp.clip(initial_guess[2], 250.0, 500.0)
+
+    def body_fn(_, T):
+        residual = _steady_state_residual_with_params(T, control, disturbance, params)
+        slope = jax.grad(_steady_state_residual_with_params, argnums=0)(
+            T, control, disturbance, params
+        )
+        safe_slope = jnp.where(jnp.abs(slope) < 1e-8, 1e-8, slope)
+        step = jnp.clip(residual / safe_slope, -25.0, 25.0)
+        return jnp.clip(T - step, 250.0, 500.0)
+
+    T = jax.lax.fori_loop(0, 25, body_fn, initial_T)
+
+    V, Vc, k0, Ea_over_R, _, _, _, UA, rho_c, Cp_c, Fc = params
+    F_in, Tc_in = control[0], control[1]
+    Ca_in = disturbance[0]
+
+    flow_over_volume = F_in / V
+    k = k0 * jnp.exp(-Ea_over_R / T)
+    Ca = (flow_over_volume * Ca_in) / (flow_over_volume + k)
+    Cb = Ca_in - Ca
+
+    coolant_influence = Fc / Vc
+    heat_exchange = UA / (Vc * rho_c * Cp_c)
+    Tc = (
+        coolant_influence * Tc_in + heat_exchange * T
+    ) / (coolant_influence + heat_exchange)
+
+    return jnp.array([Ca, Cb, T, Tc])
+
+
+@jax.jit
+def steady_state_batch_jit(
+    controls: Float[Array, "batch 2"],
+    disturbances: Float[Array, "batch 2"],
+    initial_guesses: Float[Array, "batch 4"],
+    params_batch: Float[Array, "batch 11"],
+) -> Float[Array, "batch 4"]:
+    """Vectorized fast steady-state solve for a batch of parameter sets."""
+    return jax.vmap(steady_state_from_packed_params_jit)(
+        controls,
+        disturbances,
+        initial_guesses,
+        params_batch,
+    )
+
+
+@jax.jit
+def steady_state_batch_with_residuals_jit(
+    controls: Float[Array, "batch 2"],
+    disturbances: Float[Array, "batch 2"],
+    initial_guesses: Float[Array, "batch 4"],
+    params_batch: Float[Array, "batch 11"],
+) -> Tuple[Float[Array, "batch 4"], Float[Array, "batch"]]:
+    """Vectorized steady-state solve that also returns final residual magnitudes."""
+    states = steady_state_batch_jit(
+        controls,
+        disturbances,
+        initial_guesses,
+        params_batch,
+    )
+    residuals = jax.vmap(
+        lambda state, control, disturbance, params: jnp.abs(
+            _steady_state_residual_with_params(state[2], control, disturbance, params)
+        )
+    )(states, controls, disturbances, params_batch)
+    return states, residuals
+
+
+@jax.jit
+def simulate_data_generation_jit(
+    initial_state: Float[Array, "4"],
+    control_trajectory: Float[Array, "n_steps 2"],
+    disturbance_trajectory: Float[Array, "n_steps 2"],
+    params: Float[Array, "11"],
+    t0: float,
+    t1: float,
+) -> Tuple[Float[Array, "n_steps"], Float[Array, "n_steps 4"]]:
+    """Fixed-grid RK4 rollout used by the data-generation pipeline."""
+    n_steps = control_trajectory.shape[0]
+    ts = jnp.linspace(t0, t1, n_steps)
+
+    if n_steps <= 1:
+        return ts, initial_state[None, :]
+
+    step_dt = ts[1] - ts[0]
+    control_start = control_trajectory[:-1]
+    control_end = control_trajectory[1:]
+    disturbance_start = disturbance_trajectory[:-1]
+    disturbance_end = disturbance_trajectory[1:]
+
+    def step_fn(state, inputs):
+        control_0, control_1, disturbance_0, disturbance_1 = inputs
+        control_mid = 0.5 * (control_0 + control_1)
+        disturbance_mid = 0.5 * (disturbance_0 + disturbance_1)
+
+        k1 = _dynamics_with_params(state, control_0, disturbance_0, params)
+        k2 = _dynamics_with_params(
+            state + 0.5 * step_dt * k1,
+            control_mid,
+            disturbance_mid,
+            params,
+        )
+        k3 = _dynamics_with_params(
+            state + 0.5 * step_dt * k2,
+            control_mid,
+            disturbance_mid,
+            params,
+        )
+        k4 = _dynamics_with_params(
+            state + step_dt * k3,
+            control_1,
+            disturbance_1,
+            params,
+        )
+
+        next_state = state + (step_dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+        return next_state, next_state
+
+    _, states_tail = jax.lax.scan(
+        step_fn,
+        initial_state,
+        (control_start, control_end, disturbance_start, disturbance_end),
+    )
+    states = jnp.concatenate([initial_state[None, :], states_tail], axis=0)
+    return ts, states
+
+
+@jax.jit
+def simulate_data_generation_batch_jit(
+    initial_states: Float[Array, "batch 4"],
+    control_trajectories: Float[Array, "batch n_steps 2"],
+    disturbance_trajectories: Float[Array, "batch n_steps 2"],
+    params_batch: Float[Array, "batch 11"],
+    t0: float,
+    t1: float,
+) -> Tuple[Float[Array, "batch n_steps"], Float[Array, "batch n_steps 4"]]:
+    """Vectorized fixed-grid rollout used by the batched data-generation path."""
+    return jax.vmap(simulate_data_generation_jit, in_axes=(0, 0, 0, 0, None, None))(
+        initial_states,
+        control_trajectories,
+        disturbance_trajectories,
+        params_batch,
+        t0,
+        t1,
+    )
 
 
 # JIT-compiled versions of key methods

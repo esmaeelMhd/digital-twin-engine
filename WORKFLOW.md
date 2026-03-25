@@ -81,6 +81,23 @@ python scripts/generate_data.py \
 
 **Checkpoint:** ✅ Training data generated, no NaN values
 
+### 2.3 Optional: Benchmark Batch Size
+
+If you want to calibrate generation throughput on your current machine before a long run:
+
+```bash
+python scripts/benchmark_generation.py \
+  --n_trajectories 8 \
+  --n_steps 32 \
+  --batch_sizes 1 2 4 8
+```
+
+**Outputs:**
+- JSON benchmark summary under `outputs/benchmarks/`
+- Markdown report under `outputs/benchmarks/`
+
+Use the reported `best observed batch size` to override `--batch_size` for large runs if needed.
+
 ---
 
 ## 🧠 Phase 3: Model Training (2-4 hours GPU / 8-12 hours CPU)

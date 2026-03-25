@@ -2,6 +2,10 @@
 
 import sys
 
+from dte.utils.runtime import configure_runtime_logging
+
+configure_runtime_logging()
+
 
 def verify_imports():
     """Verify all required packages can be imported."""

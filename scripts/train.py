@@ -2,6 +2,11 @@
 
 import argparse
 import os
+
+from dte.utils.runtime import configure_runtime_logging
+
+configure_runtime_logging()
+
 import yaml
 import jax
 import json

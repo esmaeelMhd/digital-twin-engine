@@ -2,6 +2,11 @@
 
 import argparse
 import os
+
+from dte.utils.runtime import configure_runtime_logging
+
+configure_runtime_logging()
+
 import yaml
 import jax
 import jax.numpy as jnp
@@ -42,6 +47,19 @@ def main():
         default=42,
         help="Random seed"
     )
+    parser.add_argument(
+        "--simulation_mode",
+        type=str,
+        default="dataset",
+        choices=["dataset", "reference"],
+        help="Rollout path to use during generation"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=None,
+        help="Number of trajectories to process together in dataset mode (auto if omitted)"
+    )
     args = parser.parse_args()
     
     # Load config
@@ -57,20 +75,29 @@ def main():
     
     # Initialize data generator
     generator = DataGenerator(simulator, config)
+    batch_size = (
+        args.batch_size
+        if args.batch_size is not None
+        else generator.recommend_batch_size(jax.default_backend())
+    )
     
     # Generate dataset
     print(f"\nGenerating dataset with {args.n_trajectories} trajectories...")
     print(f"Steps per trajectory: {args.n_steps}")
     print(f"Random seed: {args.seed}")
+    print(f"Simulation mode: {args.simulation_mode}")
+    print(f"Batch size: {batch_size}")
     
     key = jax.random.PRNGKey(args.seed)
-    dataset = generator.generate_dataset(
-        key, n_trajectories=args.n_trajectories, n_steps=args.n_steps
-    )
-    
-    # Save dataset
     output_path = os.path.join(args.output_dir, "train_data.h5")
-    generator.save_dataset(dataset, output_path)
+    dataset_summary = generator.generate_dataset_to_hdf5(
+        key,
+        output_path,
+        n_trajectories=args.n_trajectories,
+        n_steps=args.n_steps,
+        simulation_mode=args.simulation_mode,
+        batch_size=batch_size,
+    )
     
     # Print summary statistics
     print("\n" + "=" * 60)
@@ -80,21 +107,43 @@ def main():
     print(f"Steps per trajectory: {args.n_steps}")
     print(f"Total timesteps: {args.n_trajectories * args.n_steps}")
     print(f"\nData shapes:")
-    print(f"  States: {dataset['states'].shape}")
-    print(f"  Controls: {dataset['controls'].shape}")
-    print(f"  Disturbances: {dataset['disturbances'].shape}")
-    print(f"  Params: {dataset['params'].shape}")
+    print(f"  States: {dataset_summary['states_shape']}")
+    print(f"  Controls: {dataset_summary['controls_shape']}")
+    print(f"  Disturbances: {dataset_summary['disturbances_shape']}")
+    print(f"  Params: {dataset_summary['params_shape']}")
     
     print(f"\nState statistics (before normalization):")
-    print(f"  Mean: {dataset['normalization']['state_mean']}")
-    print(f"  Std:  {dataset['normalization']['state_std']}")
+    print(f"  Mean: {dataset_summary['normalization']['state_mean']}")
+    print(f"  Std:  {dataset_summary['normalization']['state_std']}")
     
     print(f"\nControl statistics:")
-    print(f"  Mean: {dataset['normalization']['control_mean']}")
-    print(f"  Std:  {dataset['normalization']['control_std']}")
+    print(f"  Mean: {dataset_summary['normalization']['control_mean']}")
+    print(f"  Std:  {dataset_summary['normalization']['control_std']}")
     
     print(f"\nSaved to: {output_path}")
     print(f"File size: {os.path.getsize(output_path) / 1024**2:.2f} MB")
+    if generator.last_profile:
+        profile = generator.last_profile
+        print("\nGeneration timing:")
+        print(f"  Total: {profile['total_generation_seconds']:.2f} s")
+        print(f"  Signal generation: {profile['signal_generation_seconds']:.2f} s")
+        print(f"  Steady state: {profile['steady_state_seconds']:.2f} s")
+        print(f"  Rollout: {profile['rollout_seconds']:.2f} s")
+        print(f"  Measurement noise: {profile['measurement_noise_seconds']:.2f} s")
+        print(f"  Validation: {profile['validation_seconds']:.2f} s")
+        print(f"  Attempts: {int(profile['attempts'])}")
+        print(f"  Invalid trajectories: {int(profile['invalid_trajectories'])}")
+        print(f"  Exceptions: {int(profile['exceptions'])}")
+        print(
+            f"  Fast steady states: "
+            f"{int(profile.get('steady_state_fast_successes', 0))}"
+        )
+        print(
+            f"  Steady-state fallbacks: "
+            f"{int(profile.get('steady_state_fallbacks', 0))}"
+        )
+        if "batch_size" in profile:
+            print(f"  Profile batch size: {int(profile['batch_size'])}")
     print("=" * 60)
 
 

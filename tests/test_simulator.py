@@ -39,6 +39,35 @@ def test_steady_state_remains_steady():
         assert max_deviation < 1e-2, f"State {i} deviated by {max_deviation}"
 
 
+@pytest.mark.parametrize(
+    ("params", "control", "disturbance"),
+    [
+        (
+            CSTRParams(),
+            jnp.array([50.0, 300.0]),
+            jnp.array([1.0, 320.0]),
+        ),
+        (
+            CSTRParams(V=120.0, Vc=18.0, k0=9.0e10, Ea_over_R=9100.0, UA=6.0e4, Fc=20.0),
+            jnp.array([45.0, 295.0]),
+            jnp.array([1.1, 318.0]),
+        ),
+    ],
+)
+def test_steady_state_matches_long_horizon_simulation(params, control, disturbance):
+    """The fast steady-state solver should agree with the simulation fallback."""
+    simulator = CSTRSimulator(params)
+
+    fast_state = simulator.steady_state(control, disturbance)
+    sim_state = simulator._steady_state_via_simulation(
+        control,
+        disturbance,
+        initial_guess=jnp.array([0.5, 0.5, 350.0, 300.0]),
+    )
+
+    assert jnp.allclose(fast_state, sim_state, atol=1e-2, rtol=1e-3)
+
+
 def test_temperature_response_to_coolant_change():
     """Test 2: Step change in Tc_in should cause T to change monotonically."""
     params = CSTRParams()
@@ -71,6 +100,39 @@ def test_temperature_response_to_coolant_change():
     T_before_step = result["states"][499, 2]
     T_after_step = result["states"][-1, 2]
     assert T_after_step < T_before_step, "Temperature should decrease when coolant temp decreases"
+
+
+def test_data_generation_rollout_matches_reference_solver():
+    """The fixed-grid rollout should stay close to the reference diffrax solver."""
+    params = CSTRParams()
+    simulator = CSTRSimulator(params)
+
+    initial_state = jnp.array([0.6, 0.3, 330.0, 305.0])
+    n_steps = 80
+    control_traj = jnp.tile(jnp.array([50.0, 300.0])[None, :], (n_steps, 1))
+    disturbance_traj = jnp.tile(jnp.array([1.0, 320.0])[None, :], (n_steps, 1))
+    t_span = (0.0, 8.0)
+
+    reference = simulator.simulate(
+        initial_state,
+        control_traj,
+        disturbance_traj,
+        t_span=t_span,
+        dt=0.1,
+        n_steps=n_steps,
+    )
+    generated = simulator.simulate_for_data_generation(
+        initial_state,
+        control_traj,
+        disturbance_traj,
+        t_span=t_span,
+        dt=0.1,
+        n_steps=n_steps,
+    )
+
+    assert generated["states"].shape == reference["states"].shape
+    assert jnp.allclose(generated["time"], reference["time"])
+    assert jnp.allclose(generated["states"], reference["states"], atol=2e-1, rtol=1e-2)
 
 
 def test_mass_balance():
