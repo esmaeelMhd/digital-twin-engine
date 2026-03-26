@@ -139,18 +139,18 @@ class Trainer:
         loss_traj = self.loss_computer.trajectory_loss(pred_states_norm, true_states_norm)
         loss_kl = self.loss_computer.kl_divergence_loss(z_means, z_logvars)
         
-        # Denormalize for physics losses
-        pred_states_denorm = self.loss_computer.denormalize_states(pred_states_batch)
-        controls_denorm = self.loss_computer.denormalize_controls(controls)
-        disturbances_denorm = self.loss_computer.denormalize_disturbances(disturbances)
+        # TrajectoryDataset batches are already stored in physical units.
+        pred_states_phys = pred_states_batch
+        controls_phys = controls
+        disturbances_phys = disturbances
         
         # Compute physics losses
         dt = ts[0, 1] - ts[0, 0]  # Keep as JAX array, don't convert to float
         loss_mass = self.loss_computer.physics_mass_loss(
-            pred_states_denorm, controls_denorm, disturbances_denorm, dt
+            pred_states_phys, controls_phys, disturbances_phys, dt
         )
         loss_energy = self.loss_computer.physics_energy_loss(
-            pred_states_denorm, controls_denorm, disturbances_denorm, dt
+            pred_states_phys, controls_phys, disturbances_phys, dt
         )
         
         # Total loss
@@ -225,7 +225,12 @@ class Trainer:
             self.config["training"]["batch_size"],
             self.train_dataset.n_samples,
         )
-        n_batches = max(1, self.train_dataset.n_samples // batch_size)
+        full_n_batches = max(1, self.train_dataset.n_samples // batch_size)
+        max_batches_per_epoch = self.config["training"].get("max_batches_per_epoch")
+        if max_batches_per_epoch is None:
+            n_batches = full_n_batches
+        else:
+            n_batches = max(1, min(full_n_batches, int(max_batches_per_epoch)))
         
         epoch_losses = {
             "total": [],
@@ -294,6 +299,9 @@ class Trainer:
             self.val_dataset.n_samples,
         )
         n_batches = max(1, min(n_batches, self.val_dataset.n_samples // batch_size))
+        max_val_batches = self.config.get("checkpointing", {}).get("max_val_batches")
+        if max_val_batches is not None:
+            n_batches = max(1, min(n_batches, int(max_val_batches)))
         
         val_losses = {
             "total": [],

@@ -1,6 +1,7 @@
 """Dataset class for trajectory data."""
 
 from typing import Dict, Union
+import numpy as np
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
@@ -36,45 +37,40 @@ class TrajectoryDataset:
         
     def _extract_subsequences(self):
         """Extract subsequences of length seq_len with given stride."""
-        n_trajectories, n_steps_per_traj, _ = self.data["states"].shape
+        states = np.asarray(self.data["states"])
+        controls = np.asarray(self.data["controls"])
+        disturbances = np.asarray(self.data["disturbances"])
+        params = np.asarray(self.data["params"])
+        time = np.asarray(self.data["time"])
+
+        n_trajectories, n_steps_per_traj, _ = states.shape
         
         # Calculate number of subsequences per trajectory
         n_subseqs_per_traj = (n_steps_per_traj - self.seq_len) // self.stride + 1
-        
-        # Pre-allocate
         total_subseqs = n_trajectories * n_subseqs_per_traj
+        start_indices = range(0, n_steps_per_traj - self.seq_len + 1, self.stride)
+
+        def extract_sequence_windows(array: np.ndarray) -> np.ndarray:
+            windows = np.stack(
+                [array[:, start_idx:start_idx + self.seq_len] for start_idx in start_indices],
+                axis=1,
+            )
+            return windows.reshape(total_subseqs, self.seq_len, array.shape[-1])
+
+        time_windows = np.stack(
+            [time[:, start_idx:start_idx + self.seq_len] for start_idx in start_indices],
+            axis=1,
+        ).reshape(total_subseqs, self.seq_len)
+
         self.subsequences = {
-            "states": jnp.zeros((total_subseqs, self.seq_len, 4)),
-            "controls": jnp.zeros((total_subseqs, self.seq_len, 2)),
-            "disturbances": jnp.zeros((total_subseqs, self.seq_len, 2)),
-            "params": jnp.zeros((total_subseqs, 6)),
-            "t": jnp.zeros((total_subseqs, self.seq_len)),
+            "states": extract_sequence_windows(states),
+            "controls": extract_sequence_windows(controls),
+            "disturbances": extract_sequence_windows(disturbances),
+            "params": np.repeat(params, n_subseqs_per_traj, axis=0),
+            "t": time_windows,
         }
-        
-        idx = 0
-        for traj_idx in range(n_trajectories):
-            for start_idx in range(0, n_steps_per_traj - self.seq_len + 1, self.stride):
-                end_idx = start_idx + self.seq_len
-                
-                self.subsequences["states"] = self.subsequences["states"].at[idx].set(
-                    self.data["states"][traj_idx, start_idx:end_idx]
-                )
-                self.subsequences["controls"] = self.subsequences["controls"].at[idx].set(
-                    self.data["controls"][traj_idx, start_idx:end_idx]
-                )
-                self.subsequences["disturbances"] = self.subsequences["disturbances"].at[idx].set(
-                    self.data["disturbances"][traj_idx, start_idx:end_idx]
-                )
-                self.subsequences["params"] = self.subsequences["params"].at[idx].set(
-                    self.data["params"][traj_idx]
-                )
-                self.subsequences["t"] = self.subsequences["t"].at[idx].set(
-                    self.data["time"][traj_idx, start_idx:end_idx]
-                )
-                
-                idx += 1
-        
-        self._n_samples = idx
+
+        self._n_samples = total_subseqs
         print(f"Extracted {self._n_samples} subsequences of length {self.seq_len}")
 
     @property
@@ -112,11 +108,11 @@ class TrajectoryDataset:
             Dictionary with states, controls, disturbances, params, t
         """
         return {
-            "states": self.subsequences["states"][idx],
-            "controls": self.subsequences["controls"][idx],
-            "disturbances": self.subsequences["disturbances"][idx],
-            "params": self.subsequences["params"][idx],
-            "t": self.subsequences["t"][idx],
+            "states": jnp.asarray(self.subsequences["states"][idx]),
+            "controls": jnp.asarray(self.subsequences["controls"][idx]),
+            "disturbances": jnp.asarray(self.subsequences["disturbances"][idx]),
+            "params": jnp.asarray(self.subsequences["params"][idx]),
+            "t": jnp.asarray(self.subsequences["t"][idx]),
         }
 
     def sample_batch(
@@ -131,16 +127,16 @@ class TrajectoryDataset:
         Returns:
             Dictionary with batched arrays
         """
-        indices = jax.random.choice(
-            key, self._n_samples, shape=(batch_size,), replace=False
+        indices = np.asarray(
+            jax.random.choice(key, self._n_samples, shape=(batch_size,), replace=False)
         )
         
         return {
-            "states": self.subsequences["states"][indices],
-            "controls": self.subsequences["controls"][indices],
-            "disturbances": self.subsequences["disturbances"][indices],
-            "params": self.subsequences["params"][indices],
-            "t": self.subsequences["t"][indices],
+            "states": jnp.asarray(self.subsequences["states"][indices]),
+            "controls": jnp.asarray(self.subsequences["controls"][indices]),
+            "disturbances": jnp.asarray(self.subsequences["disturbances"][indices]),
+            "params": jnp.asarray(self.subsequences["params"][indices]),
+            "t": jnp.asarray(self.subsequences["t"][indices]),
         }
 
     def get_normalization_stats(self) -> Dict[str, Array]:
