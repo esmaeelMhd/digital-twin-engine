@@ -1,0 +1,1577 @@
+"""Autonomous research agent for Digital Twin Engine.
+
+Loops indefinitely: asks an LLM to propose a single-file code change,
+applies it, runs the autoresearch harness (scripts/autoresearch.py),
+keeps improvements, reverts failures, and shows a Rich TUI dashboard.
+
+Usage:
+    python scripts/agent.py                    # Gemini 3.1 Pro (default)
+    python scripts/agent.py --claude           # Claude Sonnet 4.6
+    python scripts/agent.py --opus             # Claude Opus 4.6 with 32k thinking
+    python scripts/agent.py --openai o3        # OpenAI o3
+    python scripts/agent.py --grok             # xAI Grok 3
+    python scripts/agent.py --local            # Local LM Studio
+    python scripts/agent.py --max-runs 50      # Cap total experiments
+    python scripts/agent.py --resume           # Continue from existing branch
+    python scripts/agent.py --tag mar26        # Named branch tag
+    python scripts/agent.py --no-dashboard     # Text-only mode
+    python scripts/agent.py --file dte/training/trainer.py  # Restrict to one file
+
+Required environment variables (for the chosen provider):
+    GEMINI_API_KEY      -- Google Gemini (default)
+    ANTHROPIC_API_KEY   -- Claude
+    OPENAI_API_KEY      -- OpenAI
+    XAI_API_KEY         -- xAI Grok
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+
+import yaml
+
+from rich.console import Console
+from rich.layout import Layout
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AUTORESEARCH_SCRIPT = PROJECT_ROOT / "scripts" / "autoresearch.py"
+AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
+RESULTS_TSV = PROJECT_ROOT / "outputs" / "autoresearch" / "results.tsv"
+LOG_FILE = PROJECT_ROOT / "agent.log"
+STATE_FILE = PROJECT_ROOT / "agent_state.json"
+
+
+# ---------------------------------------------------------------------------
+# GPU monitoring (optional – graceful fallback on Mac / CPU machines)
+# ---------------------------------------------------------------------------
+
+_nvml_available = False
+_nvml_handle = None
+GPU_NAME = "No GPU"
+VRAM_TOTAL_MB = 0
+VRAM_LIMIT_MB = 0
+
+try:
+    from pynvml import (
+        nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo,
+        nvmlDeviceGetName, nvmlDeviceGetTemperature, nvmlDeviceGetUtilizationRates,
+        NVML_TEMPERATURE_GPU,
+    )
+    nvmlInit()
+    _nvml_handle = nvmlDeviceGetHandleByIndex(0)
+    _nvml_available = True
+    mem = nvmlDeviceGetMemoryInfo(_nvml_handle)
+    VRAM_TOTAL_MB = mem.total // (1024 * 1024)
+    VRAM_LIMIT_MB = VRAM_TOTAL_MB - 500
+    raw_name = nvmlDeviceGetName(_nvml_handle)
+    GPU_NAME = raw_name.decode() if isinstance(raw_name, bytes) else raw_name
+except Exception:
+    # Graceful fallback on CPU-only machines (Mac, etc.)
+    pass
+
+GPU_TEMP_MAX_START = 70
+GPU_TEMP_ABORT = 85
+
+
+def get_gpu_stats() -> dict:
+    if not _nvml_available:
+        return {"temp": None, "vram_used_mb": 0, "vram_total_mb": VRAM_TOTAL_MB, "gpu_util": 0}
+    try:
+        temp = nvmlDeviceGetTemperature(_nvml_handle, NVML_TEMPERATURE_GPU)
+        mem = nvmlDeviceGetMemoryInfo(_nvml_handle)
+        util = nvmlDeviceGetUtilizationRates(_nvml_handle)
+        return {
+            "temp": temp,
+            "vram_used_mb": mem.used / 1024 / 1024,
+            "vram_total_mb": mem.total / 1024 / 1024,
+            "gpu_util": util.gpu,
+        }
+    except Exception:
+        return {"temp": None, "vram_used_mb": 0, "vram_total_mb": VRAM_TOTAL_MB, "gpu_util": 0}
+
+
+def wait_for_cool_gpu(max_wait: int = 120) -> bool:
+    """Wait up to max_wait seconds for GPU to cool below threshold."""
+    if not _nvml_available:
+        return True
+    start = time.time()
+    while time.time() - start < max_wait:
+        try:
+            temp = nvmlDeviceGetTemperature(_nvml_handle, NVML_TEMPERATURE_GPU)
+        except Exception:
+            return True
+        if temp is None or temp <= GPU_TEMP_MAX_START:
+            return True
+        if temp >= GPU_TEMP_ABORT:
+            return False
+        time.sleep(5)
+    return True  # best effort – don't block indefinitely on CPU machines
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+def log_to_file(msg: str) -> None:
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with LOG_FILE.open("a", encoding="utf-8") as f:
+        f.write(f"[{ts}] {msg}\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def write_state(exp_num: int, description: str, phase: str, extra: dict | None = None) -> None:
+    payload = {
+        "timestamp": datetime.now().isoformat(),
+        "experiment_num": exp_num,
+        "description": description,
+        "phase": phase,
+    }
+    if extra:
+        payload.update(extra)
+    with STATE_FILE.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
+def clear_state() -> None:
+    if STATE_FILE.exists():
+        STATE_FILE.unlink()
+
+
+def read_state() -> dict | None:
+    if not STATE_FILE.exists():
+        return None
+    try:
+        with STATE_FILE.open("r") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Results ledger
+# ---------------------------------------------------------------------------
+
+def init_results() -> None:
+    RESULTS_TSV.parent.mkdir(parents=True, exist_ok=True)
+    if not RESULTS_TSV.exists():
+        with RESULTS_TSV.open("w") as f:
+            f.write("commit\tval_loss\tstatus\tfile\tdescription\n")
+
+
+def log_result(commit: str, val_loss: float, status: str, file_changed: str, description: str) -> None:
+    with RESULTS_TSV.open("a") as f:
+        f.write(f"{commit}\t{val_loss:.6f}\t{status}\t{file_changed}\t{description}\n")
+    log_to_file(f"RESULT: {status} | val_loss={val_loss:.6f} | {file_changed} | {description}")
+
+
+def get_results_history() -> list[dict]:
+    if not RESULTS_TSV.exists():
+        return []
+    rows = []
+    with RESULTS_TSV.open("r") as f:
+        f.readline()  # header
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) >= 5:
+                rows.append({
+                    "commit": parts[0],
+                    "val_loss": float(parts[1]) if parts[1] != "0.000000" else 999.0,
+                    "status": parts[2],
+                    "file": parts[3],
+                    "description": parts[4],
+                })
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Git helpers
+# ---------------------------------------------------------------------------
+
+def git(*args: str) -> tuple[str, int]:
+    result = subprocess.run(
+        ["git"] + list(args),
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip(), result.returncode
+
+
+def git_current_branch() -> str:
+    out, _ = git("branch", "--show-current")
+    return out.strip()
+
+
+def git_short_sha() -> str:
+    out, _ = git("rev-parse", "--short", "HEAD")
+    return out.strip() or "unknown"
+
+
+def git_commit(message: str, files: list[str]) -> str:
+    for f in files:
+        git("add", f)
+    subprocess.run(
+        ["git", "commit", "-m", message],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return git_short_sha()
+
+
+def git_revert_file(filepath: str) -> None:
+    """Restore a single file to HEAD."""
+    git("checkout", "--", filepath)
+
+
+def git_reset_last_commit() -> None:
+    """Undo the last commit but keep working tree changes."""
+    git("reset", "HEAD~1")
+
+
+def git_push() -> None:
+    out, rc = git("push", "origin", "HEAD")
+    if rc != 0:
+        git("push", "--set-upstream", "origin", "HEAD")
+    log_to_file("git push: ok")
+
+
+def setup_branch(tag: str, resume: bool) -> str:
+    """Create or resume an autoresearch branch. Returns branch name."""
+    branch = f"autoresearch/{tag}"
+    existing, _ = git("branch", "--list", branch)
+    if existing.strip():
+        current, _ = git("branch", "--show-current")
+        if current.strip() != branch:
+            git("checkout", branch)
+        log_to_file(f"Resumed branch: {branch}")
+    else:
+        git("checkout", "-b", branch)
+        log_to_file(f"Created branch: {branch}")
+    return branch
+
+
+# ---------------------------------------------------------------------------
+# Fatal API error
+# ---------------------------------------------------------------------------
+
+class FatalAPIError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# LLM providers
+# ---------------------------------------------------------------------------
+
+_claude_model = "claude-sonnet-4-6"
+_gemini_model = "gemini-3.1-pro-preview"
+
+
+def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
+    """Call Google Gemini 2.5 Pro via the google-generativeai SDK."""
+    try:
+        import google.generativeai as genai
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        if not api_key:
+            log_to_file("ERROR Gemini: GEMINI_API_KEY not set")
+            return None
+        genai.configure(api_key=api_key)
+        generation_config: dict = {"max_output_tokens": 8192}
+        if temperature is not None:
+            generation_config["temperature"] = temperature
+        model = genai.GenerativeModel(
+            model_name=_gemini_model,
+            generation_config=generation_config,
+        )
+        response = model.generate_content(prompt)
+        return response.text
+    except ImportError:
+        log_to_file("ERROR Gemini: google-generativeai not installed. Run: pip install google-generativeai")
+        return None
+    except Exception as e:
+        err = str(e)
+        log_to_file(f"ERROR Gemini: {e}")
+        if any(x in err.lower() for x in ("api_key_invalid", "quota", "billing", "permission")):
+            raise FatalAPIError(err)
+        return None
+
+
+def call_claude(prompt: str, temperature: float | None = None) -> str | None:
+    try:
+        import anthropic
+        client = anthropic.Anthropic(timeout=180.0)
+        kwargs: dict = {
+            "model": _claude_model,
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = client.messages.create(**kwargs)
+        return response.content[0].text
+    except ImportError:
+        return None
+    except Exception as e:
+        err = str(e)
+        log_to_file(f"ERROR Claude: {e}")
+        if any(x in err.lower() for x in ("credit balance", "authentication", "billing")):
+            raise FatalAPIError(err)
+        return None
+
+
+def call_claude_opus(prompt: str, temperature: float | None = None) -> str | None:
+    try:
+        import anthropic
+        client = anthropic.Anthropic(timeout=600.0)
+        text_parts: list[str] = []
+        with client.messages.stream(
+            model="claude-opus-4-6",
+            max_tokens=36000,
+            thinking={"type": "enabled", "budget_tokens": 32000},
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            for event in stream:
+                if hasattr(event, "type") and event.type == "content_block_delta":
+                    if hasattr(event, "delta") and event.delta.type == "text_delta":
+                        text_parts.append(event.delta.text)
+        return "".join(text_parts) if text_parts else None
+    except ImportError:
+        return None
+    except Exception as e:
+        err = str(e)
+        log_to_file(f"ERROR Claude Opus: {e}")
+        if any(x in err.lower() for x in ("credit balance", "authentication", "billing")):
+            raise FatalAPIError(err)
+        return None
+
+
+def call_openai(prompt: str, temperature: float | None = None, model: str = "o3") -> str | None:
+    try:
+        from openai import OpenAI
+        client = OpenAI(timeout=600.0)
+        kwargs: dict = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if model.startswith("o"):
+            kwargs["max_completion_tokens"] = 32000
+        else:
+            kwargs["max_completion_tokens"] = 4096
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content
+    except ImportError:
+        return None
+    except Exception as e:
+        err = str(e)
+        log_to_file(f"ERROR OpenAI ({model}): {e}")
+        if any(x in err.lower() for x in ("insufficient_quota", "billing", "authentication")):
+            raise FatalAPIError(err)
+        return None
+
+
+def call_grok(prompt: str, temperature: float | None = None) -> str | None:
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=os.environ.get("XAI_API_KEY", ""),
+            base_url="https://api.x.ai/v1",
+            timeout=300.0,
+        )
+        kwargs: dict = {
+            "model": "grok-3",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4096,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content
+    except ImportError:
+        return None
+    except Exception as e:
+        err = str(e)
+        log_to_file(f"ERROR Grok: {e}")
+        if any(x in err.lower() for x in ("insufficient_quota", "billing", "authentication")):
+            raise FatalAPIError(err)
+        return None
+
+
+def call_local(prompt: str, temperature: float | None = None) -> str | None:
+    try:
+        import requests
+        resp = requests.post(
+            "http://127.0.0.1:1234/v1/chat/completions",
+            json={
+                "model": "deepseek/deepseek-r1-0528-qwen3-8b",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 4096,
+                "temperature": temperature if temperature is not None else 0.7,
+            },
+            timeout=120,
+        )
+        return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        log_to_file(f"ERROR LM Studio: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Prompt builder
+# ---------------------------------------------------------------------------
+
+MODIFIABLE_FILES = [
+    "configs/training_default.yaml",
+    "scripts/train.py",
+    "dte/models/encoder.py",
+    "dte/models/decoder.py",
+    "dte/models/latent_sde.py",
+    "dte/models/digital_twin.py",
+    "dte/training/trainer.py",
+    "dte/training/losses.py",
+]
+
+KNOWN_GOOD = """
+## Proven techniques for JAX Neural SDE digital twins:
+- Increasing trajectory loss weight (10.0 -> 20.0) for better long-horizon predictions
+- Reducing KL weight during early training (0.001 -> 0.0001 or 0.0)
+- Cosine annealing with warm restarts instead of linear warmup decay
+- Gradient clipping reduction (1.0 -> 0.5) for more stable SDE training
+- Increasing latent_dim (16 -> 32) for more expressive latent space
+- Adding weight decay (e.g., 1e-4) to encoder/decoder linear layers
+- Using EulerHeun instead of Heun for faster SDE steps (lower dt_ratio)
+- Adjusting diffusion scale initialisation (e.g., log-scale init at -1 instead of 0)
+- Reducing physics loss weights (0.1 -> 0.01) early in training to avoid gradient dominance
+- Larger batch_size for JAX compiled code (64 -> 128) to improve throughput
+- Increasing seq_len to expose the model to longer dependencies
+These are NOT guaranteed to work but are worth trying if not yet attempted.
+"""
+
+JAX_PITFALLS = """
+## JAX/Equinox pitfalls to avoid:
+- Do NOT use Python float() casts inside JIT-compiled functions (ConcretizationTypeError).
+- Do NOT change the tree structure of Equinox modules mid-training (shape errors on load).
+- YAML changes must keep all required keys present; missing keys cause KeyError on load.
+- In configs, numeric values like 3e-4 must stay as floats, not strings.
+- Do NOT modify scripts/autoresearch.py, dte/autoresearch/workflow.py, or program.md.
+"""
+
+
+def _categorize(desc: str) -> str:
+    d = desc.lower()
+    if any(w in d for w in ("latent_dim", "hidden_dim", "layer", "depth", "width", "encoder", "decoder", "diffusion", "drift")):
+        return "architecture"
+    if any(w in d for w in ("lr", "learning rate", "warmup", "schedule", "cosine", "peak_lr")):
+        return "lr_schedule"
+    if any(w in d for w in ("kl", "reconstruction", "trajectory", "mass", "energy", "loss weight", "physics")):
+        return "loss_weights"
+    if any(w in d for w in ("batch", "seq_len", "stride", "val_split")):
+        return "data/batch"
+    if any(w in d for w in ("clip", "weight decay", "regulariz", "dropout")):
+        return "regularization"
+    if any(w in d for w in ("solver", "heun", "euler", "dt_ratio", "sde")):
+        return "sde_solver"
+    if any(w in d for w in ("optax", "adam", "optimizer", "beta")):
+        return "optimizer"
+    return "other"
+
+
+def _count_recent_failures(history: list[dict]) -> int:
+    count = 0
+    for r in reversed(history):
+        if r["status"] == "keep":
+            break
+        count += 1
+    return min(count, 10)
+
+
+def build_prompt(
+    file_path: str,
+    file_source: str,
+    history: list[dict],
+    best_loss: float,
+    modifiable_files: list[str],
+) -> str:
+    history_section = ""
+    near_misses_str = ""
+
+    if history:
+        lines = []
+        categories: dict[str, dict] = {}
+        near_misses: list[tuple[float, str, str]] = []
+
+        for r in history:
+            status = r["status"]
+            loss = r.get("val_loss", 999.0)
+            desc = r.get("description", "")
+            changed_file = r.get("file", "?")
+            cat = _categorize(desc)
+
+            if status == "crash":
+                lines.append(f"  CRASH  [{changed_file}] {desc}")
+            else:
+                gap = loss - best_loss
+                marker = " <-- BEST" if loss == best_loss and status == "keep" else ""
+                lines.append(f"  {loss:.4f} (+{gap:.4f})  [{changed_file}] {desc}{marker}")
+                if status == "discard" and loss < 999 and gap < best_loss * 0.05:
+                    near_misses.append((gap, changed_file, desc))
+
+            if cat not in categories:
+                categories[cat] = {"count": 0, "best_gap": 999.0}
+            categories[cat]["count"] += 1
+            if status == "discard" and loss < 999:
+                categories[cat]["best_gap"] = min(categories[cat]["best_gap"], loss - best_loss)
+
+        cat_summary = "\n## Category summary (attempts / closest gap to baseline):\n"
+        for cat, stats in sorted(categories.items(), key=lambda x: -x[1]["count"]):
+            gap_str = f"+{stats['best_gap']:.4f}" if stats["best_gap"] < 999 else "n/a"
+            cat_summary += f"  {cat}: {stats['count']} tried, closest gap {gap_str}\n"
+
+        if near_misses:
+            near_misses.sort(key=lambda x: x[0])
+            near_misses_str = "\n## Near misses (within 5% of best — consider combining or tweaking):\n"
+            for gap, fpath, desc in near_misses[:5]:
+                near_misses_str += f"  +{gap:.4f}  [{fpath}] {desc}\n"
+
+        history_section = cat_summary + near_misses_str
+        history_section += f"\n## All {len(history)} experiments:\n"
+        history_section += "\n".join(lines) + "\n"
+
+    fail_streak = _count_recent_failures(history) if history else 0
+    streak_str = ""
+    if fail_streak >= 5:
+        streak_str = f"""
+## WARNING: {fail_streak} consecutive failures. Change strategy completely.
+Look at category summary — avoid exhausted categories. Try a different file or approach.
+"""
+    elif fail_streak >= 3:
+        streak_str = f"\n## CAUTION: {fail_streak} consecutive failures. Try simpler change.\n"
+
+    files_list = "\n".join(f"  - {f}" for f in modifiable_files)
+
+    return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
+physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
+
+## Constraints
+- You MUST only modify ONE of these files per experiment:
+{files_list}
+- Do NOT modify the experiment harness: scripts/autoresearch.py, dte/autoresearch/*, program.md
+- One idea per experiment. Keep changes minimal and surgical.
+- Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
+{JAX_PITFALLS}
+## Current best_val_loss: {best_loss:.6f}
+{streak_str}{history_section}{KNOWN_GOOD}
+## Currently showing: {file_path}
+```
+{file_source}
+```
+
+## Your task
+Propose ONE modification to lower best_val_loss. Do NOT repeat or closely variant anything already tried.
+Think creatively about what hasn't been attempted yet.
+
+Respond with ONLY a JSON object (no markdown fences, no explanation):
+{{
+  "file": "repo-relative path to the file you want to modify (must be from the allowed list)",
+  "description": "short description of the change (no tabs)",
+  "changes": [
+    {{
+      "old": "exact string to find in that file",
+      "new": "replacement string"
+    }}
+  ]
+}}
+
+Each change is a find-and-replace. "old" MUST appear exactly once in the file.
+Keep changes minimal. One idea at a time."""
+
+
+# ---------------------------------------------------------------------------
+# Response parsing & patch application
+# ---------------------------------------------------------------------------
+
+def parse_response(text: str) -> dict | None:
+    if not text:
+        return None
+    try:
+        raw = text.strip()
+        # Strip markdown fences if present
+        raw = re.sub(r"^```\w*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+def apply_changes(source: str, changes: list[dict]) -> str | None:
+    modified = source
+    for change in changes:
+        old = change.get("old", "")
+        new = change.get("new", "")
+        if not old:
+            continue
+        count = modified.count(old)
+        if count == 0:
+            log_to_file(f"APPLY FAIL: string not found: {old[:80]!r}")
+            return None
+        if count > 1:
+            log_to_file(f"APPLY FAIL: ambiguous match ({count}x): {old[:80]!r}")
+            return None
+        modified = modified.replace(old, new, 1)
+    return modified
+
+
+def validate_file(filepath: str, source: str) -> str | None:
+    """Return error string or None if valid."""
+    if filepath.endswith(".py"):
+        try:
+            ast.parse(source)
+        except SyntaxError as e:
+            return f"SyntaxError: {e}"
+    elif filepath.endswith((".yaml", ".yml")):
+        try:
+            yaml.safe_load(source)
+        except yaml.YAMLError as e:
+            return f"YAMLError: {e}"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Experiment runner – calls scripts/autoresearch.py as subprocess
+# ---------------------------------------------------------------------------
+
+TRAIN_TIMEOUT_SECONDS = 900  # hard kill after 15 min
+
+
+def run_experiment(
+    description: str,
+    on_line: callable | None = None,
+) -> dict | None:
+    """Run one autoresearch experiment and return result dict or None on crash."""
+    cmd = [
+        sys.executable,
+        str(AUTORESEARCH_SCRIPT),
+        "--config", str(AUTORESEARCH_CONFIG),
+        "--description", description,
+    ]
+
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+
+    # Determine where result.json will land
+    # autoresearch.py writes it to workspace_dir/runs/<run_id>/result.json
+    # We read the workspace_dir from config
+    try:
+        with AUTORESEARCH_CONFIG.open("r") as f:
+            ar_cfg = yaml.safe_load(f)
+        workspace_dir = PROJECT_ROOT / ar_cfg.get("research", {}).get("workspace_dir", "outputs/autoresearch")
+    except Exception:
+        workspace_dir = PROJECT_ROOT / "outputs" / "autoresearch"
+
+    runs_dir = workspace_dir / "runs"
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=PROJECT_ROOT,
+            env=env,
+            bufsize=0,
+        )
+
+        t_start = time.time()
+        buf = b""
+        all_lines: list[str] = []
+
+        while True:
+            if time.time() - t_start > TRAIN_TIMEOUT_SECONDS:
+                proc.kill()
+                log_to_file(f"TIMEOUT: experiment killed after {TRAIN_TIMEOUT_SECONDS}s")
+                return {"error": f"timeout ({TRAIN_TIMEOUT_SECONDS}s)"}
+
+            # GPU thermal abort
+            if _nvml_available:
+                try:
+                    temp = nvmlDeviceGetTemperature(_nvml_handle, NVML_TEMPERATURE_GPU)
+                    if temp >= GPU_TEMP_ABORT:
+                        proc.kill()
+                        log_to_file(f"SAFETY: killed – GPU {temp}C >= {GPU_TEMP_ABORT}C")
+                        return {"error": f"GPU overheat ({temp}C)"}
+                except Exception:
+                    pass
+
+            chunk = proc.stdout.read(1)
+            if not chunk:
+                break
+
+            if chunk in (b"\r", b"\n"):
+                if buf:
+                    line = buf.decode("utf-8", errors="replace").strip()
+                    if line:
+                        all_lines.append(line)
+                        if on_line:
+                            on_line(line)
+                    buf = b""
+            else:
+                buf += chunk
+
+        if buf:
+            line = buf.decode("utf-8", errors="replace").strip()
+            if line:
+                all_lines.append(line)
+                if on_line:
+                    on_line(line)
+
+        proc.wait(timeout=30)
+
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return {"error": "timeout"}
+    except Exception as e:
+        return {"error": str(e)}
+
+    # Find the most-recently-written result.json under runs/
+    if runs_dir.exists():
+        result_files = sorted(runs_dir.glob("*/result.json"), key=lambda p: p.stat().st_mtime)
+        if result_files:
+            try:
+                with result_files[-1].open("r") as f:
+                    result = json.load(f)
+                return result
+            except Exception:
+                pass
+
+    # Fallback: scan stdout for metric
+    for line in reversed(all_lines):
+        if "best_val_loss:" in line:
+            try:
+                val = float(line.split("best_val_loss:")[-1].strip())
+                return {"metric_value": val, "status": "keep", "description": description}
+            except ValueError:
+                pass
+
+    if proc.returncode not in (0, None):
+        errors = [l for l in all_lines if "Error" in l or "Traceback" in l]
+        msg = "\n".join(errors[-10:]) if errors else "\n".join(all_lines[-10:])
+        return {"error": msg[:500]}
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Rich TUI dashboard
+# ---------------------------------------------------------------------------
+
+SPARK_CHARS = list(" .:-=+*#@")
+
+PHASE_STYLES = {
+    "THINKING":  ("THINKING",  "bold magenta"),
+    "TRAINING":  ("TRAINING",  "bold yellow"),
+    "APPLYING":  ("APPLYING",  "bold blue"),
+    "BASELINE":  ("BASELINE",  "bold yellow"),
+    "KEEP":      ("IMPROVED",  "bold green"),
+    "DISCARD":   ("DISCARDED", "bold red"),
+    "CRASH":     ("CRASHED",   "bold red"),
+    "COOLING":   ("COOLING",   "bold cyan"),
+    "DONE":      ("COMPLETE",  "bold green"),
+    "STARTING":  ("STARTING",  "dim"),
+}
+
+
+def sparkline(values: list[float], width: int = 40) -> str:
+    if not values:
+        return ""
+    recent = list(values)[-width:]
+    lo, hi = min(recent), max(recent)
+    rng = hi - lo if hi > lo else 1.0
+    return "".join(SPARK_CHARS[min(int((v - lo) / rng * 8), 8)] for v in recent)
+
+
+def bar(pct: float, width: int = 20) -> str:
+    pct = max(0.0, min(100.0, float(pct)))
+    filled = int(width * pct / 100)
+    return "\u2588" * filled + "\u2591" * (width - filled)
+
+
+def build_dashboard(state: dict) -> Layout:
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="body",   ratio=3),
+        Layout(name="footer", ratio=2),
+    )
+    layout["body"].split_row(
+        Layout(name="left",  ratio=3),
+        Layout(name="right", ratio=2),
+    )
+    layout["left"].split_column(
+        Layout(name="training",    ratio=2),
+        Layout(name="experiments", ratio=3),
+    )
+    layout["right"].split_column(
+        Layout(name="gpu",      ratio=2),
+        Layout(name="activity", ratio=3),
+    )
+
+    phase = state.get("phase", "STARTING")
+    exp_num = state.get("experiment_num", 0)
+    max_runs = state.get("max_runs", 0)
+    best_loss = state.get("best_loss", 999.0)
+    branch = state.get("branch", "")
+    elapsed = state.get("total_elapsed", 0.0)
+    history: list[dict] = state.get("history", [])
+    kept = [r for r in history if r["status"] == "keep"]
+    llm_name = state.get("llm_name", "LLM")
+    eh, rem = divmod(int(elapsed), 3600)
+    em, es = divmod(rem, 60)
+
+    # ---- Header ----
+    phase_label, phase_style = PHASE_STYLES.get(phase, (phase, "dim"))
+    h = Text()
+    h.append(" digital-twin autoresearch ", style="bold white on blue")
+    h.append("  ")
+    h.append(f" {phase_label} ", style=phase_style)
+    h.append(f"  Exp {exp_num}/{max_runs}  ")
+    if best_loss < 999:
+        h.append(f"Best {best_loss:.6f}", style="bold green")
+    h.append(f"  {len(history)} runs  ")
+    h.append(f"{len(kept)} kept", style="green")
+    if len(kept) >= 2:
+        first_keep = next((r["val_loss"] for r in history if r["status"] == "keep"), 999)
+        if first_keep < 999 and best_loss < first_keep:
+            imp = (first_keep - best_loss) / first_keep * 100
+            h.append(f"  -{imp:.1f}%", style="bold green")
+    h.append(f"  {eh}:{em:02d}:{es:02d}")
+    h.append(f"  {branch}", style="dim")
+    layout["header"].update(Panel(h, border_style="blue"))
+
+    # ---- Training / Status panel ----
+    t = Text()
+    idea = state.get("current_idea", "")
+    if idea:
+        t.append(f" {idea[:100]}\n\n", style="italic white")
+
+    loss_history: list[float] = list(state.get("loss_history", []))
+    metrics = state.get("metrics")
+
+    if phase == "THINKING":
+        elapsed_phase = state.get("phase_elapsed", 0.0)
+        dots = "." * (int(elapsed_phase) % 4 + 1)
+        t.append(f" Querying {llm_name}{dots}\n", style="italic magenta")
+        if best_loss < 999:
+            t.append(f" Target: < {best_loss:.6f}\n", style="dim green")
+        streak = _count_recent_failures(history)
+        if streak > 0:
+            sty = "bold red" if streak >= 5 else "yellow"
+            t.append(f" Fail streak: {streak}\n", style=sty)
+    elif phase == "COOLING":
+        ce = state.get("phase_elapsed", 0.0)
+        pct = min(ce / 30 * 100, 100)
+        t.append(f" Cooling {bar(pct)} {int(ce)}s\n", style="cyan")
+    elif phase in ("TRAINING", "BASELINE"):
+        if loss_history:
+            t.append(f" {sparkline(loss_history)}\n", style="bright_yellow")
+            t.append(f" Latest loss: {loss_history[-1]:.6f}\n")
+        else:
+            t.append(f" Training in progress...\n", style="yellow")
+    elif phase == "APPLYING":
+        t.append(f" Applying patch and committing...\n", style="bright_blue")
+    elif phase == "KEEP":
+        t.append(f" IMPROVED — change kept!\n", style="bold green")
+    elif phase == "DISCARD":
+        t.append(f" No improvement — reverted.\n", style="bold yellow")
+    elif phase == "CRASH":
+        t.append(f" Experiment crashed — reverted.\n", style="bold red")
+
+    training_title = "Training" if phase in ("TRAINING", "BASELINE") else phase.title()
+    border_color = {
+        "TRAINING": "bright_green", "BASELINE": "bright_yellow", "THINKING": "bright_magenta",
+        "KEEP": "green", "DISCARD": "yellow", "CRASH": "red", "COOLING": "cyan",
+    }.get(phase, "dim")
+    layout["training"].update(Panel(t, title=f"[bold]{training_title}[/]", border_style=border_color))
+
+    # ---- Experiment log ----
+    table = Table(expand=True, show_lines=False, show_header=True,
+                  header_style="bold dim", box=None, padding=(0, 1))
+    table.add_column("#", style="dim", width=4, justify="right")
+    table.add_column("SHA", width=8, style="dim")
+    table.add_column("St", width=5)
+    table.add_column("val_loss", width=10, justify="right")
+    table.add_column("File", width=20, no_wrap=True)
+    table.add_column("Description", ratio=1, no_wrap=True)
+
+    for idx, r in enumerate(history[-14:], 1):
+        row_num = max(0, len(history) - 14) + idx
+        status_map = {"keep": ("KEEP", "bold green"), "discard": ("SKIP", "yellow"), "crash": ("FAIL", "red")}
+        icon, sty = status_map.get(r["status"], (r["status"][:4], "white"))
+        loss_str = f"{r['val_loss']:.4f}" if r["val_loss"] < 999 else "—"
+        is_best = r["val_loss"] == best_loss and r["status"] == "keep" and best_loss < 999
+        loss_style = "bold bright_green" if is_best else ("white" if r["val_loss"] < 999 else "dim")
+        commit = r["commit"][:7] if r["commit"] != "-------" else "—"
+        file_short = r.get("file", "")[-20:]
+        table.add_row(
+            str(row_num), commit, Text(icon, style=sty),
+            Text(loss_str, style=loss_style),
+            Text(file_short, style="dim"),
+            Text(r["description"][:50], style="white" if r["status"] == "keep" else "dim"),
+        )
+
+    if not history:
+        table.add_row("", "", Text("—", style="dim"), "—", "—", Text("Waiting for baseline...", style="dim"))
+
+    layout["experiments"].update(Panel(table, title="[bold]Experiments[/]", border_style="bright_blue"))
+
+    # ---- GPU panel ----
+    gpu = state.get("gpu", {})
+    temp = gpu.get("temp")
+    vram_used = gpu.get("vram_used_mb", 0)
+    vram_total = gpu.get("vram_total_mb", VRAM_TOTAL_MB)
+    util = gpu.get("gpu_util", 0)
+
+    g = Text()
+    g.append(f" {GPU_NAME}\n\n", style="dim")
+
+    if temp is not None:
+        temp_style = "bold red" if temp >= GPU_TEMP_ABORT else ("yellow" if temp >= 70 else "green")
+        g.append(f" Temp  {temp:3d}C  {bar(min(temp, 100), 15)}\n", style=temp_style)
+    else:
+        g.append(f" Temp  N/A (CPU mode)\n", style="dim")
+
+    if vram_total > 0:
+        vram_pct = vram_used / vram_total * 100
+        vram_style = "bold red" if vram_used >= VRAM_LIMIT_MB else "green"
+        g.append(f" VRAM  {vram_used:5.0f}/{vram_total:.0f}MB  {bar(vram_pct, 10)}\n", style=vram_style)
+    else:
+        g.append(" VRAM  N/A\n", style="dim")
+
+    g.append(f" Load  {util:3d}%  {bar(util, 15)}\n", style="bright_blue")
+    g.append(f"\n Runs {len(history):3d}  Kept {len(kept):3d}  Fail {len([r for r in history if r['status']=='crash']):3d}\n")
+
+    layout["gpu"].update(Panel(g, title="[bold]Hardware[/]", border_style="bright_blue"))
+
+    # ---- Activity log ----
+    log_lines: deque[str] = state.get("log_lines", deque())
+    log_text = Text()
+    for line in list(log_lines)[-20:]:
+        log_text.append(f"{line}\n", style="dim")
+    if not log_lines:
+        log_text.append(" Waiting...\n", style="dim")
+    layout["activity"].update(Panel(log_text, title="[dim]Activity[/]", border_style="dim"))
+
+    return layout
+
+
+# ---------------------------------------------------------------------------
+# Main loop helpers
+# ---------------------------------------------------------------------------
+
+def _choose_file(history: list[dict], modifiable_files: list[str], forced_file: str | None) -> str:
+    """Pick the file to show in the prompt. Rotates through modifiable files."""
+    if forced_file:
+        return forced_file
+    # Prefer least-recently-tried files
+    file_counts: dict[str, int] = {f: 0 for f in modifiable_files}
+    for r in history:
+        fpath = r.get("file", "")
+        if fpath in file_counts:
+            file_counts[fpath] += 1
+    return min(file_counts, key=lambda f: file_counts[f])
+
+
+# ---------------------------------------------------------------------------
+# Text-mode fallback
+# ---------------------------------------------------------------------------
+
+def _run_text_mode(
+    args,
+    history: list[dict],
+    best_loss: float,
+    call_llm,
+    modifiable_files: list[str],
+    max_runs: int,
+) -> None:
+    """Simple text output mode when Rich is not desired."""
+    prior_count = len(history)
+
+    for i in range(max_runs - prior_count):
+        exp_num = prior_count + i + 1
+        print(f"\n[Exp {exp_num}/{max_runs}] Asking {args.llm_name}...")
+
+        target_file = _choose_file(history, modifiable_files, args.file)
+        try:
+            file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            print(f"  File not found: {target_file}")
+            continue
+
+        fail_streak = _count_recent_failures(history)
+        prompt = build_prompt(target_file, file_source, history, best_loss, modifiable_files)
+
+        try:
+            response = call_llm(prompt, fail_streak=fail_streak)
+        except FatalAPIError as e:
+            print(f"Fatal API error: {e}")
+            break
+
+        proposal = parse_response(response)
+        if not proposal or "changes" not in proposal:
+            print("  LLM gave unparseable response. Skipping.")
+            continue
+
+        proposed_file = proposal.get("file", target_file)
+        if proposed_file not in modifiable_files:
+            print(f"  LLM chose disallowed file {proposed_file}. Skipping.")
+            continue
+
+        description = proposal.get("description", "unknown")
+        print(f"  Idea: {description}")
+        print(f"  File: {proposed_file}")
+
+        try:
+            original = (PROJECT_ROOT / proposed_file).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            print(f"  File not found: {proposed_file}")
+            continue
+
+        modified = apply_changes(original, proposal["changes"])
+        if modified is None:
+            print("  Could not apply patch. Skipping.")
+            log_result("-------", 0.0, "crash", proposed_file, f"APPLY FAIL: {description}")
+            history = get_results_history()
+            continue
+
+        err = validate_file(proposed_file, modified)
+        if err:
+            print(f"  Validation failed: {err}. Skipping.")
+            git_revert_file(proposed_file)
+            log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{err}]")
+            history = get_results_history()
+            continue
+
+        (PROJECT_ROOT / proposed_file).write_text(modified, encoding="utf-8")
+        sha = git_commit(description, [proposed_file])
+        print(f"  Committed: {sha}")
+
+        print(f"  Running experiment...")
+        result = run_experiment(description)
+
+        if result and result.get("status") in ("keep", "discard"):
+            val_loss = float(result.get("metric_value", 999.0) or 999.0)
+            improved = val_loss < best_loss
+            status = "keep" if improved else "discard"
+            log_result(sha, val_loss, status, proposed_file, description)
+            if improved:
+                best_loss = val_loss
+                print(f"  KEEP: val_loss={val_loss:.6f} (NEW BEST)")
+                git_push()
+            else:
+                print(f"  DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
+                git_revert_file(proposed_file)
+                git_reset_last_commit()
+        elif result and "error" in result:
+            err_msg = str(result["error"])[:80]
+            print(f"  CRASH: {err_msg}")
+            log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
+            git_revert_file(proposed_file)
+            git_reset_last_commit()
+        else:
+            print("  CRASH: no result")
+            log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
+            git_revert_file(proposed_file)
+            git_reset_last_commit()
+
+        history = get_results_history()
+        valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
+        if valid:
+            best_loss = min(valid)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Autonomous research agent for Digital Twin Engine")
+    parser.add_argument("--max-runs",    type=int, default=100)
+    parser.add_argument("--resume",      action="store_true", help="Resume existing branch")
+    parser.add_argument("--tag",         type=str,  default=None, help="Branch tag (default: date)")
+    parser.add_argument("--no-dashboard", action="store_true", help="Text-only output")
+    parser.add_argument("--file",        type=str,  default=None, help="Restrict to one modifiable file")
+    # LLM provider flags (default: Gemini 2.5 Pro)
+    parser.add_argument("--gemini",  type=str, nargs="?", const="gemini-3.1-pro-preview", default=None,
+                        help="Use Google Gemini model (default: gemini-3.1-pro-preview)")
+    parser.add_argument("--claude",  action="store_true", help="Use Claude Sonnet 4.6")
+    parser.add_argument("--opus",    action="store_true", help="Use Claude Opus 4.6 (32k thinking)")
+    parser.add_argument("--sonnet4", action="store_true", help="Use Claude Sonnet 4 (legacy)")
+    parser.add_argument("--openai",  type=str, nargs="?", const="o3", default=None,
+                        help="Use OpenAI model (default: o3). Options: gpt-4.1, gpt-5.1, o3")
+    parser.add_argument("--grok",    action="store_true", help="Use xAI Grok 3")
+    parser.add_argument("--local",   action="store_true", help="Use local LM Studio")
+    args = parser.parse_args()
+
+    # Select LLM — default is Gemini 2.5 Pro
+    if args.local:
+        _call_llm_fn = call_local
+        llm_name = "LM Studio (local)"
+        _no_temperature = True
+    elif args.opus:
+        _call_llm_fn = call_claude_opus
+        llm_name = "Claude Opus 4.6"
+        _no_temperature = True
+    elif args.sonnet4:
+        global _claude_model
+        _claude_model = "claude-sonnet-4-20250514"
+        _call_llm_fn = call_claude
+        llm_name = "Claude Sonnet 4"
+        _no_temperature = False
+    elif args.claude:
+        _call_llm_fn = call_claude
+        llm_name = "Claude Sonnet 4.6"
+        _no_temperature = False
+    elif args.openai:
+        _model = args.openai
+        _call_llm_fn = lambda prompt, temperature=None: call_openai(prompt, temperature, model=_model)
+        llm_name = f"OpenAI {args.openai}"
+        _no_temperature = args.openai.startswith("o")
+    elif args.grok:
+        _call_llm_fn = call_grok
+        llm_name = "xAI Grok 3"
+        _no_temperature = False
+    elif args.gemini:
+        global _gemini_model
+        _gemini_model = args.gemini
+        _call_llm_fn = call_gemini
+        llm_name = f"Gemini {args.gemini}"
+        _no_temperature = False
+    else:
+        # Default: Gemini 3.1 Pro
+        _call_llm_fn = call_gemini
+        llm_name = "Gemini 3.1 Pro"
+        _no_temperature = False
+
+    args.llm_name = llm_name
+
+    def call_llm(prompt: str, fail_streak: int = 0) -> str | None:
+        """Adaptive temperature: increase after consecutive failures."""
+        if _no_temperature:
+            return _call_llm_fn(prompt)
+        temp = None
+        if fail_streak >= 10:
+            temp = 0.5
+        elif fail_streak >= 5:
+            temp = 0.3
+        return _call_llm_fn(prompt, temperature=temp)
+
+    # Load modifiable files from config
+    try:
+        with AUTORESEARCH_CONFIG.open("r") as f:
+            ar_cfg = yaml.safe_load(f) or {}
+        modifiable_files = ar_cfg.get("agent", {}).get("modifiable_files", MODIFIABLE_FILES)
+    except Exception:
+        modifiable_files = MODIFIABLE_FILES
+
+    if args.file:
+        if args.file not in modifiable_files:
+            print(f"Warning: {args.file} not in modifiable_files list, proceeding anyway.")
+        modifiable_files_active = [args.file]
+    else:
+        modifiable_files_active = modifiable_files
+
+    # Git branch
+    tag = args.tag or datetime.now().strftime("%b%d").lower()
+    branch = setup_branch(tag, args.resume)
+
+    init_results()
+
+    # Check previous crash
+    prev = read_state()
+    if prev:
+        log_to_file(f"Previous crash: exp={prev.get('experiment_num')} phase={prev.get('phase')}")
+        print(f"Previous crash detected: exp={prev.get('experiment_num')}, phase={prev.get('phase')}")
+        clear_state()
+
+    # Load history
+    history = get_results_history()
+    prior_count = len(history)
+    valid_losses = [r["val_loss"] for r in history if r["val_loss"] < 999]
+    best_loss = min(valid_losses) if valid_losses else 999.0
+
+    log_to_file(f"Agent started: llm={llm_name} max_runs={args.max_runs} branch={branch} prior={prior_count}")
+
+    if args.no_dashboard:
+        if not history:
+            print("Running baseline experiment...")
+            result = run_experiment("baseline")
+            if result and result.get("status") in ("keep", "discard"):
+                val_loss = float(result.get("metric_value", 999.0) or 999.0)
+                sha = git_short_sha()
+                log_result(sha, val_loss, "keep", "baseline", "baseline")
+                best_loss = val_loss
+                print(f"Baseline: val_loss={val_loss:.6f}")
+            history = get_results_history()
+
+        _run_text_mode(args, history, best_loss, call_llm, modifiable_files_active, args.max_runs)
+        return
+
+    # ---- Dashboard mode ----
+    console = Console()
+    console.clear()
+
+    state: dict = {
+        "phase": "STARTING",
+        "experiment_num": prior_count,
+        "max_runs": args.max_runs,
+        "best_loss": best_loss,
+        "llm_name": llm_name,
+        "branch": branch,
+        "current_idea": "",
+        "history": history,
+        "loss_history": deque(maxlen=200),
+        "metrics": None,
+        "gpu": get_gpu_stats(),
+        "log_lines": deque(maxlen=60),
+        "total_elapsed": 0.0,
+        "phase_start": time.time(),
+        "phase_elapsed": 0.0,
+    }
+
+    t_start = time.time()
+    _last_gpu_poll = [0.0]
+
+    def add_log(msg: str) -> None:
+        state["log_lines"].append(f"  {msg}")
+        log_to_file(msg)
+
+    def update_gpu() -> None:
+        now = time.time()
+        if now - _last_gpu_poll[0] >= 3.0:
+            state["gpu"] = get_gpu_stats()
+            _last_gpu_poll[0] = now
+
+    def set_phase(name: str) -> None:
+        state["phase"] = name
+        state["phase_start"] = time.time()
+        state["phase_elapsed"] = 0.0
+        if name not in ("TRAINING", "BASELINE"):
+            state["metrics"] = None
+
+    def on_training_line(line: str) -> None:
+        # Capture any loss numbers printed during training
+        if "train_loss" in line.lower() or "val_loss" in line.lower():
+            # Try to parse a float after the colon
+            match = re.search(r"(?:train|val)_loss[=:\s]+([0-9.eE+\-]+)", line, re.I)
+            if match:
+                try:
+                    state["loss_history"].append(float(match.group(1)))
+                except ValueError:
+                    pass
+        if line.strip():
+            state["log_lines"].append(f"  {line[:110]}")
+
+    with Live(build_dashboard(state), console=console, refresh_per_second=4) as live:
+
+        def refresh() -> None:
+            try:
+                state["total_elapsed"] = time.time() - t_start
+                state["phase_elapsed"] = time.time() - state["phase_start"]
+                update_gpu()
+                live.update(build_dashboard(state))
+            except Exception as e:
+                log_to_file(f"Dashboard error: {e}")
+
+        # ---- Baseline ----
+        if not history:
+            set_phase("BASELINE")
+            state["current_idea"] = "Establishing baseline (no code changes)"
+            add_log("Running baseline experiment...")
+            refresh()
+
+            if not wait_for_cool_gpu():
+                add_log("GPU too hot. Aborting.")
+                set_phase("DONE")
+                refresh()
+                time.sleep(3)
+                return
+
+            baseline_holder: list[dict | None] = [None]
+
+            def _baseline_thread() -> None:
+                baseline_holder[0] = run_experiment("baseline", on_line=on_training_line)
+
+            bt = threading.Thread(target=_baseline_thread, daemon=True)
+            bt.start()
+            while bt.is_alive():
+                refresh()
+                time.sleep(0.5)
+            bt.join()
+
+            result = baseline_holder[0]
+            refresh()
+
+            if result and result.get("status") in ("keep", "discard"):
+                val_loss = float(result.get("metric_value", 999.0) or 999.0)
+                sha = git_short_sha()
+                log_result(sha, val_loss, "keep", "baseline", "baseline")
+                best_loss = val_loss
+                state["best_loss"] = best_loss
+                add_log(f"Baseline: val_loss={val_loss:.6f}")
+            elif result and "error" in result:
+                add_log(f"Baseline failed: {result['error'][:80]}")
+                set_phase("DONE")
+                refresh()
+                time.sleep(5)
+                return
+            else:
+                add_log("Baseline produced no result.")
+                set_phase("DONE")
+                refresh()
+                time.sleep(5)
+                return
+
+            history = get_results_history()
+            state["history"] = history
+            refresh()
+
+        best_loss_valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
+        best_loss = min(best_loss_valid) if best_loss_valid else 999.0
+        state["best_loss"] = best_loss
+        add_log(f"Ready. Best val_loss={best_loss:.6f} | {len(history)} prior experiments")
+        refresh()
+
+        # ---- Main loop ----
+        remaining = max(0, args.max_runs - len(history))
+
+        for i in range(remaining):
+            try:
+                exp_num = len(history) + 1
+                state["experiment_num"] = exp_num
+                state["metrics"] = None
+
+                # ---- THINK ----
+                set_phase("THINKING")
+                state["current_idea"] = ""
+                add_log(f"Exp {exp_num}/{args.max_runs}: querying {llm_name}...")
+                write_state(exp_num, "querying LLM", "THINKING")
+                refresh()
+
+                target_file = _choose_file(history, modifiable_files_active, args.file)
+                try:
+                    file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    add_log(f"File not found: {target_file}")
+                    continue
+
+                fail_streak = _count_recent_failures(history)
+                if fail_streak >= 5:
+                    add_log(f"Streak {fail_streak} failures — strategy change needed")
+                elif fail_streak >= 3:
+                    add_log(f"Streak {fail_streak} failures — trying simpler approach")
+
+                prompt = build_prompt(target_file, file_source, history, best_loss, modifiable_files_active)
+
+                llm_result: list[str | None] = [None]
+                llm_fatal: list[FatalAPIError | None] = [None]
+
+                def _llm_thread() -> None:
+                    try:
+                        llm_result[0] = call_llm(prompt, fail_streak=fail_streak)
+                    except FatalAPIError as e:
+                        llm_fatal[0] = e
+
+                llm_t = threading.Thread(target=_llm_thread, daemon=True)
+                llm_t.start()
+
+                # Cool GPU while LLM thinks
+                if not wait_for_cool_gpu():
+                    add_log("GPU too hot. Stopping.")
+                    break
+
+                llm_t.join()
+
+                if llm_fatal[0]:
+                    add_log(f"Fatal API error: {llm_fatal[0]}")
+                    break
+
+                proposal = parse_response(llm_result[0])
+                if not proposal or "changes" not in proposal:
+                    add_log("LLM gave unparseable response. Skipping.")
+                    log_to_file(f"RAW: {(llm_result[0] or '')[:500]}")
+                    history = get_results_history()
+                    state["history"] = history
+                    refresh()
+                    continue
+
+                proposed_file = proposal.get("file", target_file)
+                description = proposal.get("description", "unknown").replace("\t", " ")
+                state["current_idea"] = f"[{proposed_file}] {description}"
+                add_log(f"Idea: {description}")
+                add_log(f"File: {proposed_file}")
+
+                if proposed_file not in modifiable_files:
+                    add_log(f"Disallowed file: {proposed_file}. Skipping.")
+                    history = get_results_history()
+                    state["history"] = history
+                    continue
+
+                # ---- APPLY ----
+                set_phase("APPLYING")
+                refresh()
+
+                try:
+                    original = (PROJECT_ROOT / proposed_file).read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    add_log(f"File not found: {proposed_file}")
+                    continue
+
+                modified = apply_changes(original, proposal["changes"])
+                if modified is None:
+                    add_log("Could not apply patch. Skipping.")
+                    log_result("-------", 0.0, "crash", proposed_file, f"APPLY FAIL: {description}")
+                    history = get_results_history()
+                    state["history"] = history
+                    refresh()
+                    continue
+
+                validate_err = validate_file(proposed_file, modified)
+                if validate_err:
+                    add_log(f"Validation failed: {validate_err}")
+                    log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{validate_err}]")
+                    history = get_results_history()
+                    state["history"] = history
+                    refresh()
+                    continue
+
+                (PROJECT_ROOT / proposed_file).write_text(modified, encoding="utf-8")
+                sha = git_commit(description, [proposed_file])
+                add_log(f"Committed: {sha}")
+
+                # ---- TRAIN ----
+                set_phase("TRAINING")
+                state["loss_history"] = deque(maxlen=200)
+                write_state(exp_num, description, "TRAINING")
+                refresh()
+
+                t0 = time.time()
+                result_holder: list[dict | None] = [None]
+
+                def _train_thread() -> None:
+                    result_holder[0] = run_experiment(description, on_line=on_training_line)
+
+                train_t = threading.Thread(target=_train_thread, daemon=True)
+                train_t.start()
+                while train_t.is_alive():
+                    refresh()
+                    time.sleep(0.5)
+                train_t.join()
+
+                result = result_holder[0]
+                elapsed_exp = time.time() - t0
+
+                # ---- Keep / Discard ----
+                if result and result.get("status") in ("keep", "discard"):
+                    val_loss = float(result.get("metric_value", 999.0) or 999.0)
+                    improved = 0.0 < val_loss < best_loss
+
+                    if improved:
+                        best_loss = val_loss
+                        state["best_loss"] = best_loss
+                        log_result(sha, val_loss, "keep", proposed_file, description)
+                        set_phase("KEEP")
+                        add_log(f"KEEP: val_loss={val_loss:.6f} NEW BEST!")
+                        git_push()
+                    else:
+                        log_result(sha, val_loss, "discard", proposed_file, description)
+                        set_phase("DISCARD")
+                        add_log(f"DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
+                        git_revert_file(proposed_file)
+                        git_reset_last_commit()
+
+                elif result and "error" in result:
+                    err_msg = str(result["error"])[:80]
+                    log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
+                    set_phase("CRASH")
+                    add_log(f"CRASH: {err_msg}")
+                    git_revert_file(proposed_file)
+                    git_reset_last_commit()
+                else:
+                    log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
+                    set_phase("CRASH")
+                    add_log("CRASH: no output from experiment")
+                    git_revert_file(proposed_file)
+                    git_reset_last_commit()
+
+                history = get_results_history()
+                state["history"] = history
+                clear_state()
+                add_log(f"Elapsed: {elapsed_exp:.0f}s")
+                refresh()
+
+                # Brief pause between experiments
+                if i < remaining - 1:
+                    for _ in range(6):
+                        refresh()
+                        time.sleep(1)
+
+            except Exception as loop_err:
+                log_to_file(f"LOOP EXCEPTION: {loop_err}")
+                add_log(f"Exception: {str(loop_err)[:80]}")
+                try:
+                    git_revert_file(proposed_file)
+                    git_reset_last_commit()
+                except Exception:
+                    pass
+                try:
+                    clear_state()
+                except Exception:
+                    pass
+                refresh()
+
+        set_phase("DONE")
+        refresh()
+        time.sleep(3)
+
+    # Summary
+    console.print()
+    history = get_results_history()
+    kept = [r for r in history if r["status"] == "keep"]
+    console.print(f"[bold]Total experiments:[/] {len(history)}")
+    console.print(f"[bold]Kept:[/] {len(kept)}")
+    console.print(f"[bold]Best val_loss:[/] {best_loss:.6f}")
+    console.print(f"[bold]Branch:[/] {branch}")
+    console.print(f"[bold]Results:[/] {RESULTS_TSV}")
+    console.print(f"[bold]Log:[/] {LOG_FILE}")
+
+
+if __name__ == "__main__":
+    main()

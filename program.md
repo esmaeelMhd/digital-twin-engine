@@ -80,3 +80,75 @@ Do not keep complexity for tiny gains. A small improvement that adds hard-to-mai
 ## Persistence
 
 After the baseline is established, keep iterating until the human interrupts you. The point of this workflow is autonomous experimentation, not a single manual trial.
+
+---
+
+## Autonomous Agent
+
+`scripts/agent.py` runs the loop fully automatically. It calls an LLM to propose each
+change, applies the patch, runs the harness, keeps improvements, reverts failures, and
+displays a Rich TUI dashboard.
+
+### Launch commands
+
+```bash
+# Default: Claude Sonnet 4.6, 100 experiments, Rich dashboard
+python scripts/agent.py
+
+# Resume an existing branch
+python scripts/agent.py --resume
+
+# Named branch tag (creates autoresearch/<tag>)
+python scripts/agent.py --tag mar26
+
+# Cap total experiments
+python scripts/agent.py --max-runs 50
+
+# Text-only output (no Rich TUI)
+python scripts/agent.py --no-dashboard
+
+# Restrict the LLM to one file only
+python scripts/agent.py --file dte/training/trainer.py
+
+# LLM provider options
+python scripts/agent.py --opus                  # Claude Opus 4.6 (32k extended thinking)
+python scripts/agent.py --openai o3             # OpenAI o3
+python scripts/agent.py --openai gpt-5.1        # OpenAI GPT-5.1
+python scripts/agent.py --grok                  # xAI Grok 3
+python scripts/agent.py --local                 # Local LM Studio at 127.0.0.1:1234
+```
+
+### Required environment variables
+
+| Provider | Variable |
+|----------|----------|
+| Claude (default) | `ANTHROPIC_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| xAI Grok | `XAI_API_KEY` |
+| Local LM Studio | none (uses localhost:1234) |
+
+### What the agent modifies (one file per experiment)
+
+See `configs/autoresearch_default.yaml` → `agent.modifiable_files` for the full list.
+Defaults:
+
+- `configs/training_default.yaml`
+- `scripts/train.py`
+- `dte/models/encoder.py`, `decoder.py`, `latent_sde.py`, `digital_twin.py`
+- `dte/training/trainer.py`, `losses.py`
+
+### What the agent must never touch
+
+- `scripts/autoresearch.py`
+- `dte/autoresearch/*`
+- `scripts/agent.py`
+- `program.md`
+
+### Output files
+
+| File | Contents |
+|------|----------|
+| `agent.log` | Timestamped event log |
+| `agent_state.json` | Crash-recovery state (deleted on clean exit) |
+| `outputs/autoresearch/results.tsv` | Per-experiment ledger |
+| `outputs/autoresearch/baseline/` | Promoted best model artifacts |

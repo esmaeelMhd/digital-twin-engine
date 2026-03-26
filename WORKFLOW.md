@@ -540,6 +540,119 @@ n_candidates: 1000
 
 ---
 
+## 🤖 Phase 11: Autonomous Research Agent
+
+The autonomous agent iterates on your codebase by proposing single-file code changes via an LLM, running an experiment, and keeping only improvements.
+
+### 11.1 Install the Agent Dependency
+
+```bash
+pip install google-generativeai   # required for Gemini (default provider)
+```
+
+### 11.2 Set API Keys
+
+Export the key for whichever provider you want to use:
+
+```bash
+# Gemini 2.5 Pro (default)
+export GEMINI_API_KEY="your-gemini-key"
+
+# Claude
+export ANTHROPIC_API_KEY="your-anthropic-key"
+
+# OpenAI
+export OPENAI_API_KEY="your-openai-key"
+
+# xAI Grok
+export XAI_API_KEY="your-xai-key"
+```
+
+### 11.3 Launch the Agent
+
+```bash
+# Default: Gemini 3.1 Pro with Rich TUI dashboard
+python scripts/agent.py
+
+# Specify a different Gemini model
+python scripts/agent.py --gemini gemini-3.1-pro-preview
+
+# Use Claude Sonnet 4.6
+python scripts/agent.py --claude
+
+# Use Claude Opus 4.6 (extended thinking)
+python scripts/agent.py --opus
+
+# Use OpenAI (default model: o3)
+python scripts/agent.py --openai
+python scripts/agent.py --openai gpt-4.1
+
+# Use xAI Grok 3
+python scripts/agent.py --grok
+
+# Use a local LM Studio server
+python scripts/agent.py --local
+
+# Limit the number of experiments
+python scripts/agent.py --max-runs 50
+
+# Resume an existing agent branch
+python scripts/agent.py --resume
+
+# Tag the git branch (useful for tracking runs)
+python scripts/agent.py --tag mar26
+
+# Restrict modifications to a single file
+python scripts/agent.py --file dte/training/trainer.py
+
+# Disable Rich dashboard (plain text output)
+python scripts/agent.py --no-dashboard
+```
+
+### 11.4 What the Agent Does
+
+| Phase | Action |
+|-------|--------|
+| **Baseline** | Runs `scripts/autoresearch.py` once on the current code to record a baseline metric |
+| **Think** | Sends the target file + experiment history to the LLM and asks for a single improvement |
+| **Apply** | Patches the proposed change into the file (find-and-replace) |
+| **Validate** | Checks Python/YAML syntax; reverts immediately on parse errors |
+| **Run** | Executes `scripts/autoresearch.py`; streams output in the TUI |
+| **Keep/Discard** | Commits and logs improvement; or reverts via `git checkout` |
+| **Repeat** | Loops until `--max-runs` is reached or you press Ctrl-C |
+
+The agent state is persisted to `agent_state.json` so it can be resumed after crashes with `--resume`.
+
+### 11.5 Modifiable Files
+
+By default the agent may only change these files (edit `configs/autoresearch_default.yaml` to add more):
+
+```
+configs/training_default.yaml
+scripts/train.py
+dte/models/encoder.py
+dte/models/decoder.py
+dte/models/latent_sde.py
+dte/models/digital_twin.py
+dte/training/trainer.py
+dte/training/losses.py
+```
+
+### 11.6 Reviewing Results
+
+```bash
+# All experiment results are logged here
+cat outputs/autoresearch/results.tsv
+
+# Each run has its own directory with full logs and checkpoints
+ls outputs/autoresearch/
+
+# Agent activity log
+cat agent.log
+```
+
+---
+
 ## 📚 Next Steps
 
 1. **Extend to other reactors**: Modify `dte/simulators/` for different processes

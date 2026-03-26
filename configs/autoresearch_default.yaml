@@ -14,3 +14,18 @@ train:
   batch_size: null
   val_every: 1
   seed: 42
+
+agent:
+  default_llm: gemini-3.1-pro-preview
+  adaptive_temperature: true
+  max_fail_streak_temp: 0.5
+  cooldown_between_experiments: 10
+  modifiable_files:
+    - configs/training_default.yaml
+    - scripts/train.py
+    - dte/models/encoder.py
+    - dte/models/decoder.py
+    - dte/models/latent_sde.py
+    - dte/models/digital_twin.py
+    - dte/training/trainer.py
+    - dte/training/losses.py
