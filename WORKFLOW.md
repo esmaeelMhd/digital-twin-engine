@@ -569,7 +569,7 @@ The autonomous agent iterates on your codebase by proposing single-file code cha
 ### 11.1 Install the Agent Dependency
 
 ```bash
-pip install google-generativeai   # required for Gemini (default provider)
+pip install google-genai   # required for Gemini (default provider)
 ```
 
 ### 11.2 Set API Keys

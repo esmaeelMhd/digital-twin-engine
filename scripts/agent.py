@@ -41,6 +41,8 @@ from pathlib import Path
 
 import yaml
 
+from dte.autoresearch.workflow import append_result_row, ensure_results_file, make_run_id
+
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
@@ -56,7 +58,7 @@ from rich.text import Text
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AUTORESEARCH_SCRIPT = PROJECT_ROOT / "scripts" / "autoresearch.py"
 AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
-RESULTS_TSV = PROJECT_ROOT / "outputs" / "autoresearch" / "results.tsv"
+DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "outputs" / "autoresearch"
 LOG_FILE = PROJECT_ROOT / "agent.log"
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
 
@@ -168,35 +170,119 @@ def read_state() -> dict | None:
         return None
 
 
+def get_workspace_dir() -> Path:
+    """Resolve the active autoresearch workspace from config."""
+
+    try:
+        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+    except Exception:
+        return DEFAULT_WORKSPACE_DIR
+
+    workspace_value = config.get("research", {}).get("workspace_dir", "outputs/autoresearch")
+    workspace_dir = Path(workspace_value)
+    if not workspace_dir.is_absolute():
+        workspace_dir = PROJECT_ROOT / workspace_dir
+    return workspace_dir
+
+
+def get_results_tsv_path() -> Path:
+    """Resolve the active results ledger path."""
+
+    return get_workspace_dir() / "results.tsv"
+
+
 # ---------------------------------------------------------------------------
 # Results ledger
 # ---------------------------------------------------------------------------
 
 def init_results() -> None:
-    RESULTS_TSV.parent.mkdir(parents=True, exist_ok=True)
-    if not RESULTS_TSV.exists():
-        with RESULTS_TSV.open("w") as f:
-            f.write("commit\tval_loss\tstatus\tfile\tdescription\n")
+    ensure_results_file(get_results_tsv_path())
 
 
 def log_result(commit: str, val_loss: float, status: str, file_changed: str, description: str) -> None:
-    with RESULTS_TSV.open("a") as f:
-        f.write(f"{commit}\t{val_loss:.6f}\t{status}\t{file_changed}\t{description}\n")
-    log_to_file(f"RESULT: {status} | val_loss={val_loss:.6f} | {file_changed} | {description}")
+    now = datetime.now()
+    clean_description = description.replace("\t", " ").replace("\n", " ").strip()
+    if file_changed and file_changed != "baseline":
+        clean_description = f"[{file_changed}] {clean_description}"
+
+    has_metric = status != "crash" and val_loss > 0.0
+    append_result_row(
+        get_results_tsv_path(),
+        {
+            "timestamp": now.strftime("%Y%m%d-%H%M%S"),
+            "run_id": make_run_id(clean_description or status, now=now),
+            "commit": commit,
+            "metric_name": "best_val_loss" if has_metric else "",
+            "metric_value": f"{val_loss:.6f}" if has_metric else "",
+            "baseline_before": "",
+            "training_seconds": "",
+            "status": status,
+            "description": clean_description,
+        },
+    )
+    metric_str = f"{val_loss:.6f}" if has_metric else "n/a"
+    log_to_file(f"RESULT: {status} | val_loss={metric_str} | {file_changed} | {description}")
+
+
+def _parse_logged_metric(raw_value: str) -> float:
+    raw_value = (raw_value or "").strip()
+    if raw_value in ("", "0", "0.0", "0.000000"):
+        return 999.0
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return 999.0
+    return value if value > 0.0 else 999.0
+
+
+def _decode_history_description(description: str) -> tuple[str, str]:
+    description = (description or "").strip()
+    match = re.match(r"^\[(.+?)\]\s+(.*)$", description)
+    if not match:
+        return "", description
+    return match.group(1), match.group(2)
 
 
 def get_results_history() -> list[dict]:
-    if not RESULTS_TSV.exists():
+    results_tsv = get_results_tsv_path()
+    if not results_tsv.exists():
         return []
     rows = []
-    with RESULTS_TSV.open("r") as f:
-        f.readline()  # header
+    with results_tsv.open("r", encoding="utf-8") as f:
+        header = f.readline().rstrip("\n").split("\t")
+        column_index = {name: idx for idx, name in enumerate(header)}
+        is_new_format = (
+            "metric_value" in column_index
+            and "status" in column_index
+            and "description" in column_index
+        )
         for line in f:
-            parts = line.strip().split("\t")
+            parts = line.rstrip("\n").split("\t")
+            if not parts or all(not part for part in parts):
+                continue
+
+            if is_new_format:
+                def get_col(name: str, default: str = "") -> str:
+                    idx = column_index.get(name)
+                    if idx is None or idx >= len(parts):
+                        return default
+                    return parts[idx]
+
+                file_changed, description = _decode_history_description(get_col("description"))
+                rows.append({
+                    "commit": get_col("commit", "-------") or "-------",
+                    "val_loss": _parse_logged_metric(get_col("metric_value")),
+                    "status": get_col("status", "crash") or "crash",
+                    "file": file_changed,
+                    "description": description,
+                })
+                continue
+
             if len(parts) >= 5:
                 rows.append({
                     "commit": parts[0],
-                    "val_loss": float(parts[1]) if parts[1] != "0.000000" else 999.0,
+                    "val_loss": _parse_logged_metric(parts[1]),
                     "status": parts[2],
                     "file": parts[3],
                     "description": parts[4],
@@ -289,25 +375,45 @@ _gemini_model = "gemini-3.1-pro-preview"
 
 
 def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
-    """Call Google Gemini 2.5 Pro via the google-generativeai SDK."""
+    """Call Google Gemini via the Google Gen AI SDK, with legacy fallback."""
     try:
-        import google.generativeai as genai
         api_key = os.environ.get("GEMINI_API_KEY", "")
         if not api_key:
             log_to_file("ERROR Gemini: GEMINI_API_KEY not set")
             return None
-        genai.configure(api_key=api_key)
-        generation_config: dict = {"max_output_tokens": 8192}
-        if temperature is not None:
-            generation_config["temperature"] = temperature
-        model = genai.GenerativeModel(
-            model_name=_gemini_model,
-            generation_config=generation_config,
-        )
-        response = model.generate_content(prompt)
-        return response.text
+
+        try:
+            from google import genai
+            from google.genai import types
+
+            config_kwargs = {"max_output_tokens": 8192}
+            if temperature is not None:
+                config_kwargs["temperature"] = temperature
+
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=_gemini_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(**config_kwargs),
+            )
+            return response.text
+        except ImportError:
+            import google.generativeai as legacy_genai
+
+            legacy_genai.configure(api_key=api_key)
+            generation_config: dict = {"max_output_tokens": 8192}
+            if temperature is not None:
+                generation_config["temperature"] = temperature
+            model = legacy_genai.GenerativeModel(
+                model_name=_gemini_model,
+                generation_config=generation_config,
+            )
+            response = model.generate_content(prompt)
+            return response.text
     except ImportError:
-        log_to_file("ERROR Gemini: google-generativeai not installed. Run: pip install google-generativeai")
+        log_to_file(
+            "ERROR Gemini: no Gemini SDK installed. Run: pip install google-genai"
+        )
         return None
     except Exception as e:
         err = str(e)
@@ -688,15 +794,10 @@ def run_experiment(
 
     # Determine where result.json will land
     # autoresearch.py writes it to workspace_dir/runs/<run_id>/result.json
-    # We read the workspace_dir from config
-    try:
-        with AUTORESEARCH_CONFIG.open("r") as f:
-            ar_cfg = yaml.safe_load(f)
-        workspace_dir = PROJECT_ROOT / ar_cfg.get("research", {}).get("workspace_dir", "outputs/autoresearch")
-    except Exception:
-        workspace_dir = PROJECT_ROOT / "outputs" / "autoresearch"
-
+    # We read the workspace_dir from config.
+    workspace_dir = get_workspace_dir()
     runs_dir = workspace_dir / "runs"
+    existing_result_files = set(runs_dir.glob("*/result.json")) if runs_dir.exists() else set()
 
     try:
         proc = subprocess.Popen(
@@ -761,7 +862,11 @@ def run_experiment(
 
     # Find the most-recently-written result.json under runs/
     if runs_dir.exists():
-        result_files = sorted(runs_dir.glob("*/result.json"), key=lambda p: p.stat().st_mtime)
+        result_files = [
+            path for path in runs_dir.glob("*/result.json")
+            if path not in existing_result_files
+        ]
+        result_files.sort(key=lambda p: p.stat().st_mtime)
         if result_files:
             try:
                 with result_files[-1].open("r") as f:
@@ -1082,14 +1187,11 @@ def _run_text_mode(
         print(f"  Committed: {sha}")
 
         print(f"  Running experiment...")
-        result = run_experiment(description)
+        result = run_experiment(f"[{proposed_file}] {description}")
 
         if result and result.get("status") in ("keep", "discard"):
             val_loss = float(result.get("metric_value", 999.0) or 999.0)
-            improved = val_loss < best_loss
-            status = "keep" if improved else "discard"
-            log_result(sha, val_loss, status, proposed_file, description)
-            if improved:
+            if result.get("status") == "keep":
                 best_loss = val_loss
                 print(f"  KEEP: val_loss={val_loss:.6f} (NEW BEST)")
                 git_push()
@@ -1097,6 +1199,10 @@ def _run_text_mode(
                 print(f"  DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
                 git_revert_file(proposed_file)
                 git_reset_last_commit()
+        elif result and result.get("status") == "crash":
+            print("  CRASH: experiment failed")
+            git_revert_file(proposed_file)
+            git_reset_last_commit()
         elif result and "error" in result:
             err_msg = str(result["error"])[:80]
             print(f"  CRASH: {err_msg}")
@@ -1235,10 +1341,11 @@ def main() -> None:
             result = run_experiment("baseline")
             if result and result.get("status") in ("keep", "discard"):
                 val_loss = float(result.get("metric_value", 999.0) or 999.0)
-                sha = git_short_sha()
-                log_result(sha, val_loss, "keep", "baseline", "baseline")
                 best_loss = val_loss
                 print(f"Baseline: val_loss={val_loss:.6f}")
+            elif result and result.get("status") == "crash":
+                print("Baseline failed inside autoresearch harness.")
+                return
             history = get_results_history()
 
         _run_text_mode(args, history, best_loss, call_llm, modifiable_files_active, args.max_runs)
@@ -1341,11 +1448,15 @@ def main() -> None:
 
             if result and result.get("status") in ("keep", "discard"):
                 val_loss = float(result.get("metric_value", 999.0) or 999.0)
-                sha = git_short_sha()
-                log_result(sha, val_loss, "keep", "baseline", "baseline")
                 best_loss = val_loss
                 state["best_loss"] = best_loss
                 add_log(f"Baseline: val_loss={val_loss:.6f}")
+            elif result and result.get("status") == "crash":
+                add_log("Baseline failed inside autoresearch harness.")
+                set_phase("DONE")
+                refresh()
+                time.sleep(5)
+                return
             elif result and "error" in result:
                 add_log(f"Baseline failed: {result['error'][:80]}")
                 set_phase("DONE")
@@ -1486,7 +1597,10 @@ def main() -> None:
                 result_holder: list[dict | None] = [None]
 
                 def _train_thread() -> None:
-                    result_holder[0] = run_experiment(description, on_line=on_training_line)
+                    result_holder[0] = run_experiment(
+                        f"[{proposed_file}] {description}",
+                        on_line=on_training_line,
+                    )
 
                 train_t = threading.Thread(target=_train_thread, daemon=True)
                 train_t.start()
@@ -1501,22 +1615,25 @@ def main() -> None:
                 # ---- Keep / Discard ----
                 if result and result.get("status") in ("keep", "discard"):
                     val_loss = float(result.get("metric_value", 999.0) or 999.0)
-                    improved = 0.0 < val_loss < best_loss
+                    improved = result.get("status") == "keep"
 
                     if improved:
                         best_loss = val_loss
                         state["best_loss"] = best_loss
-                        log_result(sha, val_loss, "keep", proposed_file, description)
                         set_phase("KEEP")
                         add_log(f"KEEP: val_loss={val_loss:.6f} NEW BEST!")
                         git_push()
                     else:
-                        log_result(sha, val_loss, "discard", proposed_file, description)
                         set_phase("DISCARD")
                         add_log(f"DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
                         git_revert_file(proposed_file)
                         git_reset_last_commit()
 
+                elif result and result.get("status") == "crash":
+                    set_phase("CRASH")
+                    add_log("CRASH: experiment failed inside autoresearch harness")
+                    git_revert_file(proposed_file)
+                    git_reset_last_commit()
                 elif result and "error" in result:
                     err_msg = str(result["error"])[:80]
                     log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
@@ -1569,7 +1686,7 @@ def main() -> None:
     console.print(f"[bold]Kept:[/] {len(kept)}")
     console.print(f"[bold]Best val_loss:[/] {best_loss:.6f}")
     console.print(f"[bold]Branch:[/] {branch}")
-    console.print(f"[bold]Results:[/] {RESULTS_TSV}")
+    console.print(f"[bold]Results:[/] {get_results_tsv_path()}")
     console.print(f"[bold]Log:[/] {LOG_FILE}")
 
 
