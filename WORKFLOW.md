@@ -73,6 +73,7 @@ python scripts/generate_data.py \
 **Output:** `data/cstr/train_data.h5` (~400MB)
 
 **What's happening:**
+
 - Random CSTR parameter sampling
 - PRBS + chirp + multi-step control signals
 - Ground truth simulation with Diffrax
@@ -93,6 +94,7 @@ python scripts/benchmark_generation.py \
 ```
 
 **Outputs:**
+
 - JSON benchmark summary under `outputs/benchmarks/`
 - Markdown report under `outputs/benchmarks/`
 
@@ -129,6 +131,7 @@ python scripts/train.py \
 ```
 
 **Monitor training:**
+
 ```
 Epoch 1/100: train_loss=2.456, val_loss=2.389
 Epoch 10/100: train_loss=0.856, val_loss=0.823
@@ -137,12 +140,14 @@ Epoch 100/100: train_loss=0.089, val_loss=0.095
 ```
 
 **Outputs:**
+
 - `outputs/cstr_v1/best_model.eqx` - Best model checkpoint
 - `outputs/cstr_v1/final_model.eqx` - Final model
 - `outputs/cstr_v1/training_history.json` - Loss curves
 - `outputs/cstr_v1/config.yaml` - Training configuration
 
 **Loss Components:**
+
 - **Reconstruction**: Trajectory matching (~60% of total)
 - **KL Divergence**: VAE regularization (~20% of total)
 - **Trajectory**: Long-term consistency (~10% of total)
@@ -167,6 +172,7 @@ python scripts/autoresearch.py \
 For production experiments, point `--data_dir` at `data/cstr/`.
 
 **What the harness does:**
+
 - Runs `scripts/train.py` with a fixed wall-clock budget
 - Forces regular validation so each run emits a comparable `best_val_loss`
 - Stores run logs and model artifacts under `outputs/autoresearch/runs/<run_id>/`
@@ -194,12 +200,14 @@ python scripts/evaluate.py \
 ```
 
 **Generated Plots:**
+
 1. `trajectory_0.png`, `trajectory_1.png`, `trajectory_2.png` - Prediction vs ground truth
 2. `error_0.png`, `error_1.png`, `error_2.png` - Absolute and relative errors
 3. `conservation_0.png`, `conservation_1.png`, `conservation_2.png` - Physics violations
 4. `ensemble_prediction.png` - Uncertainty quantification
 
 **Key Metrics to Check:**
+
 ```
 Prediction Accuracy (MSE in normalized space):
   1-step MSE:     0.0023 ± 0.0012  ✓ (target: < 0.01)
@@ -240,6 +248,7 @@ python scripts/run_mpc.py \
 ```
 
 **Expected Results:**
+
 ```
 MPC Performance:
   ISE: 45.23
@@ -257,6 +266,7 @@ PID Performance:
 ```
 
 **Generated Plots:**
+
 - `outputs/mpc_results/mpc_results.png` - AI-MPC performance
 - `outputs/mpc_results/pid_results.png` - PID baseline performance
 
@@ -296,6 +306,7 @@ streamlit run app/dashboard.py
 ### 6.2 Dashboard Features
 
 **Left Sidebar:**
+
 - Operating parameters (V, UA)
 - Setpoints (T, Ca)
 - Control mode selection (Open Loop / PID / AI-MPC)
@@ -305,25 +316,23 @@ streamlit run app/dashboard.py
 **Main Tabs:**
 
 1. **📊 Live Simulation**
-   - Real-time state trajectories
-   - Control actions
-   - Performance metrics
-   - Interactive parameter tuning
-
+  - Real-time state trajectories
+  - Control actions
+  - Performance metrics
+  - Interactive parameter tuning
 2. **🔬 Digital Twin vs Reality**
-   - Side-by-side comparison
-   - Prediction errors
-
+  - Side-by-side comparison
+  - Prediction errors
 3. **📈 Performance Comparison**
-   - PID vs AI-MPC metrics
-   - Settling time, overshoot, ISE
-
+  - PID vs AI-MPC metrics
+  - Settling time, overshoot, ISE
 4. **ℹ️ Model Info**
-   - Architecture details
-   - Parameter counts
-   - Training configuration
+  - Architecture details
+  - Parameter counts
+  - Training configuration
 
 **Demo Workflow in Dashboard:**
+
 1. Select "AI-MPC" control mode
 2. Choose "Step in Ca_in" disturbance
 3. Click "▶️ Run Simulation"
@@ -343,6 +352,7 @@ jupyter notebook notebooks/01_exploration.ipynb
 ```
 
 **Notebook Contents:**
+
 1. CSTR Simulator testing
 2. Data generation examples
 3. Digital twin loading and usage
@@ -352,6 +362,7 @@ jupyter notebook notebooks/01_exploration.ipynb
 ### 7.2 Custom Analysis
 
 Create your own notebooks for:
+
 - Sensitivity analysis
 - Latent space visualization
 - Controller tuning
@@ -403,6 +414,7 @@ mpc:
 ```
 
 **Retrain and Compare:**
+
 ```bash
 python scripts/train.py --output_dir outputs/cstr_v2/
 python scripts/evaluate.py --model_path outputs/cstr_v2/best_model.eqx
@@ -498,41 +510,51 @@ streamlit run app/dashboard.py
 
 ## 📊 Success Metrics Summary
 
-| Phase | Metric | Target | Check |
-|-------|--------|--------|-------|
-| Data Generation | No NaN values | 100% | ✓ |
-| Training | Val loss | < 0.1 | ✓ |
-| Evaluation | 1-step MSE | < 0.01 | ✓ |
-| Evaluation | Mass violation | < 0.01 | ✓ |
-| Evaluation | Energy violation | < 1.0 | ✓ |
-| Control | MPC vs PID improvement | > 20% | ✓ |
-| Dashboard | Interactive demo | Working | ✓ |
+
+| Phase           | Metric                 | Target  | Check |
+| --------------- | ---------------------- | ------- | ----- |
+| Data Generation | No NaN values          | 100%    | ✓     |
+| Training        | Val loss               | < 0.1   | ✓     |
+| Evaluation      | 1-step MSE             | < 0.01  | ✓     |
+| Evaluation      | Mass violation         | < 0.01  | ✓     |
+| Evaluation      | Energy violation       | < 1.0   | ✓     |
+| Control         | MPC vs PID improvement | > 20%   | ✓     |
+| Dashboard       | Interactive demo       | Working | ✓     |
+
 
 ---
 
 ## 🆘 Troubleshooting
 
 ### Issue: Out of memory during training
+
 **Solution:** Reduce batch size or sequence length
+
 ```bash
 python scripts/train.py --batch_size 32 --seq_len 30
 ```
 
 ### Issue: Training too slow
+
 **Solution:** Check GPU availability
+
 ```python
 import jax; print(jax.devices())  # Should show GPU
 ```
 
 ### Issue: NaN losses
+
 **Solution:** Reduce learning rate or physics weights
+
 ```yaml
 peak_lr: 1.0e-4
 mass_balance: 0.01
 ```
 
 ### Issue: Poor MPC performance
+
 **Solution:** Increase horizon or candidates
+
 ```yaml
 horizon: 20
 n_candidates: 1000
@@ -555,7 +577,7 @@ pip install google-generativeai   # required for Gemini (default provider)
 Export the key for whichever provider you want to use:
 
 ```bash
-# Gemini 2.5 Pro (default)
+# Gemini 3.1 Pro (default)
 export GEMINI_API_KEY="your-gemini-key"
 
 # Claude
@@ -611,15 +633,17 @@ python scripts/agent.py --no-dashboard
 
 ### 11.4 What the Agent Does
 
-| Phase | Action |
-|-------|--------|
-| **Baseline** | Runs `scripts/autoresearch.py` once on the current code to record a baseline metric |
-| **Think** | Sends the target file + experiment history to the LLM and asks for a single improvement |
-| **Apply** | Patches the proposed change into the file (find-and-replace) |
-| **Validate** | Checks Python/YAML syntax; reverts immediately on parse errors |
-| **Run** | Executes `scripts/autoresearch.py`; streams output in the TUI |
-| **Keep/Discard** | Commits and logs improvement; or reverts via `git checkout` |
-| **Repeat** | Loops until `--max-runs` is reached or you press Ctrl-C |
+
+| Phase            | Action                                                                                  |
+| ---------------- | --------------------------------------------------------------------------------------- |
+| **Baseline**     | Runs `scripts/autoresearch.py` once on the current code to record a baseline metric     |
+| **Think**        | Sends the target file + experiment history to the LLM and asks for a single improvement |
+| **Apply**        | Patches the proposed change into the file (find-and-replace)                            |
+| **Validate**     | Checks Python/YAML syntax; reverts immediately on parse errors                          |
+| **Run**          | Executes `scripts/autoresearch.py`; streams output in the TUI                           |
+| **Keep/Discard** | Commits and logs improvement; or reverts via `git checkout`                             |
+| **Repeat**       | Loops until `--max-runs` is reached or you press Ctrl-C                                 |
+
 
 The agent state is persisted to `agent_state.json` so it can be resumed after crashes with `--resume`.
 
