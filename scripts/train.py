@@ -100,6 +100,9 @@ def main():
     if args.batch_size is not None:
         config["training"]["batch_size"] = args.batch_size
     config.setdefault("checkpointing", {})
+    if args.time_budget_minutes is not None:
+        config["training"].setdefault("max_batches_per_epoch", 8)
+        config["checkpointing"].setdefault("max_val_batches", 4)
     if args.val_every is not None:
         config["checkpointing"]["val_every"] = args.val_every
     else:
@@ -124,6 +127,10 @@ def main():
     print(f"Seed: {args.seed}")
     print(f"Epochs: {config['training']['n_epochs']}")
     print(f"Batch size: {config['training']['batch_size']}")
+    if config["training"].get("max_batches_per_epoch") is not None:
+        print(f"Max batches per epoch: {config['training']['max_batches_per_epoch']}")
+    if config["checkpointing"].get("max_val_batches") is not None:
+        print(f"Max validation batches: {config['checkpointing']['max_val_batches']}")
     print(f"Validation every: {config['checkpointing']['val_every']} epoch(s)")
     if args.time_budget_minutes is not None:
         print(f"Time budget: {args.time_budget_minutes:.2f} minutes")
@@ -223,6 +230,8 @@ def main():
         ),
         "seed": args.seed,
         "batch_size": config["training"]["batch_size"],
+        "max_batches_per_epoch": config["training"].get("max_batches_per_epoch"),
+        "max_val_batches": config["checkpointing"].get("max_val_batches"),
         "n_epochs_requested": config["training"]["n_epochs"],
         "val_every": config["checkpointing"]["val_every"],
         "output_dir": args.output_dir,
