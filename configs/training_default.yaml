@@ -27,7 +27,7 @@ optimizer:
   warmup_steps: 500
   total_steps: 50000
   end_lr: 1.0e-6
-  gradient_clip: 1.0
+  gradient_clip: 0.5
 
 loss_weights:
   reconstruction: 1.0
