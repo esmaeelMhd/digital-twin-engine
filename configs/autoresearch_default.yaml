@@ -9,7 +9,7 @@ research:
 train:
   config: configs/training_default.yaml
   cstr_config: configs/cstr_default.yaml
-  data_dir: data/test/
+  data_dir: data/cstr/
   n_epochs: 250
   batch_size: null
   val_every: 1

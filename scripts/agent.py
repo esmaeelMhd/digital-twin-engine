@@ -170,6 +170,34 @@ def read_state() -> dict | None:
         return None
 
 
+def other_agent_process_running() -> bool:
+    """Return True when another scripts/agent.py process is still running."""
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-af", "scripts/agent.py"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return False
+
+    current_pid = os.getpid()
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(maxsplit=1)
+        if not parts:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid != current_pid:
+            return True
+    return False
+
+
 def get_workspace_dir() -> Path:
     """Resolve the active autoresearch workspace from config."""
 
@@ -327,13 +355,20 @@ def git_commit(message: str, files: list[str]) -> str:
 
 
 def git_revert_file(filepath: str) -> None:
-    """Restore a single file to HEAD."""
-    git("checkout", "--", filepath)
+    """Restore a single file to the current HEAD commit."""
+    git("restore", "--source=HEAD", "--staged", "--worktree", "--", filepath)
 
 
 def git_reset_last_commit() -> None:
     """Undo the last commit but keep working tree changes."""
-    git("reset", "HEAD~1")
+    git("reset", "--mixed", "HEAD~1")
+
+
+def git_discard_last_experiment(filepath: str) -> None:
+    """Drop the last experiment commit and restore the touched file."""
+
+    git_reset_last_commit()
+    git_revert_file(filepath)
 
 
 def git_push() -> None:
@@ -386,7 +421,10 @@ def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
             from google import genai
             from google.genai import types
 
-            config_kwargs = {"max_output_tokens": 8192}
+            config_kwargs = {
+                "max_output_tokens": 8192,
+                "response_mime_type": "application/json",
+            }
             if temperature is not None:
                 config_kwargs["temperature"] = temperature
 
@@ -401,7 +439,10 @@ def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
             import google.generativeai as legacy_genai
 
             legacy_genai.configure(api_key=api_key)
-            generation_config: dict = {"max_output_tokens": 8192}
+            generation_config: dict = {
+                "max_output_tokens": 8192,
+                "response_mime_type": "application/json",
+            }
             if temperature is not None:
                 generation_config["temperature"] = temperature
             model = legacy_genai.GenerativeModel(
@@ -718,23 +759,101 @@ Keep changes minimal. One idea at a time."""
 # Response parsing & patch application
 # ---------------------------------------------------------------------------
 
+MAX_CONSECUTIVE_PARSE_FAILURES = 3
+
+
+def _strip_markdown_fences(text: str) -> str:
+    raw = text.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
+
+
+def _extract_balanced_json_object(text: str) -> str | None:
+    start = None
+    depth = 0
+    in_string = False
+    escape = False
+
+    for idx, char in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if char == "\\" and in_string:
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                return text[start:idx + 1]
+    return None
+
+
 def parse_response(text: str) -> dict | None:
     if not text:
         return None
-    try:
-        raw = text.strip()
-        # Strip markdown fences if present
-        raw = re.sub(r"^```\w*\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        match = re.search(r'\{[\s\S]*\}', text)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
+
+    candidates: list[str] = []
+    raw = _strip_markdown_fences(text)
+    if raw:
+        candidates.append(raw)
+    balanced = _extract_balanced_json_object(raw)
+    if balanced and balanced not in candidates:
+        candidates.append(balanced)
+    if raw != text:
+        balanced_original = _extract_balanced_json_object(text)
+        if balanced_original and balanced_original not in candidates:
+            candidates.append(balanced_original)
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
     return None
+
+
+def repair_response(
+    text: str | None,
+    call_llm,
+    fail_streak: int = 0,
+) -> tuple[dict | None, str | None]:
+    """Ask the LLM to repair malformed JSON and parse the repaired response."""
+
+    if not text:
+        return None, None
+
+    repair_prompt = f"""The following response was supposed to be a single JSON object but was malformed.
+Return ONLY one valid JSON object with this schema:
+{{
+  "file": "repo-relative path",
+  "description": "short description",
+  "changes": [
+    {{
+      "old": "exact string to find",
+      "new": "replacement string"
+    }}
+  ]
+}}
+
+Do not add markdown fences or commentary.
+
+Malformed response:
+{text}
+"""
+    repaired = call_llm(repair_prompt, fail_streak=max(fail_streak, 1))
+    return parse_response(repaired), repaired
 
 
 def apply_changes(source: str, changes: list[dict]) -> str | None:
@@ -774,7 +893,21 @@ def validate_file(filepath: str, source: str) -> str | None:
 # Experiment runner – calls scripts/autoresearch.py as subprocess
 # ---------------------------------------------------------------------------
 
-TRAIN_TIMEOUT_SECONDS = 900  # hard kill after 15 min
+DEFAULT_TRAIN_TIMEOUT_SECONDS = 3600
+
+
+def get_train_timeout_seconds() -> int:
+    """Align the agent-side timeout with the autoresearch config."""
+
+    try:
+        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+        research = config.get("research", {})
+        minutes = float(research.get("time_budget_minutes", 30))
+        buffer_minutes = float(research.get("hard_timeout_buffer_minutes", 5))
+        return max(60, int((minutes + buffer_minutes + 1.0) * 60))
+    except Exception:
+        return DEFAULT_TRAIN_TIMEOUT_SECONDS
 
 
 def run_experiment(
@@ -791,6 +924,7 @@ def run_experiment(
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    train_timeout_seconds = get_train_timeout_seconds()
 
     # Determine where result.json will land
     # autoresearch.py writes it to workspace_dir/runs/<run_id>/result.json
@@ -814,10 +948,10 @@ def run_experiment(
         all_lines: list[str] = []
 
         while True:
-            if time.time() - t_start > TRAIN_TIMEOUT_SECONDS:
+            if time.time() - t_start > train_timeout_seconds:
                 proc.kill()
-                log_to_file(f"TIMEOUT: experiment killed after {TRAIN_TIMEOUT_SECONDS}s")
-                return {"error": f"timeout ({TRAIN_TIMEOUT_SECONDS}s)"}
+                log_to_file(f"TIMEOUT: experiment killed after {train_timeout_seconds}s")
+                return {"error": f"timeout ({train_timeout_seconds}s)"}
 
             # GPU thermal abort
             if _nvml_available:
@@ -1126,6 +1260,7 @@ def _run_text_mode(
 ) -> None:
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
+    consecutive_parse_failures = 0
 
     for i in range(max_runs - prior_count):
         exp_num = prior_count + i + 1
@@ -1148,9 +1283,23 @@ def _run_text_mode(
             break
 
         proposal = parse_response(response)
+        if not proposal:
+            try:
+                proposal, repaired = repair_response(response, call_llm, fail_streak=fail_streak)
+            except FatalAPIError as e:
+                print(f"Fatal API error: {e}")
+                break
+            if proposal:
+                print("  Repaired malformed LLM response.")
+
         if not proposal or "changes" not in proposal:
             print("  LLM gave unparseable response. Skipping.")
+            consecutive_parse_failures += 1
+            if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                print("  Too many consecutive malformed LLM responses. Stopping cleanly.")
+                break
             continue
+        consecutive_parse_failures = 0
 
         proposed_file = proposal.get("file", target_file)
         if proposed_file not in modifiable_files:
@@ -1197,23 +1346,19 @@ def _run_text_mode(
                 git_push()
             else:
                 print(f"  DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
-                git_revert_file(proposed_file)
-                git_reset_last_commit()
+                git_discard_last_experiment(proposed_file)
         elif result and result.get("status") == "crash":
             print("  CRASH: experiment failed")
-            git_revert_file(proposed_file)
-            git_reset_last_commit()
+            git_discard_last_experiment(proposed_file)
         elif result and "error" in result:
             err_msg = str(result["error"])[:80]
             print(f"  CRASH: {err_msg}")
             log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
-            git_revert_file(proposed_file)
-            git_reset_last_commit()
+            git_discard_last_experiment(proposed_file)
         else:
             print("  CRASH: no result")
             log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
-            git_revert_file(proposed_file)
-            git_reset_last_commit()
+            git_discard_last_experiment(proposed_file)
 
         history = get_results_history()
         valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
@@ -1323,8 +1468,11 @@ def main() -> None:
     # Check previous crash
     prev = read_state()
     if prev:
-        log_to_file(f"Previous crash: exp={prev.get('experiment_num')} phase={prev.get('phase')}")
-        print(f"Previous crash detected: exp={prev.get('experiment_num')}, phase={prev.get('phase')}")
+        if other_agent_process_running():
+            log_to_file(f"Previous crash: exp={prev.get('experiment_num')} phase={prev.get('phase')}")
+            print(f"Previous crash detected: exp={prev.get('experiment_num')}, phase={prev.get('phase')}")
+        else:
+            log_to_file("Ignoring stale agent_state.json from an earlier run")
         clear_state()
 
     # Load history
@@ -1482,6 +1630,7 @@ def main() -> None:
 
         # ---- Main loop ----
         remaining = max(0, args.max_runs - len(history))
+        consecutive_parse_failures = 0
 
         for i in range(remaining):
             try:
@@ -1535,13 +1684,35 @@ def main() -> None:
                     break
 
                 proposal = parse_response(llm_result[0])
+                if not proposal:
+                    add_log("Malformed LLM response. Attempting JSON repair...")
+                    try:
+                        proposal, repaired = repair_response(
+                            llm_result[0],
+                            call_llm,
+                            fail_streak=fail_streak,
+                        )
+                    except FatalAPIError as e:
+                        add_log(f"Fatal API error: {e}")
+                        break
+                    if proposal:
+                        add_log("Recovered malformed LLM response.")
+
                 if not proposal or "changes" not in proposal:
                     add_log("LLM gave unparseable response. Skipping.")
                     log_to_file(f"RAW: {(llm_result[0] or '')[:500]}")
+                    consecutive_parse_failures += 1
+                    if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                        add_log("Too many consecutive malformed LLM responses. Stopping cleanly.")
+                        clear_state()
+                        set_phase("DONE")
+                        refresh()
+                        break
                     history = get_results_history()
                     state["history"] = history
                     refresh()
                     continue
+                consecutive_parse_failures = 0
 
                 proposed_file = proposal.get("file", target_file)
                 description = proposal.get("description", "unknown").replace("\t", " ")
@@ -1626,27 +1797,23 @@ def main() -> None:
                     else:
                         set_phase("DISCARD")
                         add_log(f"DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
-                        git_revert_file(proposed_file)
-                        git_reset_last_commit()
+                        git_discard_last_experiment(proposed_file)
 
                 elif result and result.get("status") == "crash":
                     set_phase("CRASH")
                     add_log("CRASH: experiment failed inside autoresearch harness")
-                    git_revert_file(proposed_file)
-                    git_reset_last_commit()
+                    git_discard_last_experiment(proposed_file)
                 elif result and "error" in result:
                     err_msg = str(result["error"])[:80]
                     log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
                     set_phase("CRASH")
                     add_log(f"CRASH: {err_msg}")
-                    git_revert_file(proposed_file)
-                    git_reset_last_commit()
+                    git_discard_last_experiment(proposed_file)
                 else:
                     log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
                     set_phase("CRASH")
                     add_log("CRASH: no output from experiment")
-                    git_revert_file(proposed_file)
-                    git_reset_last_commit()
+                    git_discard_last_experiment(proposed_file)
 
                 history = get_results_history()
                 state["history"] = history
@@ -1664,8 +1831,7 @@ def main() -> None:
                 log_to_file(f"LOOP EXCEPTION: {loop_err}")
                 add_log(f"Exception: {str(loop_err)[:80]}")
                 try:
-                    git_revert_file(proposed_file)
-                    git_reset_last_commit()
+                    git_discard_last_experiment(proposed_file)
                 except Exception:
                     pass
                 try:
