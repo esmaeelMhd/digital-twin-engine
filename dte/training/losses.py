@@ -44,7 +44,8 @@ class LossComputer:
         Returns:
             Scalar loss
         """
-        mse = jnp.mean((predicted_states - true_states) ** 2)
+        diff = predicted_states - true_states
+        mse = jnp.mean(jnp.where(jnp.abs(diff) < 1.0, 0.5 * diff ** 2, jnp.abs(diff) - 0.5))
         return mse
     
     def kl_divergence_loss(
@@ -155,8 +156,9 @@ class LossComputer:
         weights = jnp.linspace(1.0, 2.0, seq_len)
         weights = weights / jnp.mean(weights)  # Normalize to mean 1
         
-        # Weighted MSE
-        squared_error = (predicted_trajectory - true_trajectory) ** 2
+        # Weighted Huber loss
+        diff = predicted_trajectory - true_trajectory
+        squared_error = jnp.where(jnp.abs(diff) < 1.0, 0.5 * diff ** 2, jnp.abs(diff) - 0.5)
         weighted_mse = jnp.mean(squared_error * weights[None, :, None])
         
         return weighted_mse
