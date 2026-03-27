@@ -25,7 +25,7 @@ class LossComputer:
         
         # Extract loss weights
         self.w_recon = config["loss_weights"]["reconstruction"]
-        self.w_kl = config["loss_weights"]["kl"]
+        self.w_kl = 0.0001
         self.w_traj = config["loss_weights"]["trajectory"]
         self.w_mass = config["loss_weights"]["mass_balance"]
         self.w_energy = config["loss_weights"]["energy_balance"]
