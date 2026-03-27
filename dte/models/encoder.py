@@ -74,7 +74,7 @@ class Encoder(eqx.Module):
             Tuple of (z_mean, z_logvar)
         """
         # Concatenate inputs
-        x = jnp.concatenate([state, params, control])
+        x = jnp.concatenate([state, params, control]) * 0.01
         
         # Forward through hidden layers
         for layer in self.layers:
