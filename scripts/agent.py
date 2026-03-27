@@ -798,6 +798,7 @@ Keep changes minimal. One idea at a time."""
 # ---------------------------------------------------------------------------
 
 MAX_CONSECUTIVE_PARSE_FAILURES = 3
+LLM_REQUEST_TIMEOUT_SECONDS = 180
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -866,11 +867,11 @@ def repair_response(
     text: str | None,
     call_llm,
     fail_streak: int = 0,
-) -> tuple[dict | None, str | None]:
+) -> tuple[dict | None, str | None, bool]:
     """Ask the LLM to repair malformed JSON and parse the repaired response."""
 
     if not text:
-        return None, None
+        return None, None, False
 
     repair_prompt = f"""The following response was supposed to be a single JSON object but was malformed.
 Return ONLY one valid JSON object with this schema:
@@ -890,8 +891,43 @@ Do not add markdown fences or commentary.
 Malformed response:
 {text}
 """
-    repaired = call_llm(repair_prompt, fail_streak=max(fail_streak, 1))
-    return parse_response(repaired), repaired
+    repaired, timed_out = invoke_llm_with_timeout(
+        call_llm,
+        repair_prompt,
+        fail_streak=max(fail_streak, 1),
+    )
+    return parse_response(repaired), repaired, timed_out
+
+
+def invoke_llm_with_timeout(
+    call_llm,
+    prompt: str,
+    *,
+    fail_streak: int = 0,
+    timeout_seconds: int = LLM_REQUEST_TIMEOUT_SECONDS,
+) -> tuple[str | None, bool]:
+    """Run an LLM call in a daemon thread and enforce a hard timeout."""
+
+    llm_result: list[str | None] = [None]
+    llm_fatal: list[FatalAPIError | None] = [None]
+
+    def _llm_thread() -> None:
+        try:
+            llm_result[0] = call_llm(prompt, fail_streak=fail_streak)
+        except FatalAPIError as e:
+            llm_fatal[0] = e
+
+    llm_t = threading.Thread(target=_llm_thread, daemon=True)
+    llm_t.start()
+    llm_t.join(timeout_seconds)
+
+    if llm_t.is_alive():
+        return None, True
+
+    if llm_fatal[0]:
+        raise llm_fatal[0]
+
+    return llm_result[0], False
 
 
 def apply_changes(source: str, changes: list[dict]) -> str | None:
@@ -1323,18 +1359,34 @@ def _run_text_mode(
         )
 
         try:
-            response = call_llm(prompt, fail_streak=fail_streak)
+            response, timed_out = invoke_llm_with_timeout(
+                call_llm,
+                prompt,
+                fail_streak=fail_streak,
+            )
         except FatalAPIError as e:
             print(f"Fatal API error: {e}")
             break
+        if timed_out:
+            print(f"  LLM request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+            history = get_results_history()
+            continue
 
         proposal = parse_response(response)
         if not proposal:
             try:
-                proposal, repaired = repair_response(response, call_llm, fail_streak=fail_streak)
+                proposal, repaired, repair_timed_out = repair_response(
+                    response,
+                    call_llm,
+                    fail_streak=fail_streak,
+                )
             except FatalAPIError as e:
                 print(f"Fatal API error: {e}")
                 break
+            if repair_timed_out:
+                print(f"  JSON repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                history = get_results_history()
+                continue
             if proposal:
                 print("  Repaired malformed LLM response.")
 
@@ -1723,47 +1775,52 @@ def main() -> None:
                     agent_context=agent_context,
                 )
 
-                llm_result: list[str | None] = [None]
-                llm_fatal: list[FatalAPIError | None] = [None]
-
-                def _llm_thread() -> None:
-                    try:
-                        llm_result[0] = call_llm(prompt, fail_streak=fail_streak)
-                    except FatalAPIError as e:
-                        llm_fatal[0] = e
-
-                llm_t = threading.Thread(target=_llm_thread, daemon=True)
-                llm_t.start()
-
                 # Cool GPU while LLM thinks
                 if not wait_for_cool_gpu():
                     add_log("GPU too hot. Stopping.")
                     break
 
-                llm_t.join()
-
-                if llm_fatal[0]:
-                    add_log(f"Fatal API error: {llm_fatal[0]}")
+                try:
+                    llm_response, llm_timed_out = invoke_llm_with_timeout(
+                        call_llm,
+                        prompt,
+                        fail_streak=fail_streak,
+                    )
+                except FatalAPIError as e:
+                    add_log(f"Fatal API error: {e}")
                     break
 
-                proposal = parse_response(llm_result[0])
+                if llm_timed_out:
+                    add_log(f"LLM request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                    history = get_results_history()
+                    state["history"] = history
+                    refresh()
+                    continue
+
+                proposal = parse_response(llm_response)
                 if not proposal:
                     add_log("Malformed LLM response. Attempting JSON repair...")
                     try:
-                        proposal, repaired = repair_response(
-                            llm_result[0],
+                        proposal, repaired, repair_timed_out = repair_response(
+                            llm_response,
                             call_llm,
                             fail_streak=fail_streak,
                         )
                     except FatalAPIError as e:
                         add_log(f"Fatal API error: {e}")
                         break
+                    if repair_timed_out:
+                        add_log(f"JSON repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                        history = get_results_history()
+                        state["history"] = history
+                        refresh()
+                        continue
                     if proposal:
                         add_log("Recovered malformed LLM response.")
 
                 if not proposal or "changes" not in proposal:
                     add_log("LLM gave unparseable response. Skipping.")
-                    log_to_file(f"RAW: {(llm_result[0] or '')[:500]}")
+                    log_to_file(f"RAW: {(llm_response or '')[:500]}")
                     consecutive_parse_failures += 1
                     if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
                         add_log("Too many consecutive malformed LLM responses. Stopping cleanly.")
