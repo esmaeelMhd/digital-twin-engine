@@ -180,6 +180,7 @@ For production experiments, point `--data_dir` at `data/cstr/`.
 - Promotes the run into `outputs/autoresearch/baseline/` only if it improves the metric
 
 **Agent workflow:** See `program.md` for the autonomous keep/discard loop instructions.
+`scripts/agent.py` also reads `auto_research.md` for repo-specific prompt context and practical search guidance.
 
 **Checkpoint:** ✅ Baseline established, experiments can iterate autonomously
 

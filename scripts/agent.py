@@ -59,6 +59,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AUTORESEARCH_SCRIPT = PROJECT_ROOT / "scripts" / "autoresearch.py"
 AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
 DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "outputs" / "autoresearch"
+DEFAULT_AGENT_CONTEXT_FILE = PROJECT_ROOT / "auto_research.md"
 LOG_FILE = PROJECT_ROOT / "agent.log"
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
 
@@ -218,6 +219,39 @@ def get_results_tsv_path() -> Path:
     """Resolve the active results ledger path."""
 
     return get_workspace_dir() / "results.tsv"
+
+
+def resolve_repo_path(path_value: str) -> Path:
+    """Resolve repo-relative paths from config values."""
+
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def load_agent_context(config: dict | None = None) -> str:
+    """Load repo-specific agent guidance from disk."""
+
+    agent_cfg = (config or {}).get("agent", {})
+    context_file = agent_cfg.get("context_file")
+    context_path = resolve_repo_path(context_file) if context_file else DEFAULT_AGENT_CONTEXT_FILE
+
+    try:
+        text = context_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+    except Exception as exc:
+        log_to_file(f"WARNING agent context load failed: {context_path} ({exc})")
+        return ""
+
+    if not text:
+        return ""
+
+    # Keep prompt bloat under control if the file grows too much.
+    if len(text) > 12000:
+        text = text[:12000].rstrip() + "\n\n[Context truncated]"
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -660,6 +694,7 @@ def build_prompt(
     history: list[dict],
     best_loss: float,
     modifiable_files: list[str],
+    agent_context: str = "",
 ) -> str:
     history_section = ""
     near_misses_str = ""
@@ -717,6 +752,9 @@ Look at category summary — avoid exhausted categories. Try a different file or
         streak_str = f"\n## CAUTION: {fail_streak} consecutive failures. Try simpler change.\n"
 
     files_list = "\n".join(f"  - {f}" for f in modifiable_files)
+    context_section = ""
+    if agent_context:
+        context_section = f"\n## Repo context\n{agent_context}\n"
 
     return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
 physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
@@ -729,7 +767,7 @@ physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
 - Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
 {JAX_PITFALLS}
 ## Current best_val_loss: {best_loss:.6f}
-{streak_str}{history_section}{KNOWN_GOOD}
+{streak_str}{history_section}{KNOWN_GOOD}{context_section}
 ## Currently showing: {file_path}
 ```
 {file_source}
@@ -1257,6 +1295,7 @@ def _run_text_mode(
     call_llm,
     modifiable_files: list[str],
     max_runs: int,
+    agent_context: str,
 ) -> None:
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
@@ -1274,7 +1313,14 @@ def _run_text_mode(
             continue
 
         fail_streak = _count_recent_failures(history)
-        prompt = build_prompt(target_file, file_source, history, best_loss, modifiable_files)
+        prompt = build_prompt(
+            target_file,
+            file_source,
+            history,
+            best_loss,
+            modifiable_files,
+            agent_context=agent_context,
+        )
 
         try:
             response = call_llm(prompt, fail_streak=fail_streak)
@@ -1450,7 +1496,9 @@ def main() -> None:
             ar_cfg = yaml.safe_load(f) or {}
         modifiable_files = ar_cfg.get("agent", {}).get("modifiable_files", MODIFIABLE_FILES)
     except Exception:
+        ar_cfg = {}
         modifiable_files = MODIFIABLE_FILES
+    agent_context = load_agent_context(ar_cfg)
 
     if args.file:
         if args.file not in modifiable_files:
@@ -1496,7 +1544,15 @@ def main() -> None:
                 return
             history = get_results_history()
 
-        _run_text_mode(args, history, best_loss, call_llm, modifiable_files_active, args.max_runs)
+        _run_text_mode(
+            args,
+            history,
+            best_loss,
+            call_llm,
+            modifiable_files_active,
+            args.max_runs,
+            agent_context,
+        )
         return
 
     # ---- Dashboard mode ----
@@ -1658,7 +1714,14 @@ def main() -> None:
                 elif fail_streak >= 3:
                     add_log(f"Streak {fail_streak} failures — trying simpler approach")
 
-                prompt = build_prompt(target_file, file_source, history, best_loss, modifiable_files_active)
+                prompt = build_prompt(
+                    target_file,
+                    file_source,
+                    history,
+                    best_loss,
+                    modifiable_files_active,
+                    agent_context=agent_context,
+                )
 
                 llm_result: list[str | None] = [None]
                 llm_fatal: list[FatalAPIError | None] = [None]
