@@ -70,7 +70,7 @@ class Decoder(eqx.Module):
             Reconstructed physical state [Ca, Cb, T, Tc]
         """
         # Concatenate inputs
-        x = jnp.concatenate([z, params, control])
+        x = jnp.concatenate([z, params * 0.01, control * 0.01])
         
         # Forward through hidden layers
         for layer in self.layers:
