@@ -105,7 +105,7 @@ def main():
     # Load configs
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
-    config.setdefault("model", {})["initial_diffusion_scale"] = 0.01
+    config.setdefault("model", {})["initial_diffusion_scale"] = 0.0001
     
     with open(args.cstr_config, "r") as f:
         cstr_config = yaml.safe_load(f)
