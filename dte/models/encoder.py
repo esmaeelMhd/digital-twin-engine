@@ -75,7 +75,9 @@ class Encoder(eqx.Module):
         """
         # Concatenate inputs
         log_params = jnp.sign(params) * jnp.log1p(jnp.abs(params))
-        x = jnp.concatenate([state, log_params, control]) * 0.01
+        scaled_state = state * jnp.array([1.0, 1.0, 0.01, 0.01])
+        scaled_control = control * jnp.array([0.01, 0.01])
+        x = jnp.concatenate([scaled_state, log_params * 0.1, scaled_control])
         
         # Forward through hidden layers
         for layer in self.layers:
