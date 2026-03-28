@@ -64,7 +64,9 @@ class LatentDrift(eqx.Module):
         Returns:
             Drift vector dz/dt
         """
-        x = jnp.concatenate([z, u, c])
+        u_norm = (u - jnp.array([55.0, 300.0])) * 0.01
+        c_norm = c * 0.1
+        x = jnp.concatenate([z, u_norm, c_norm])
         
         for layer in self.layers:
             x = layer(x)
@@ -136,7 +138,9 @@ class LatentDiffusion(eqx.Module):
         Returns:
             Diffusion vector (diagonal elements)
         """
-        x = jnp.concatenate([z, u, c])
+        u_norm = (u - jnp.array([55.0, 300.0])) * 0.01
+        c_norm = c * 0.1
+        x = jnp.concatenate([z, u_norm, c_norm])
         
         for layer in self.layers:
             x = layer(x)
