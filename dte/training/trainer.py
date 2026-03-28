@@ -83,7 +83,7 @@ class Trainer:
         
         self.optimizer = optax.chain(
             optax.clip_by_global_norm(opt_config["gradient_clip"]),
-            optax.adam(schedule),
+            optax.adam(schedule, b1=0.95),
         )
         
         self.opt_state = self.optimizer.init(eqx.filter(model, eqx.is_array))
