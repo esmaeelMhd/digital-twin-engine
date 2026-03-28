@@ -142,8 +142,8 @@ class LatentDiffusion(eqx.Module):
             x = layer(x)
             x = jax.nn.silu(x)
         
-        # Softplus to ensure positive + scale
-        return self.scale * jax.nn.softplus(self.output_layer(x))
+        # Sigmoid to strictly bound diffusion and prevent variance explosion
+        return self.scale * jax.nn.sigmoid(self.output_layer(x))
 
 
 class LatentSDE(eqx.Module):
