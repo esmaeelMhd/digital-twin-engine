@@ -23,7 +23,7 @@ training:
   val_split: 0.2
 
 optimizer:
-  peak_lr: 3.0e-4
+  peak_lr: 1.0e-3
   warmup_steps: 500
   total_steps: 5000
   end_lr: 1.0e-6
