@@ -83,7 +83,7 @@ class Encoder(eqx.Module):
         
         # Output heads
         z_mean = self.mean_layer(x)
-        z_logvar = self.logvar_layer(x)
+        z_logvar = self.logvar_layer(x) - 2.0
         
         return z_mean, z_logvar
     
