@@ -152,8 +152,8 @@ class LossComputer:
         """
         seq_len = predicted_trajectory.shape[1]
         
-        # Linearly increasing weights from 1 to 2
-        weights = jnp.linspace(1.0, 2.0, seq_len)
+        # Uniform weights to prevent over-penalizing inherently noisy later SDE steps
+        weights = jnp.ones(seq_len)
         weights = weights / jnp.mean(weights)  # Normalize to mean 1
         
         # Weighted Huber loss
