@@ -82,8 +82,8 @@ class Decoder(eqx.Module):
         
         # Apply output constraints
         # Ca, Cb: must be non-negative (use softplus)
-        Ca = jax.nn.softplus(state_raw[0])
-        Cb = jax.nn.softplus(state_raw[1])
+        Ca = jax.nn.softplus(state_raw[0] + 0.5)
+        Cb = jax.nn.softplus(state_raw[1] + 0.5)
         
         # T, Tc: must be in reasonable range ~200-500K
         # Use 200 + 300*sigmoid to get range [200, 500]
