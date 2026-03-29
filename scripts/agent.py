@@ -352,6 +352,192 @@ def get_results_history() -> list[dict]:
     return rows
 
 
+def get_runs_dir() -> Path:
+    """Resolve the active autoresearch runs directory."""
+
+    return get_workspace_dir() / "runs"
+
+
+def _read_json_if_exists(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+
+def _tail_log_lines(path: Path, limit: int = 25) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            return list(deque(handle, maxlen=limit))
+    except Exception:
+        return []
+
+
+def _parse_loss_dict_from_line(line: str, prefix: str) -> dict[str, float] | None:
+    """Parse a printed Python dict of losses from a training log line."""
+
+    if prefix not in line:
+        return None
+    try:
+        raw_dict = line.split(prefix, 1)[1].strip()
+        parsed = ast.literal_eval(raw_dict)
+    except (SyntaxError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    numeric_losses: dict[str, float] = {}
+    for key, value in parsed.items():
+        try:
+            numeric_losses[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return numeric_losses or None
+
+
+def _extract_component_losses(log_path: Path) -> tuple[dict[str, float] | None, dict[str, float] | None]:
+    """Extract the latest printed train/val component-loss dicts from a train log."""
+
+    lines = _tail_log_lines(log_path, limit=250)
+    train_losses: dict[str, float] | None = None
+    val_losses: dict[str, float] | None = None
+
+    for line in lines:
+        parsed_train = _parse_loss_dict_from_line(line, "Train losses:")
+        if parsed_train is not None:
+            train_losses = parsed_train
+
+        parsed_val = _parse_loss_dict_from_line(line, "Val losses:")
+        if parsed_val is not None:
+            val_losses = parsed_val
+
+    return train_losses, val_losses
+
+
+def _format_component_losses(label: str, losses: dict[str, float] | None) -> str:
+    """Format a compact subset of loss components for prompt context."""
+
+    if not losses:
+        return ""
+
+    keys = ("total", "trajectory", "reconstruction", "kl", "mass_balance", "energy_balance")
+    parts = []
+    for key in keys:
+        if key in losses:
+            parts.append(f"{key}={losses[key]:.4f}")
+    if not parts:
+        return ""
+    return f"{label}: " + ", ".join(parts)
+
+
+def _summarize_crash_tail(log_path: Path) -> str:
+    """Extract a compact, high-signal crash summary from a run log."""
+
+    lines = [line.strip() for line in _tail_log_lines(log_path, limit=40) if line.strip()]
+    if not lines:
+        return "no log tail available"
+
+    interesting = [
+        line for line in lines
+        if any(
+            token in line
+            for token in (
+                "Traceback",
+                "Error",
+                "Exception",
+                "failure_reason",
+                "AttributeError",
+                "TypeError",
+                "ValueError",
+                "OSError",
+            )
+        )
+    ]
+    if interesting:
+        return " | ".join(interesting[-3:])[:400]
+    return " | ".join(lines[-3:])[:400]
+
+
+def build_recent_run_context(limit: int = 8) -> str:
+    """Summarize recent run artifacts for the LLM prompt."""
+
+    runs_dir = get_runs_dir()
+    if not runs_dir.exists():
+        return ""
+
+    run_dirs = sorted(
+        [path for path in runs_dir.iterdir() if path.is_dir()],
+        key=lambda path: path.stat().st_mtime,
+    )
+    if not run_dirs:
+        return ""
+
+    lines: list[str] = []
+    for run_dir in run_dirs[-limit:]:
+        result = _read_json_if_exists(run_dir / "result.json") or {}
+        summary = _read_json_if_exists(run_dir / "summary.json") or {}
+        train_log_path = run_dir / "train.log"
+
+        status = str(result.get("status", "unknown"))
+        description = str(result.get("description", run_dir.name))
+        metric_value = result.get("metric_value")
+        metric_str = "n/a"
+        if isinstance(metric_value, (int, float)):
+            metric_str = f"{float(metric_value):.6f}"
+
+        line = f"- {status.upper()} {metric_str} {description}"
+
+        if summary:
+            detail_parts = []
+            epochs = summary.get("epochs_completed")
+            if epochs is not None:
+                detail_parts.append(f"epochs={epochs}")
+            final_train_loss = summary.get("final_train_loss")
+            if isinstance(final_train_loss, (int, float)):
+                detail_parts.append(f"final_train={float(final_train_loss):.4f}")
+            final_val_loss = summary.get("final_val_loss")
+            if isinstance(final_val_loss, (int, float)):
+                detail_parts.append(f"final_val={float(final_val_loss):.4f}")
+            if summary.get("timed_out"):
+                detail_parts.append("timed_out=true")
+            if summary.get("non_finite_detected"):
+                detail_parts.append("non_finite=true")
+            failure_reason = summary.get("failure_reason")
+            if failure_reason:
+                detail_parts.append(f"failure={str(failure_reason)[:160]}")
+            if detail_parts:
+                line += " | " + ", ".join(detail_parts)
+        train_losses, val_losses = _extract_component_losses(train_log_path)
+        train_loss_text = _format_component_losses("train", train_losses)
+        val_loss_text = _format_component_losses("val", val_losses)
+        component_bits = [bit for bit in (train_loss_text, val_loss_text) if bit]
+        if component_bits:
+            line += " | " + " ; ".join(component_bits)
+
+        if not summary and status == "crash":
+            line += f" | crash_tail={_summarize_crash_tail(train_log_path)}"
+
+        lines.append(line[:700])
+
+    baseline_metadata = _read_json_if_exists(get_workspace_dir() / "baseline" / "metadata.json")
+    baseline_block = ""
+    if baseline_metadata:
+        baseline_metric = baseline_metadata.get("metric_value")
+        baseline_desc = baseline_metadata.get("description", "")
+        if isinstance(baseline_metric, (int, float)):
+            baseline_block = (
+                "## Current promoted baseline\n"
+                f"- {float(baseline_metric):.6f} {str(baseline_desc)[:220]}\n"
+            )
+
+    return baseline_block + "## Recent run artifact insights\n" + "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Git helpers
 # ---------------------------------------------------------------------------
@@ -695,6 +881,7 @@ def build_prompt(
     best_loss: float,
     modifiable_files: list[str],
     agent_context: str = "",
+    recent_run_context: str = "",
 ) -> str:
     history_section = ""
     near_misses_str = ""
@@ -755,6 +942,9 @@ Look at category summary — avoid exhausted categories. Try a different file or
     context_section = ""
     if agent_context:
         context_section = f"\n## Repo context\n{agent_context}\n"
+    recent_runs_section = ""
+    if recent_run_context:
+        recent_runs_section = f"\n{recent_run_context}\n"
 
     return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
 physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
@@ -767,7 +957,7 @@ physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
 - Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
 {JAX_PITFALLS}
 ## Current best_val_loss: {best_loss:.6f}
-{streak_str}{history_section}{KNOWN_GOOD}{context_section}
+{streak_str}{history_section}{KNOWN_GOOD}{context_section}{recent_runs_section}
 ## Currently showing: {file_path}
 ```
 {file_source}
@@ -1332,6 +1522,7 @@ def _run_text_mode(
     modifiable_files: list[str],
     max_runs: int,
     agent_context: str,
+    recent_run_context: str,
 ) -> None:
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
@@ -1356,6 +1547,7 @@ def _run_text_mode(
             best_loss,
             modifiable_files,
             agent_context=agent_context,
+            recent_run_context=recent_run_context,
         )
 
         try:
@@ -1551,6 +1743,7 @@ def main() -> None:
         ar_cfg = {}
         modifiable_files = MODIFIABLE_FILES
     agent_context = load_agent_context(ar_cfg)
+    recent_run_context = build_recent_run_context()
 
     if args.file:
         if args.file not in modifiable_files:
@@ -1604,6 +1797,7 @@ def main() -> None:
             modifiable_files_active,
             args.max_runs,
             agent_context,
+            recent_run_context,
         )
         return
 
@@ -1773,6 +1967,7 @@ def main() -> None:
                     best_loss,
                     modifiable_files_active,
                     agent_context=agent_context,
+                    recent_run_context=recent_run_context,
                 )
 
                 # Cool GPU while LLM thinks
@@ -1937,6 +2132,7 @@ def main() -> None:
 
                 history = get_results_history()
                 state["history"] = history
+                recent_run_context = build_recent_run_context()
                 clear_state()
                 add_log(f"Elapsed: {elapsed_exp:.0f}s")
                 refresh()
