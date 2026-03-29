@@ -72,7 +72,7 @@ class LatentDrift(eqx.Module):
             x = layer(x)
             x = jax.nn.silu(x)
         
-        return jax.nn.tanh(self.output_layer(x))
+        return 10.0 * jax.nn.tanh(self.output_layer(x) * 0.1)
 
 
 class LatentDiffusion(eqx.Module):
