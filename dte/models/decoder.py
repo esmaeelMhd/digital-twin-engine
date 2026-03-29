@@ -78,7 +78,7 @@ class Decoder(eqx.Module):
             x = jax.nn.silu(x)
         
         # Output layer
-        state_raw = self.output_layer(x)
+        state_raw = 10.0 * jax.nn.tanh(self.output_layer(x) / 10.0)
         
         # Apply output constraints
         # Ca, Cb: must be non-negative (use softplus)
