@@ -86,7 +86,7 @@ class Encoder(eqx.Module):
         
         # Output heads
         z_mean = self.mean_layer(x) * 0.1
-        z_logvar = self.logvar_layer(x) - 2.0
+        z_logvar = jnp.clip(self.logvar_layer(x) - 2.0, a_max=0.0)
         
         return z_mean, z_logvar
     
