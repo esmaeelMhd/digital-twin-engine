@@ -112,6 +112,7 @@ class DigitalTwin(eqx.Module):
             Tuple of (z, z_mean, z_logvar)
         """
         z_mean, z_logvar = self.encoder.encode(state, params, control)
+        z_mean = 10.0 * jnp.tanh(z_mean / 10.0)
         
         if key is not None:
             z = self.encoder.sample(z_mean, z_logvar, key)
