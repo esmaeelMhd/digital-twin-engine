@@ -158,7 +158,7 @@ class LossComputer:
         
         # Weighted Huber loss
         diff = predicted_trajectory - true_trajectory
-        squared_error = jnp.where(jnp.abs(diff) < 1.0, 0.5 * diff ** 2, jnp.abs(diff) - 0.5)
+        squared_error = jnp.where(jnp.abs(diff) < 0.5, 0.5 * diff ** 2, 0.5 * jnp.abs(diff) - 0.125)
         weighted_mse = jnp.mean(squared_error * weights[None, :, None])
         
         return weighted_mse
