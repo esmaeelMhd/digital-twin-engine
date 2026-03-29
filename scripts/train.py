@@ -107,6 +107,7 @@ def main():
         config = yaml.safe_load(f)
     config.setdefault("model", {})["initial_diffusion_scale"] = 0.0001
     config.setdefault("training", {})["peak_lr"] = 2.0e-3
+    config.setdefault("training", {})["gradient_clip"] = 1.0
     
     with open(args.cstr_config, "r") as f:
         cstr_config = yaml.safe_load(f)
