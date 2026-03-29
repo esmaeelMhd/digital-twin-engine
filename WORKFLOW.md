@@ -180,6 +180,22 @@ For production experiments, point `--data_dir` at `data/cstr/`.
 - Promotes the run into `outputs/autoresearch/baseline/` only if it improves the metric
 
 **Agent workflow:** See `program.md` for the autonomous keep/discard loop instructions.
+`scripts/agent.py` also reads `auto_research.md` for repo-specific prompt context and practical search guidance.
+
+**Web monitor:** If you want a browser-based live status page for the agent, run:
+
+```bash
+streamlit run app/agent_dashboard.py --server.address 127.0.0.1 --server.port 8502
+```
+
+For LAN access from another device on the same trusted network:
+
+```bash
+streamlit run app/agent_dashboard.py --server.address 0.0.0.0 --server.port 8502
+```
+
+Then open `http://127.0.0.1:8502` locally, or `http://<your-machine-ip>:8502` from another device.
+This dashboard has no authentication, so do not expose it to the public internet.
 
 **Checkpoint:** ✅ Baseline established, experiments can iterate autonomously
 
@@ -569,7 +585,7 @@ The autonomous agent iterates on your codebase by proposing single-file code cha
 ### 11.1 Install the Agent Dependency
 
 ```bash
-pip install google-generativeai   # required for Gemini (default provider)
+pip install google-genai   # required for Gemini (default provider)
 ```
 
 ### 11.2 Set API Keys

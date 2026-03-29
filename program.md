@@ -12,6 +12,7 @@ Work with the human to:
    - `WORKFLOW.md` for the standard training/evaluation flow.
    - `configs/training_default.yaml` for the baseline model and optimizer settings.
    - `scripts/train.py` and `dte/training/trainer.py` for the experiment harness and metric generation.
+   - `auto_research.md` for repo-specific agent guidance and recent operating knowledge.
    - `program.md` for the actual autonomous research rules.
 3. Verify the dataset exists. At minimum, the configured `data_dir` must contain `train_data.h5`.
 4. Confirm the baseline settings in `configs/autoresearch_default.yaml`.
@@ -142,6 +143,7 @@ Defaults:
 - `scripts/autoresearch.py`
 - `dte/autoresearch/*`
 - `scripts/agent.py`
+- `auto_research.md`
 - `program.md`
 
 ### Output files
@@ -150,5 +152,6 @@ Defaults:
 |------|----------|
 | `agent.log` | Timestamped event log |
 | `agent_state.json` | Crash-recovery state (deleted on clean exit) |
+| `auto_research.md` | Repo-specific prompt context read by `scripts/agent.py` |
 | `outputs/autoresearch/results.tsv` | Per-experiment ledger |
 | `outputs/autoresearch/baseline/` | Promoted best model artifacts |

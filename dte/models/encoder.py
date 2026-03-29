@@ -74,7 +74,10 @@ class Encoder(eqx.Module):
             Tuple of (z_mean, z_logvar)
         """
         # Concatenate inputs
-        x = jnp.concatenate([state, params, control])
+        log_params = jnp.sign(params) * jnp.log1p(jnp.abs(params))
+        scaled_state = (state - jnp.array([1.0, 1.0, 325.0, 325.0])) * jnp.array([1.0, 1.0, 0.01, 0.01])
+        scaled_control = (control - jnp.array([55.0, 300.0])) * jnp.array([0.02, 0.02])
+        x = jnp.concatenate([scaled_state, log_params * 0.1, scaled_control])
         
         # Forward through hidden layers
         for layer in self.layers:
@@ -82,8 +85,8 @@ class Encoder(eqx.Module):
             x = jax.nn.silu(x)
         
         # Output heads
-        z_mean = self.mean_layer(x)
-        z_logvar = self.logvar_layer(x)
+        z_mean = self.mean_layer(x) * 0.1
+        z_logvar = self.logvar_layer(x) - 2.0
         
         return z_mean, z_logvar
     

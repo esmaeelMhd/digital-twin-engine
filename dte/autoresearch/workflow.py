@@ -25,6 +25,8 @@ RESULTS_COLUMNS = (
     "description",
 )
 
+MAX_RUN_SLUG_LENGTH = 96
+
 
 @dataclass(frozen=True)
 class BaselineState:
@@ -41,6 +43,8 @@ def slugify(text: str) -> str:
     """Create a filesystem-safe slug from freeform text."""
 
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    if len(slug) > MAX_RUN_SLUG_LENGTH:
+        slug = slug[:MAX_RUN_SLUG_LENGTH].rstrip("-")
     return slug or "experiment"
 
 

@@ -64,13 +64,15 @@ class LatentDrift(eqx.Module):
         Returns:
             Drift vector dz/dt
         """
-        x = jnp.concatenate([z, u, c])
+        u_norm = (u - jnp.array([55.0, 300.0])) * 0.01
+        c_norm = c * 0.1
+        x = jnp.concatenate([z, u_norm, c_norm])
         
         for layer in self.layers:
             x = layer(x)
             x = jax.nn.silu(x)
         
-        return self.output_layer(x)
+        return jax.nn.tanh(self.output_layer(x))
 
 
 class LatentDiffusion(eqx.Module):
@@ -136,14 +138,16 @@ class LatentDiffusion(eqx.Module):
         Returns:
             Diffusion vector (diagonal elements)
         """
-        x = jnp.concatenate([z, u, c])
+        u_norm = (u - jnp.array([55.0, 300.0])) * 0.01
+        c_norm = c * 0.1
+        x = jnp.concatenate([z, u_norm, c_norm])
         
         for layer in self.layers:
             x = layer(x)
             x = jax.nn.silu(x)
         
-        # Softplus to ensure positive + scale
-        return self.scale * jax.nn.softplus(self.output_layer(x))
+        # Sigmoid to strictly bound diffusion and prevent variance explosion
+        return self.scale * jax.nn.sigmoid(self.output_layer(x))
 
 
 class LatentSDE(eqx.Module):

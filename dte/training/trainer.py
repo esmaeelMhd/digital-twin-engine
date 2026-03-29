@@ -1,5 +1,6 @@
 """Training loop for Digital Twin model."""
 
+import math
 from typing import Dict, Optional
 import time
 import jax
@@ -13,6 +14,34 @@ import os
 from dte.models.digital_twin import DigitalTwin
 from dte.training.losses import LossComputer
 from dte.data.dataset import TrajectoryDataset
+
+
+def _non_finite_loss_names(losses: Dict[str, float]) -> list[str]:
+    """Return loss keys whose values are NaN or Inf."""
+
+    return [
+        name for name, value in losses.items()
+        if not math.isfinite(float(value))
+    ]
+
+
+def _format_non_finite_reason(
+    stage: str,
+    losses: Dict[str, float],
+    *,
+    step: int,
+    batch_index: int,
+    n_batches: int,
+    epoch: int | None = None,
+) -> str:
+    """Build a concise summary of non-finite losses."""
+
+    bad_names = _non_finite_loss_names(losses)
+    details = ", ".join(f"{name}={losses[name]}" for name in bad_names)
+    location = f"step={step} batch={batch_index}/{n_batches}"
+    if epoch is not None:
+        location = f"epoch={epoch} " + location
+    return f"non_finite_{stage}_loss: {location}; {details}"
 
 
 class Trainer:
@@ -54,7 +83,7 @@ class Trainer:
         
         self.optimizer = optax.chain(
             optax.clip_by_global_norm(opt_config["gradient_clip"]),
-            optax.adam(schedule),
+            optax.adam(schedule, b1=0.95),
         )
         
         self.opt_state = self.optimizer.init(eqx.filter(model, eqx.is_array))
@@ -67,7 +96,7 @@ class Trainer:
         }
         
         self.best_val_loss = float("inf")
-        self.last_train_summary: Dict[str, float | int | bool | None] = {}
+        self.last_train_summary: Dict[str, float | int | bool | str | None] = {}
     
     def compute_loss(
         self,
@@ -211,7 +240,7 @@ class Trainer:
         self,
         key: PRNGKeyArray,
         deadline: Optional[float] = None,
-    ) -> tuple[Dict[str, float], bool]:
+    ) -> tuple[Optional[Dict[str, float]], bool, Optional[str]]:
         """Train for one epoch.
         
         Args:
@@ -219,7 +248,7 @@ class Trainer:
             deadline: Optional wall-clock deadline in perf_counter seconds
             
         Returns:
-            Tuple of (mean losses, whether the time budget expired)
+            Tuple of (mean losses, whether the time budget expired, failure reason)
         """
         batch_size = min(
             self.config["training"]["batch_size"],
@@ -257,15 +286,26 @@ class Trainer:
             self.model, self.opt_state, loss_dict = self.train_step(
                 self.model, self.opt_state, batch, subkey
             )
-            
+
             # Record losses (convert to Python floats now)
-            for k, v in loss_dict.items():
-                epoch_losses[k].append(float(v))
+            loss_dict_float = {k: float(v) for k, v in loss_dict.items()}
+            non_finite_reason = _non_finite_loss_names(loss_dict_float)
+            if non_finite_reason:
+                failure_reason = _format_non_finite_reason(
+                    "train",
+                    loss_dict_float,
+                    step=self.step,
+                    batch_index=i + 1,
+                    n_batches=n_batches,
+                )
+                return None, timed_out, failure_reason
+            for k, v in loss_dict_float.items():
+                epoch_losses[k].append(v)
             
             self.step += 1
             
             # Update progress bar
-            pbar.set_postfix({"loss": f"{loss_dict['total']:.4f}"})
+            pbar.set_postfix({"loss": f"{loss_dict_float['total']:.4f}"})
 
             if deadline is not None and time.perf_counter() >= deadline:
                 timed_out = True
@@ -279,9 +319,14 @@ class Trainer:
         # Compute mean losses
         mean_losses = {k: float(jnp.mean(jnp.array(v))) for k, v in epoch_losses.items()}
         
-        return mean_losses, timed_out
+        return mean_losses, timed_out, None
     
-    def validate(self, key: PRNGKeyArray, n_batches: int = 50) -> Dict[str, float]:
+    def validate(
+        self,
+        key: PRNGKeyArray,
+        n_batches: int = 50,
+        epoch: int | None = None,
+    ) -> tuple[Optional[Dict[str, float]], Optional[str]]:
         """Validate on validation set.
         
         Args:
@@ -289,10 +334,10 @@ class Trainer:
             n_batches: Number of batches to validate on
             
         Returns:
-            Dictionary of validation losses
+            Tuple of (validation losses, failure reason)
         """
         if self.val_dataset is None:
-            return {}
+            return {}, None
         
         batch_size = min(
             self.config["training"]["batch_size"],
@@ -322,13 +367,24 @@ class Trainer:
             _, loss_dict = self.compute_loss(self.model, batch, subkey)
             
             # Record losses (convert to Python floats)
-            for k, v in loss_dict.items():
-                val_losses[k].append(float(v))
+            loss_dict_float = {k: float(v) for k, v in loss_dict.items()}
+            if _non_finite_loss_names(loss_dict_float):
+                failure_reason = _format_non_finite_reason(
+                    "val",
+                    loss_dict_float,
+                    step=self.step,
+                    batch_index=i + 1,
+                    n_batches=n_batches,
+                    epoch=epoch,
+                )
+                return None, failure_reason
+            for k, v in loss_dict_float.items():
+                val_losses[k].append(v)
         
         # Compute mean losses
         mean_losses = {k: float(jnp.mean(jnp.array(v))) for k, v in val_losses.items()}
         
-        return mean_losses
+        return mean_losses, None
     
     def train(
         self,
@@ -359,6 +415,8 @@ class Trainer:
             deadline = start_time + time_budget_seconds
         timed_out = False
         epochs_completed = 0
+        failure_reason: str | None = None
+        non_finite_detected = False
         
         for epoch in range(n_epochs):
             if deadline is not None and time.perf_counter() >= deadline:
@@ -371,9 +429,19 @@ class Trainer:
             
             # Train epoch
             key, subkey = jax.random.split(key)
-            train_losses, epoch_timed_out = self.train_epoch(subkey, deadline=deadline)
+            train_losses, epoch_timed_out, epoch_failure = self.train_epoch(
+                subkey,
+                deadline=deadline,
+            )
+
+            if epoch_failure is not None:
+                failure_reason = epoch_failure
+                non_finite_detected = True
+                print(f"\nTraining stopped early: {failure_reason}")
+                break
+
             epochs_completed += 1
-            
+
             print(f"\nTrain losses: {train_losses}")
             
             # Validate
@@ -387,7 +455,12 @@ class Trainer:
 
             if should_validate:
                 key, subkey = jax.random.split(key)
-                val_losses = self.validate(subkey)
+                val_losses, val_failure = self.validate(subkey, epoch=epoch + 1)
+                if val_failure is not None:
+                    failure_reason = val_failure
+                    non_finite_detected = True
+                    print(f"Validation stopped early: {failure_reason}")
+                    break
                 print(f"Val losses: {val_losses}")
                 
                 # Save best model
@@ -427,6 +500,8 @@ class Trainer:
         print("Training complete!")
         if best_val_loss is not None:
             print(f"Best validation loss: {best_val_loss:.4f}")
+        if failure_reason is not None:
+            print(f"Failure reason: {failure_reason}")
         print(f"Epochs completed: {epochs_completed}")
         print(f"Training seconds: {training_seconds:.2f}")
         print(f"Timed out: {timed_out}")
@@ -438,6 +513,8 @@ class Trainer:
             "training_seconds": training_seconds,
             "best_val_loss": best_val_loss,
             "steps_completed": self.step,
+            "failure_reason": failure_reason,
+            "non_finite_detected": non_finite_detected,
         }
         
         return self.history

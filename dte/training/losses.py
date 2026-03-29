@@ -25,7 +25,7 @@ class LossComputer:
         
         # Extract loss weights
         self.w_recon = config["loss_weights"]["reconstruction"]
-        self.w_kl = config["loss_weights"]["kl"]
+        self.w_kl = 0.0001
         self.w_traj = config["loss_weights"]["trajectory"]
         self.w_mass = config["loss_weights"]["mass_balance"]
         self.w_energy = config["loss_weights"]["energy_balance"]
@@ -44,7 +44,8 @@ class LossComputer:
         Returns:
             Scalar loss
         """
-        mse = jnp.mean((predicted_states - true_states) ** 2)
+        diff = predicted_states - true_states
+        mse = jnp.mean(jnp.where(jnp.abs(diff) < 1.0, 0.5 * diff ** 2, jnp.abs(diff) - 0.5))
         return mse
     
     def kl_divergence_loss(
@@ -151,12 +152,13 @@ class LossComputer:
         """
         seq_len = predicted_trajectory.shape[1]
         
-        # Linearly increasing weights from 1 to 2
-        weights = jnp.linspace(1.0, 2.0, seq_len)
+        # Uniform weights to prevent over-penalizing inherently noisy later SDE steps
+        weights = jnp.ones(seq_len)
         weights = weights / jnp.mean(weights)  # Normalize to mean 1
         
-        # Weighted MSE
-        squared_error = (predicted_trajectory - true_trajectory) ** 2
+        # Weighted Huber loss
+        diff = predicted_trajectory - true_trajectory
+        squared_error = jnp.where(jnp.abs(diff) < 1.0, 0.5 * diff ** 2, jnp.abs(diff) - 0.5)
         weighted_mse = jnp.mean(squared_error * weights[None, :, None])
         
         return weighted_mse

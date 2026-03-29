@@ -70,7 +70,7 @@ class Decoder(eqx.Module):
             Reconstructed physical state [Ca, Cb, T, Tc]
         """
         # Concatenate inputs
-        x = jnp.concatenate([z, params, control])
+        x = jnp.concatenate([z, jnp.sign(params) * jnp.log1p(jnp.abs(params)) * 0.1, control * 0.01])
         
         # Forward through hidden layers
         for layer in self.layers:
@@ -82,12 +82,12 @@ class Decoder(eqx.Module):
         
         # Apply output constraints
         # Ca, Cb: must be non-negative (use softplus)
-        Ca = jax.nn.softplus(state_raw[0])
-        Cb = jax.nn.softplus(state_raw[1])
+        Ca = jax.nn.softplus(state_raw[0] + 0.5)
+        Cb = jax.nn.softplus(state_raw[1] + 0.5)
         
         # T, Tc: must be in reasonable range ~200-500K
         # Use 200 + 300*sigmoid to get range [200, 500]
-        T = 200.0 + 300.0 * jax.nn.sigmoid(state_raw[2])
-        Tc = 200.0 + 300.0 * jax.nn.sigmoid(state_raw[3])
+        T = 250.0 + 150.0 * jax.nn.sigmoid(state_raw[2])
+        Tc = 250.0 + 150.0 * jax.nn.sigmoid(state_raw[3])
         
         return jnp.array([Ca, Cb, T, Tc])

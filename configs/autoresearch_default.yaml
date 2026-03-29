@@ -9,8 +9,8 @@ research:
 train:
   config: configs/training_default.yaml
   cstr_config: configs/cstr_default.yaml
-  data_dir: data/test/
-  n_epochs: 250
+  data_dir: data/cstr/
+  n_epochs: 50
   batch_size: null
   val_every: 1
   seed: 42
@@ -20,6 +20,7 @@ agent:
   adaptive_temperature: true
   max_fail_streak_temp: 0.5
   cooldown_between_experiments: 10
+  context_file: auto_research.md
   modifiable_files:
     - configs/training_default.yaml
     - scripts/train.py

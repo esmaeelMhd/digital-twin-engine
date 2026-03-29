@@ -1,6 +1,7 @@
 """Training script for Digital Twin model."""
 
 import argparse
+import math
 import os
 
 from dte.utils.runtime import configure_runtime_logging
@@ -16,6 +17,20 @@ from dte.training.trainer import Trainer
 from dte.training.losses import LossComputer
 from dte.data.dataset import TrajectoryDataset
 from dte.simulators.cstr import CSTRParams
+
+
+def _json_safe_float(value):
+    """Return a JSON-safe float or None for NaN/Inf/non-numeric values."""
+
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
 
 
 def main():
@@ -90,6 +105,8 @@ def main():
     # Load configs
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
+    config.setdefault("model", {})["initial_diffusion_scale"] = 0.0001
+    config.setdefault("training", {})["peak_lr"] = 2.0e-3
     
     with open(args.cstr_config, "r") as f:
         cstr_config = yaml.safe_load(f)
@@ -218,15 +235,15 @@ def main():
     print(f"\n✓ Training history saved to {history_path}")
 
     summary = {
-        "best_val_loss": trainer.last_train_summary.get("best_val_loss"),
-        "final_train_loss": history["train_loss"][-1] if history["train_loss"] else None,
-        "final_val_loss": history["val_loss"][-1] if history["val_loss"] else None,
+        "best_val_loss": _json_safe_float(trainer.last_train_summary.get("best_val_loss")),
+        "final_train_loss": _json_safe_float(history["train_loss"][-1] if history["train_loss"] else None),
+        "final_val_loss": _json_safe_float(history["val_loss"][-1] if history["val_loss"] else None),
         "epochs_completed": trainer.last_train_summary.get("epochs_completed", 0),
         "steps_completed": trainer.last_train_summary.get("steps_completed", trainer.step),
         "timed_out": trainer.last_train_summary.get("timed_out", False),
-        "training_seconds": trainer.last_train_summary.get("training_seconds"),
+        "training_seconds": _json_safe_float(trainer.last_train_summary.get("training_seconds")),
         "time_budget_seconds": (
-            args.time_budget_minutes * 60.0 if args.time_budget_minutes is not None else None
+            _json_safe_float(args.time_budget_minutes * 60.0) if args.time_budget_minutes is not None else None
         ),
         "seed": args.seed,
         "batch_size": config["training"]["batch_size"],
@@ -234,6 +251,8 @@ def main():
         "max_val_batches": config["checkpointing"].get("max_val_batches"),
         "n_epochs_requested": config["training"]["n_epochs"],
         "val_every": config["checkpointing"]["val_every"],
+        "failure_reason": trainer.last_train_summary.get("failure_reason"),
+        "non_finite_detected": trainer.last_train_summary.get("non_finite_detected", False),
         "output_dir": args.output_dir,
     }
     summary_path = args.summary_path or os.path.join(args.output_dir, "training_summary.json")
@@ -244,6 +263,8 @@ def main():
     print(f"training_seconds: {summary['training_seconds']}")
     print(f"epochs_completed: {summary['epochs_completed']}")
     print(f"timed_out: {summary['timed_out']}")
+    if summary["failure_reason"] is not None:
+        print(f"failure_reason: {summary['failure_reason']}")
     
     print("\n" + "="*60)
     print("Training complete!")

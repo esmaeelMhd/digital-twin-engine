@@ -41,6 +41,8 @@ from pathlib import Path
 
 import yaml
 
+from dte.autoresearch.workflow import append_result_row, ensure_results_file, make_run_id
+
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
@@ -56,7 +58,8 @@ from rich.text import Text
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AUTORESEARCH_SCRIPT = PROJECT_ROOT / "scripts" / "autoresearch.py"
 AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
-RESULTS_TSV = PROJECT_ROOT / "outputs" / "autoresearch" / "results.tsv"
+DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "outputs" / "autoresearch"
+DEFAULT_AGENT_CONTEXT_FILE = PROJECT_ROOT / "auto_research.md"
 LOG_FILE = PROJECT_ROOT / "agent.log"
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
 
@@ -168,40 +171,371 @@ def read_state() -> dict | None:
         return None
 
 
+def other_agent_process_running() -> bool:
+    """Return True when another scripts/agent.py process is still running."""
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-af", "scripts/agent.py"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return False
+
+    current_pid = os.getpid()
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(maxsplit=1)
+        if not parts:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid != current_pid:
+            return True
+    return False
+
+
+def get_workspace_dir() -> Path:
+    """Resolve the active autoresearch workspace from config."""
+
+    try:
+        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+    except Exception:
+        return DEFAULT_WORKSPACE_DIR
+
+    workspace_value = config.get("research", {}).get("workspace_dir", "outputs/autoresearch")
+    workspace_dir = Path(workspace_value)
+    if not workspace_dir.is_absolute():
+        workspace_dir = PROJECT_ROOT / workspace_dir
+    return workspace_dir
+
+
+def get_results_tsv_path() -> Path:
+    """Resolve the active results ledger path."""
+
+    return get_workspace_dir() / "results.tsv"
+
+
+def resolve_repo_path(path_value: str) -> Path:
+    """Resolve repo-relative paths from config values."""
+
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def load_agent_context(config: dict | None = None) -> str:
+    """Load repo-specific agent guidance from disk."""
+
+    agent_cfg = (config or {}).get("agent", {})
+    context_file = agent_cfg.get("context_file")
+    context_path = resolve_repo_path(context_file) if context_file else DEFAULT_AGENT_CONTEXT_FILE
+
+    try:
+        text = context_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+    except Exception as exc:
+        log_to_file(f"WARNING agent context load failed: {context_path} ({exc})")
+        return ""
+
+    if not text:
+        return ""
+
+    # Keep prompt bloat under control if the file grows too much.
+    if len(text) > 12000:
+        text = text[:12000].rstrip() + "\n\n[Context truncated]"
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Results ledger
 # ---------------------------------------------------------------------------
 
 def init_results() -> None:
-    RESULTS_TSV.parent.mkdir(parents=True, exist_ok=True)
-    if not RESULTS_TSV.exists():
-        with RESULTS_TSV.open("w") as f:
-            f.write("commit\tval_loss\tstatus\tfile\tdescription\n")
+    ensure_results_file(get_results_tsv_path())
 
 
 def log_result(commit: str, val_loss: float, status: str, file_changed: str, description: str) -> None:
-    with RESULTS_TSV.open("a") as f:
-        f.write(f"{commit}\t{val_loss:.6f}\t{status}\t{file_changed}\t{description}\n")
-    log_to_file(f"RESULT: {status} | val_loss={val_loss:.6f} | {file_changed} | {description}")
+    now = datetime.now()
+    clean_description = description.replace("\t", " ").replace("\n", " ").strip()
+    if file_changed and file_changed != "baseline":
+        clean_description = f"[{file_changed}] {clean_description}"
+
+    has_metric = status != "crash" and val_loss > 0.0
+    append_result_row(
+        get_results_tsv_path(),
+        {
+            "timestamp": now.strftime("%Y%m%d-%H%M%S"),
+            "run_id": make_run_id(clean_description or status, now=now),
+            "commit": commit,
+            "metric_name": "best_val_loss" if has_metric else "",
+            "metric_value": f"{val_loss:.6f}" if has_metric else "",
+            "baseline_before": "",
+            "training_seconds": "",
+            "status": status,
+            "description": clean_description,
+        },
+    )
+    metric_str = f"{val_loss:.6f}" if has_metric else "n/a"
+    log_to_file(f"RESULT: {status} | val_loss={metric_str} | {file_changed} | {description}")
+
+
+def _parse_logged_metric(raw_value: str) -> float:
+    raw_value = (raw_value or "").strip()
+    if raw_value in ("", "0", "0.0", "0.000000"):
+        return 999.0
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return 999.0
+    return value if value > 0.0 else 999.0
+
+
+def _decode_history_description(description: str) -> tuple[str, str]:
+    description = (description or "").strip()
+    match = re.match(r"^\[(.+?)\]\s+(.*)$", description)
+    if not match:
+        return "", description
+    return match.group(1), match.group(2)
 
 
 def get_results_history() -> list[dict]:
-    if not RESULTS_TSV.exists():
+    results_tsv = get_results_tsv_path()
+    if not results_tsv.exists():
         return []
     rows = []
-    with RESULTS_TSV.open("r") as f:
-        f.readline()  # header
+    with results_tsv.open("r", encoding="utf-8") as f:
+        header = f.readline().rstrip("\n").split("\t")
+        column_index = {name: idx for idx, name in enumerate(header)}
+        is_new_format = (
+            "metric_value" in column_index
+            and "status" in column_index
+            and "description" in column_index
+        )
         for line in f:
-            parts = line.strip().split("\t")
+            parts = line.rstrip("\n").split("\t")
+            if not parts or all(not part for part in parts):
+                continue
+
+            if is_new_format:
+                def get_col(name: str, default: str = "") -> str:
+                    idx = column_index.get(name)
+                    if idx is None or idx >= len(parts):
+                        return default
+                    return parts[idx]
+
+                file_changed, description = _decode_history_description(get_col("description"))
+                rows.append({
+                    "commit": get_col("commit", "-------") or "-------",
+                    "val_loss": _parse_logged_metric(get_col("metric_value")),
+                    "status": get_col("status", "crash") or "crash",
+                    "file": file_changed,
+                    "description": description,
+                })
+                continue
+
             if len(parts) >= 5:
                 rows.append({
                     "commit": parts[0],
-                    "val_loss": float(parts[1]) if parts[1] != "0.000000" else 999.0,
+                    "val_loss": _parse_logged_metric(parts[1]),
                     "status": parts[2],
                     "file": parts[3],
                     "description": parts[4],
                 })
     return rows
+
+
+def get_runs_dir() -> Path:
+    """Resolve the active autoresearch runs directory."""
+
+    return get_workspace_dir() / "runs"
+
+
+def _read_json_if_exists(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+
+def _tail_log_lines(path: Path, limit: int = 25) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            return list(deque(handle, maxlen=limit))
+    except Exception:
+        return []
+
+
+def _parse_loss_dict_from_line(line: str, prefix: str) -> dict[str, float] | None:
+    """Parse a printed Python dict of losses from a training log line."""
+
+    if prefix not in line:
+        return None
+    try:
+        raw_dict = line.split(prefix, 1)[1].strip()
+        parsed = ast.literal_eval(raw_dict)
+    except (SyntaxError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+
+    numeric_losses: dict[str, float] = {}
+    for key, value in parsed.items():
+        try:
+            numeric_losses[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return numeric_losses or None
+
+
+def _extract_component_losses(log_path: Path) -> tuple[dict[str, float] | None, dict[str, float] | None]:
+    """Extract the latest printed train/val component-loss dicts from a train log."""
+
+    lines = _tail_log_lines(log_path, limit=250)
+    train_losses: dict[str, float] | None = None
+    val_losses: dict[str, float] | None = None
+
+    for line in lines:
+        parsed_train = _parse_loss_dict_from_line(line, "Train losses:")
+        if parsed_train is not None:
+            train_losses = parsed_train
+
+        parsed_val = _parse_loss_dict_from_line(line, "Val losses:")
+        if parsed_val is not None:
+            val_losses = parsed_val
+
+    return train_losses, val_losses
+
+
+def _format_component_losses(label: str, losses: dict[str, float] | None) -> str:
+    """Format a compact subset of loss components for prompt context."""
+
+    if not losses:
+        return ""
+
+    keys = ("total", "trajectory", "reconstruction", "kl", "mass_balance", "energy_balance")
+    parts = []
+    for key in keys:
+        if key in losses:
+            parts.append(f"{key}={losses[key]:.4f}")
+    if not parts:
+        return ""
+    return f"{label}: " + ", ".join(parts)
+
+
+def _summarize_crash_tail(log_path: Path) -> str:
+    """Extract a compact, high-signal crash summary from a run log."""
+
+    lines = [line.strip() for line in _tail_log_lines(log_path, limit=40) if line.strip()]
+    if not lines:
+        return "no log tail available"
+
+    interesting = [
+        line for line in lines
+        if any(
+            token in line
+            for token in (
+                "Traceback",
+                "Error",
+                "Exception",
+                "failure_reason",
+                "AttributeError",
+                "TypeError",
+                "ValueError",
+                "OSError",
+            )
+        )
+    ]
+    if interesting:
+        return " | ".join(interesting[-3:])[:400]
+    return " | ".join(lines[-3:])[:400]
+
+
+def build_recent_run_context(limit: int = 8) -> str:
+    """Summarize recent run artifacts for the LLM prompt."""
+
+    runs_dir = get_runs_dir()
+    if not runs_dir.exists():
+        return ""
+
+    run_dirs = sorted(
+        [path for path in runs_dir.iterdir() if path.is_dir()],
+        key=lambda path: path.stat().st_mtime,
+    )
+    if not run_dirs:
+        return ""
+
+    lines: list[str] = []
+    for run_dir in run_dirs[-limit:]:
+        result = _read_json_if_exists(run_dir / "result.json") or {}
+        summary = _read_json_if_exists(run_dir / "summary.json") or {}
+        train_log_path = run_dir / "train.log"
+
+        status = str(result.get("status", "unknown"))
+        description = str(result.get("description", run_dir.name))
+        metric_value = result.get("metric_value")
+        metric_str = "n/a"
+        if isinstance(metric_value, (int, float)):
+            metric_str = f"{float(metric_value):.6f}"
+
+        line = f"- {status.upper()} {metric_str} {description}"
+
+        if summary:
+            detail_parts = []
+            epochs = summary.get("epochs_completed")
+            if epochs is not None:
+                detail_parts.append(f"epochs={epochs}")
+            final_train_loss = summary.get("final_train_loss")
+            if isinstance(final_train_loss, (int, float)):
+                detail_parts.append(f"final_train={float(final_train_loss):.4f}")
+            final_val_loss = summary.get("final_val_loss")
+            if isinstance(final_val_loss, (int, float)):
+                detail_parts.append(f"final_val={float(final_val_loss):.4f}")
+            if summary.get("timed_out"):
+                detail_parts.append("timed_out=true")
+            if summary.get("non_finite_detected"):
+                detail_parts.append("non_finite=true")
+            failure_reason = summary.get("failure_reason")
+            if failure_reason:
+                detail_parts.append(f"failure={str(failure_reason)[:160]}")
+            if detail_parts:
+                line += " | " + ", ".join(detail_parts)
+        train_losses, val_losses = _extract_component_losses(train_log_path)
+        train_loss_text = _format_component_losses("train", train_losses)
+        val_loss_text = _format_component_losses("val", val_losses)
+        component_bits = [bit for bit in (train_loss_text, val_loss_text) if bit]
+        if component_bits:
+            line += " | " + " ; ".join(component_bits)
+
+        if not summary and status == "crash":
+            line += f" | crash_tail={_summarize_crash_tail(train_log_path)}"
+
+        lines.append(line[:700])
+
+    baseline_metadata = _read_json_if_exists(get_workspace_dir() / "baseline" / "metadata.json")
+    baseline_block = ""
+    if baseline_metadata:
+        baseline_metric = baseline_metadata.get("metric_value")
+        baseline_desc = baseline_metadata.get("description", "")
+        if isinstance(baseline_metric, (int, float)):
+            baseline_block = (
+                "## Current promoted baseline\n"
+                f"- {float(baseline_metric):.6f} {str(baseline_desc)[:220]}\n"
+            )
+
+    return baseline_block + "## Recent run artifact insights\n" + "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -241,13 +575,20 @@ def git_commit(message: str, files: list[str]) -> str:
 
 
 def git_revert_file(filepath: str) -> None:
-    """Restore a single file to HEAD."""
-    git("checkout", "--", filepath)
+    """Restore a single file to the current HEAD commit."""
+    git("restore", "--source=HEAD", "--staged", "--worktree", "--", filepath)
 
 
 def git_reset_last_commit() -> None:
     """Undo the last commit but keep working tree changes."""
-    git("reset", "HEAD~1")
+    git("reset", "--mixed", "HEAD~1")
+
+
+def git_discard_last_experiment(filepath: str) -> None:
+    """Drop the last experiment commit and restore the touched file."""
+
+    git_reset_last_commit()
+    git_revert_file(filepath)
 
 
 def git_push() -> None:
@@ -289,25 +630,51 @@ _gemini_model = "gemini-3.1-pro-preview"
 
 
 def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
-    """Call Google Gemini 2.5 Pro via the google-generativeai SDK."""
+    """Call Google Gemini via the Google Gen AI SDK, with legacy fallback."""
     try:
-        import google.generativeai as genai
         api_key = os.environ.get("GEMINI_API_KEY", "")
         if not api_key:
             log_to_file("ERROR Gemini: GEMINI_API_KEY not set")
             return None
-        genai.configure(api_key=api_key)
-        generation_config: dict = {"max_output_tokens": 8192}
-        if temperature is not None:
-            generation_config["temperature"] = temperature
-        model = genai.GenerativeModel(
-            model_name=_gemini_model,
-            generation_config=generation_config,
-        )
-        response = model.generate_content(prompt)
-        return response.text
+
+        try:
+            from google import genai
+            from google.genai import types
+
+            config_kwargs = {
+                "max_output_tokens": 8192,
+                "response_mime_type": "application/json",
+            }
+            if temperature is not None:
+                config_kwargs["temperature"] = temperature
+
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=_gemini_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(**config_kwargs),
+            )
+            return response.text
+        except ImportError:
+            import google.generativeai as legacy_genai
+
+            legacy_genai.configure(api_key=api_key)
+            generation_config: dict = {
+                "max_output_tokens": 8192,
+                "response_mime_type": "application/json",
+            }
+            if temperature is not None:
+                generation_config["temperature"] = temperature
+            model = legacy_genai.GenerativeModel(
+                model_name=_gemini_model,
+                generation_config=generation_config,
+            )
+            response = model.generate_content(prompt)
+            return response.text
     except ImportError:
-        log_to_file("ERROR Gemini: google-generativeai not installed. Run: pip install google-generativeai")
+        log_to_file(
+            "ERROR Gemini: no Gemini SDK installed. Run: pip install google-genai"
+        )
         return None
     except Exception as e:
         err = str(e)
@@ -513,6 +880,8 @@ def build_prompt(
     history: list[dict],
     best_loss: float,
     modifiable_files: list[str],
+    agent_context: str = "",
+    recent_run_context: str = "",
 ) -> str:
     history_section = ""
     near_misses_str = ""
@@ -570,6 +939,12 @@ Look at category summary — avoid exhausted categories. Try a different file or
         streak_str = f"\n## CAUTION: {fail_streak} consecutive failures. Try simpler change.\n"
 
     files_list = "\n".join(f"  - {f}" for f in modifiable_files)
+    context_section = ""
+    if agent_context:
+        context_section = f"\n## Repo context\n{agent_context}\n"
+    recent_runs_section = ""
+    if recent_run_context:
+        recent_runs_section = f"\n{recent_run_context}\n"
 
     return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
 physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
@@ -582,7 +957,7 @@ physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
 - Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
 {JAX_PITFALLS}
 ## Current best_val_loss: {best_loss:.6f}
-{streak_str}{history_section}{KNOWN_GOOD}
+{streak_str}{history_section}{KNOWN_GOOD}{context_section}{recent_runs_section}
 ## Currently showing: {file_path}
 ```
 {file_source}
@@ -612,23 +987,137 @@ Keep changes minimal. One idea at a time."""
 # Response parsing & patch application
 # ---------------------------------------------------------------------------
 
+MAX_CONSECUTIVE_PARSE_FAILURES = 3
+LLM_REQUEST_TIMEOUT_SECONDS = 180
+
+
+def _strip_markdown_fences(text: str) -> str:
+    raw = text.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
+
+
+def _extract_balanced_json_object(text: str) -> str | None:
+    start = None
+    depth = 0
+    in_string = False
+    escape = False
+
+    for idx, char in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if char == "\\" and in_string:
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                return text[start:idx + 1]
+    return None
+
+
 def parse_response(text: str) -> dict | None:
     if not text:
         return None
-    try:
-        raw = text.strip()
-        # Strip markdown fences if present
-        raw = re.sub(r"^```\w*\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        match = re.search(r'\{[\s\S]*\}', text)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
+
+    candidates: list[str] = []
+    raw = _strip_markdown_fences(text)
+    if raw:
+        candidates.append(raw)
+    balanced = _extract_balanced_json_object(raw)
+    if balanced and balanced not in candidates:
+        candidates.append(balanced)
+    if raw != text:
+        balanced_original = _extract_balanced_json_object(text)
+        if balanced_original and balanced_original not in candidates:
+            candidates.append(balanced_original)
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
     return None
+
+
+def repair_response(
+    text: str | None,
+    call_llm,
+    fail_streak: int = 0,
+) -> tuple[dict | None, str | None, bool]:
+    """Ask the LLM to repair malformed JSON and parse the repaired response."""
+
+    if not text:
+        return None, None, False
+
+    repair_prompt = f"""The following response was supposed to be a single JSON object but was malformed.
+Return ONLY one valid JSON object with this schema:
+{{
+  "file": "repo-relative path",
+  "description": "short description",
+  "changes": [
+    {{
+      "old": "exact string to find",
+      "new": "replacement string"
+    }}
+  ]
+}}
+
+Do not add markdown fences or commentary.
+
+Malformed response:
+{text}
+"""
+    repaired, timed_out = invoke_llm_with_timeout(
+        call_llm,
+        repair_prompt,
+        fail_streak=max(fail_streak, 1),
+    )
+    return parse_response(repaired), repaired, timed_out
+
+
+def invoke_llm_with_timeout(
+    call_llm,
+    prompt: str,
+    *,
+    fail_streak: int = 0,
+    timeout_seconds: int = LLM_REQUEST_TIMEOUT_SECONDS,
+) -> tuple[str | None, bool]:
+    """Run an LLM call in a daemon thread and enforce a hard timeout."""
+
+    llm_result: list[str | None] = [None]
+    llm_fatal: list[FatalAPIError | None] = [None]
+
+    def _llm_thread() -> None:
+        try:
+            llm_result[0] = call_llm(prompt, fail_streak=fail_streak)
+        except FatalAPIError as e:
+            llm_fatal[0] = e
+
+    llm_t = threading.Thread(target=_llm_thread, daemon=True)
+    llm_t.start()
+    llm_t.join(timeout_seconds)
+
+    if llm_t.is_alive():
+        return None, True
+
+    if llm_fatal[0]:
+        raise llm_fatal[0]
+
+    return llm_result[0], False
 
 
 def apply_changes(source: str, changes: list[dict]) -> str | None:
@@ -668,7 +1157,21 @@ def validate_file(filepath: str, source: str) -> str | None:
 # Experiment runner – calls scripts/autoresearch.py as subprocess
 # ---------------------------------------------------------------------------
 
-TRAIN_TIMEOUT_SECONDS = 900  # hard kill after 15 min
+DEFAULT_TRAIN_TIMEOUT_SECONDS = 3600
+
+
+def get_train_timeout_seconds() -> int:
+    """Align the agent-side timeout with the autoresearch config."""
+
+    try:
+        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+        research = config.get("research", {})
+        minutes = float(research.get("time_budget_minutes", 30))
+        buffer_minutes = float(research.get("hard_timeout_buffer_minutes", 5))
+        return max(60, int((minutes + buffer_minutes + 1.0) * 60))
+    except Exception:
+        return DEFAULT_TRAIN_TIMEOUT_SECONDS
 
 
 def run_experiment(
@@ -685,18 +1188,14 @@ def run_experiment(
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    train_timeout_seconds = get_train_timeout_seconds()
 
     # Determine where result.json will land
     # autoresearch.py writes it to workspace_dir/runs/<run_id>/result.json
-    # We read the workspace_dir from config
-    try:
-        with AUTORESEARCH_CONFIG.open("r") as f:
-            ar_cfg = yaml.safe_load(f)
-        workspace_dir = PROJECT_ROOT / ar_cfg.get("research", {}).get("workspace_dir", "outputs/autoresearch")
-    except Exception:
-        workspace_dir = PROJECT_ROOT / "outputs" / "autoresearch"
-
+    # We read the workspace_dir from config.
+    workspace_dir = get_workspace_dir()
     runs_dir = workspace_dir / "runs"
+    existing_result_files = set(runs_dir.glob("*/result.json")) if runs_dir.exists() else set()
 
     try:
         proc = subprocess.Popen(
@@ -713,10 +1212,10 @@ def run_experiment(
         all_lines: list[str] = []
 
         while True:
-            if time.time() - t_start > TRAIN_TIMEOUT_SECONDS:
+            if time.time() - t_start > train_timeout_seconds:
                 proc.kill()
-                log_to_file(f"TIMEOUT: experiment killed after {TRAIN_TIMEOUT_SECONDS}s")
-                return {"error": f"timeout ({TRAIN_TIMEOUT_SECONDS}s)"}
+                log_to_file(f"TIMEOUT: experiment killed after {train_timeout_seconds}s")
+                return {"error": f"timeout ({train_timeout_seconds}s)"}
 
             # GPU thermal abort
             if _nvml_available:
@@ -761,7 +1260,11 @@ def run_experiment(
 
     # Find the most-recently-written result.json under runs/
     if runs_dir.exists():
-        result_files = sorted(runs_dir.glob("*/result.json"), key=lambda p: p.stat().st_mtime)
+        result_files = [
+            path for path in runs_dir.glob("*/result.json")
+            if path not in existing_result_files
+        ]
+        result_files.sort(key=lambda p: p.stat().st_mtime)
         if result_files:
             try:
                 with result_files[-1].open("r") as f:
@@ -1018,9 +1521,12 @@ def _run_text_mode(
     call_llm,
     modifiable_files: list[str],
     max_runs: int,
+    agent_context: str,
+    recent_run_context: str,
 ) -> None:
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
+    consecutive_parse_failures = 0
 
     for i in range(max_runs - prior_count):
         exp_num = prior_count + i + 1
@@ -1034,18 +1540,56 @@ def _run_text_mode(
             continue
 
         fail_streak = _count_recent_failures(history)
-        prompt = build_prompt(target_file, file_source, history, best_loss, modifiable_files)
+        prompt = build_prompt(
+            target_file,
+            file_source,
+            history,
+            best_loss,
+            modifiable_files,
+            agent_context=agent_context,
+            recent_run_context=recent_run_context,
+        )
 
         try:
-            response = call_llm(prompt, fail_streak=fail_streak)
+            response, timed_out = invoke_llm_with_timeout(
+                call_llm,
+                prompt,
+                fail_streak=fail_streak,
+            )
         except FatalAPIError as e:
             print(f"Fatal API error: {e}")
             break
+        if timed_out:
+            print(f"  LLM request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+            history = get_results_history()
+            continue
 
         proposal = parse_response(response)
+        if not proposal:
+            try:
+                proposal, repaired, repair_timed_out = repair_response(
+                    response,
+                    call_llm,
+                    fail_streak=fail_streak,
+                )
+            except FatalAPIError as e:
+                print(f"Fatal API error: {e}")
+                break
+            if repair_timed_out:
+                print(f"  JSON repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                history = get_results_history()
+                continue
+            if proposal:
+                print("  Repaired malformed LLM response.")
+
         if not proposal or "changes" not in proposal:
             print("  LLM gave unparseable response. Skipping.")
+            consecutive_parse_failures += 1
+            if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                print("  Too many consecutive malformed LLM responses. Stopping cleanly.")
+                break
             continue
+        consecutive_parse_failures = 0
 
         proposed_file = proposal.get("file", target_file)
         if proposed_file not in modifiable_files:
@@ -1082,32 +1626,29 @@ def _run_text_mode(
         print(f"  Committed: {sha}")
 
         print(f"  Running experiment...")
-        result = run_experiment(description)
+        result = run_experiment(f"[{proposed_file}] {description}")
 
         if result and result.get("status") in ("keep", "discard"):
             val_loss = float(result.get("metric_value", 999.0) or 999.0)
-            improved = val_loss < best_loss
-            status = "keep" if improved else "discard"
-            log_result(sha, val_loss, status, proposed_file, description)
-            if improved:
+            if result.get("status") == "keep":
                 best_loss = val_loss
                 print(f"  KEEP: val_loss={val_loss:.6f} (NEW BEST)")
                 git_push()
             else:
                 print(f"  DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
-                git_revert_file(proposed_file)
-                git_reset_last_commit()
+                git_discard_last_experiment(proposed_file)
+        elif result and result.get("status") == "crash":
+            print("  CRASH: experiment failed")
+            git_discard_last_experiment(proposed_file)
         elif result and "error" in result:
             err_msg = str(result["error"])[:80]
             print(f"  CRASH: {err_msg}")
             log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
-            git_revert_file(proposed_file)
-            git_reset_last_commit()
+            git_discard_last_experiment(proposed_file)
         else:
             print("  CRASH: no result")
             log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
-            git_revert_file(proposed_file)
-            git_reset_last_commit()
+            git_discard_last_experiment(proposed_file)
 
         history = get_results_history()
         valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
@@ -1199,7 +1740,10 @@ def main() -> None:
             ar_cfg = yaml.safe_load(f) or {}
         modifiable_files = ar_cfg.get("agent", {}).get("modifiable_files", MODIFIABLE_FILES)
     except Exception:
+        ar_cfg = {}
         modifiable_files = MODIFIABLE_FILES
+    agent_context = load_agent_context(ar_cfg)
+    recent_run_context = build_recent_run_context()
 
     if args.file:
         if args.file not in modifiable_files:
@@ -1217,8 +1761,11 @@ def main() -> None:
     # Check previous crash
     prev = read_state()
     if prev:
-        log_to_file(f"Previous crash: exp={prev.get('experiment_num')} phase={prev.get('phase')}")
-        print(f"Previous crash detected: exp={prev.get('experiment_num')}, phase={prev.get('phase')}")
+        if other_agent_process_running():
+            log_to_file(f"Previous crash: exp={prev.get('experiment_num')} phase={prev.get('phase')}")
+            print(f"Previous crash detected: exp={prev.get('experiment_num')}, phase={prev.get('phase')}")
+        else:
+            log_to_file("Ignoring stale agent_state.json from an earlier run")
         clear_state()
 
     # Load history
@@ -1235,13 +1782,23 @@ def main() -> None:
             result = run_experiment("baseline")
             if result and result.get("status") in ("keep", "discard"):
                 val_loss = float(result.get("metric_value", 999.0) or 999.0)
-                sha = git_short_sha()
-                log_result(sha, val_loss, "keep", "baseline", "baseline")
                 best_loss = val_loss
                 print(f"Baseline: val_loss={val_loss:.6f}")
+            elif result and result.get("status") == "crash":
+                print("Baseline failed inside autoresearch harness.")
+                return
             history = get_results_history()
 
-        _run_text_mode(args, history, best_loss, call_llm, modifiable_files_active, args.max_runs)
+        _run_text_mode(
+            args,
+            history,
+            best_loss,
+            call_llm,
+            modifiable_files_active,
+            args.max_runs,
+            agent_context,
+            recent_run_context,
+        )
         return
 
     # ---- Dashboard mode ----
@@ -1341,11 +1898,15 @@ def main() -> None:
 
             if result and result.get("status") in ("keep", "discard"):
                 val_loss = float(result.get("metric_value", 999.0) or 999.0)
-                sha = git_short_sha()
-                log_result(sha, val_loss, "keep", "baseline", "baseline")
                 best_loss = val_loss
                 state["best_loss"] = best_loss
                 add_log(f"Baseline: val_loss={val_loss:.6f}")
+            elif result and result.get("status") == "crash":
+                add_log("Baseline failed inside autoresearch harness.")
+                set_phase("DONE")
+                refresh()
+                time.sleep(5)
+                return
             elif result and "error" in result:
                 add_log(f"Baseline failed: {result['error'][:80]}")
                 set_phase("DONE")
@@ -1371,6 +1932,7 @@ def main() -> None:
 
         # ---- Main loop ----
         remaining = max(0, args.max_runs - len(history))
+        consecutive_parse_failures = 0
 
         for i in range(remaining):
             try:
@@ -1398,39 +1960,74 @@ def main() -> None:
                 elif fail_streak >= 3:
                     add_log(f"Streak {fail_streak} failures — trying simpler approach")
 
-                prompt = build_prompt(target_file, file_source, history, best_loss, modifiable_files_active)
-
-                llm_result: list[str | None] = [None]
-                llm_fatal: list[FatalAPIError | None] = [None]
-
-                def _llm_thread() -> None:
-                    try:
-                        llm_result[0] = call_llm(prompt, fail_streak=fail_streak)
-                    except FatalAPIError as e:
-                        llm_fatal[0] = e
-
-                llm_t = threading.Thread(target=_llm_thread, daemon=True)
-                llm_t.start()
+                prompt = build_prompt(
+                    target_file,
+                    file_source,
+                    history,
+                    best_loss,
+                    modifiable_files_active,
+                    agent_context=agent_context,
+                    recent_run_context=recent_run_context,
+                )
 
                 # Cool GPU while LLM thinks
                 if not wait_for_cool_gpu():
                     add_log("GPU too hot. Stopping.")
                     break
 
-                llm_t.join()
-
-                if llm_fatal[0]:
-                    add_log(f"Fatal API error: {llm_fatal[0]}")
+                try:
+                    llm_response, llm_timed_out = invoke_llm_with_timeout(
+                        call_llm,
+                        prompt,
+                        fail_streak=fail_streak,
+                    )
+                except FatalAPIError as e:
+                    add_log(f"Fatal API error: {e}")
                     break
 
-                proposal = parse_response(llm_result[0])
-                if not proposal or "changes" not in proposal:
-                    add_log("LLM gave unparseable response. Skipping.")
-                    log_to_file(f"RAW: {(llm_result[0] or '')[:500]}")
+                if llm_timed_out:
+                    add_log(f"LLM request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
                     history = get_results_history()
                     state["history"] = history
                     refresh()
                     continue
+
+                proposal = parse_response(llm_response)
+                if not proposal:
+                    add_log("Malformed LLM response. Attempting JSON repair...")
+                    try:
+                        proposal, repaired, repair_timed_out = repair_response(
+                            llm_response,
+                            call_llm,
+                            fail_streak=fail_streak,
+                        )
+                    except FatalAPIError as e:
+                        add_log(f"Fatal API error: {e}")
+                        break
+                    if repair_timed_out:
+                        add_log(f"JSON repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                        history = get_results_history()
+                        state["history"] = history
+                        refresh()
+                        continue
+                    if proposal:
+                        add_log("Recovered malformed LLM response.")
+
+                if not proposal or "changes" not in proposal:
+                    add_log("LLM gave unparseable response. Skipping.")
+                    log_to_file(f"RAW: {(llm_response or '')[:500]}")
+                    consecutive_parse_failures += 1
+                    if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                        add_log("Too many consecutive malformed LLM responses. Stopping cleanly.")
+                        clear_state()
+                        set_phase("DONE")
+                        refresh()
+                        break
+                    history = get_results_history()
+                    state["history"] = history
+                    refresh()
+                    continue
+                consecutive_parse_failures = 0
 
                 proposed_file = proposal.get("file", target_file)
                 description = proposal.get("description", "unknown").replace("\t", " ")
@@ -1486,7 +2083,10 @@ def main() -> None:
                 result_holder: list[dict | None] = [None]
 
                 def _train_thread() -> None:
-                    result_holder[0] = run_experiment(description, on_line=on_training_line)
+                    result_holder[0] = run_experiment(
+                        f"[{proposed_file}] {description}",
+                        on_line=on_training_line,
+                    )
 
                 train_t = threading.Thread(target=_train_thread, daemon=True)
                 train_t.start()
@@ -1501,38 +2101,38 @@ def main() -> None:
                 # ---- Keep / Discard ----
                 if result and result.get("status") in ("keep", "discard"):
                     val_loss = float(result.get("metric_value", 999.0) or 999.0)
-                    improved = 0.0 < val_loss < best_loss
+                    improved = result.get("status") == "keep"
 
                     if improved:
                         best_loss = val_loss
                         state["best_loss"] = best_loss
-                        log_result(sha, val_loss, "keep", proposed_file, description)
                         set_phase("KEEP")
                         add_log(f"KEEP: val_loss={val_loss:.6f} NEW BEST!")
                         git_push()
                     else:
-                        log_result(sha, val_loss, "discard", proposed_file, description)
                         set_phase("DISCARD")
                         add_log(f"DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
-                        git_revert_file(proposed_file)
-                        git_reset_last_commit()
+                        git_discard_last_experiment(proposed_file)
 
+                elif result and result.get("status") == "crash":
+                    set_phase("CRASH")
+                    add_log("CRASH: experiment failed inside autoresearch harness")
+                    git_discard_last_experiment(proposed_file)
                 elif result and "error" in result:
                     err_msg = str(result["error"])[:80]
                     log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
                     set_phase("CRASH")
                     add_log(f"CRASH: {err_msg}")
-                    git_revert_file(proposed_file)
-                    git_reset_last_commit()
+                    git_discard_last_experiment(proposed_file)
                 else:
                     log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
                     set_phase("CRASH")
                     add_log("CRASH: no output from experiment")
-                    git_revert_file(proposed_file)
-                    git_reset_last_commit()
+                    git_discard_last_experiment(proposed_file)
 
                 history = get_results_history()
                 state["history"] = history
+                recent_run_context = build_recent_run_context()
                 clear_state()
                 add_log(f"Elapsed: {elapsed_exp:.0f}s")
                 refresh()
@@ -1547,8 +2147,7 @@ def main() -> None:
                 log_to_file(f"LOOP EXCEPTION: {loop_err}")
                 add_log(f"Exception: {str(loop_err)[:80]}")
                 try:
-                    git_revert_file(proposed_file)
-                    git_reset_last_commit()
+                    git_discard_last_experiment(proposed_file)
                 except Exception:
                     pass
                 try:
@@ -1569,7 +2168,7 @@ def main() -> None:
     console.print(f"[bold]Kept:[/] {len(kept)}")
     console.print(f"[bold]Best val_loss:[/] {best_loss:.6f}")
     console.print(f"[bold]Branch:[/] {branch}")
-    console.print(f"[bold]Results:[/] {RESULTS_TSV}")
+    console.print(f"[bold]Results:[/] {get_results_tsv_path()}")
     console.print(f"[bold]Log:[/] {LOG_FILE}")
 
 
