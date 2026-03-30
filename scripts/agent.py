@@ -23,6 +23,9 @@ Required environment variables (for the chosen provider):
     ANTHROPIC_API_KEY   -- Claude
     OPENAI_API_KEY      -- OpenAI
     XAI_API_KEY         -- xAI Grok
+
+The agent also auto-loads `.env` and `.env.local` from the project root
+when present.
 """
 
 from __future__ import annotations
@@ -64,6 +67,48 @@ DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "outputs" / "autoresearch"
 DEFAULT_AGENT_CONTEXT_FILE = PROJECT_ROOT / "auto_research.md"
 LOG_FILE = PROJECT_ROOT / "agent.log"
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
+
+
+# ---------------------------------------------------------------------------
+# Environment loading
+# ---------------------------------------------------------------------------
+
+def load_env_file(path: Path, override: bool = False) -> None:
+    """Load simple KEY=VALUE pairs from a .env-style file."""
+
+    if not path.exists():
+        return
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:
+        print(f"WARNING env load failed: {path} ({exc})", file=sys.stderr)
+        return
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        if value and len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+
+        if override or key not in os.environ:
+            os.environ[key] = value
+
+
+load_env_file(PROJECT_ROOT / ".env", override=False)
+load_env_file(PROJECT_ROOT / ".env.local", override=True)
 
 
 # ---------------------------------------------------------------------------

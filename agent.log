@@ -876,3 +876,28 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-03-30 22:30:57] Ignoring stale agent_state.json from an earlier run
 [2026-03-30 22:30:57] Agent started: llm=Gemini 3.1 Pro max_runs=100 branch=autoresearch/mar30 prior=0 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
 [2026-03-30 22:30:57] Running baseline experiment...
+[2026-03-30 22:41:08] Baseline: val_loss=1.983048
+[2026-03-30 22:41:08] Ready. Best val_loss=1.983048 | 1 prior experiments
+[2026-03-30 22:41:08] Exp 2/100: querying Gemini 3.1 Pro...
+[2026-03-30 22:41:08] ERROR Gemini: GEMINI_API_KEY not set
+[2026-03-30 22:41:08] Malformed LLM response. Attempting JSON repair...
+[2026-03-30 22:41:08] LLM gave unparseable response. Skipping.
+[2026-03-30 22:41:08] RAW: 
+[2026-03-30 22:41:08] Exp 2/100: querying Gemini 3.1 Pro...
+[2026-03-30 22:41:08] ERROR Gemini: GEMINI_API_KEY not set
+[2026-03-30 22:41:08] Malformed LLM response. Attempting JSON repair...
+[2026-03-30 22:41:08] LLM gave unparseable response. Skipping.
+[2026-03-30 22:41:08] RAW: 
+[2026-03-30 22:41:08] Exp 2/100: querying Gemini 3.1 Pro...
+[2026-03-30 22:41:08] ERROR Gemini: GEMINI_API_KEY not set
+[2026-03-30 22:41:08] Malformed LLM response. Attempting JSON repair...
+[2026-03-30 22:41:08] LLM gave unparseable response. Skipping.
+[2026-03-30 22:41:08] RAW: 
+[2026-03-30 22:41:08] Too many consecutive malformed LLM responses. Stopping cleanly.
+[2026-03-30 22:46:15] Resumed branch: autoresearch/mar30
+[2026-03-30 22:46:15] Agent started: llm=Gemini 3.1 Pro max_runs=100 branch=autoresearch/mar30 prior=1 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-03-30 22:46:15] Ready. Best val_loss=1.983048 | 1 prior experiments
+[2026-03-30 22:46:15] Exp 2/100: querying Gemini 3.1 Pro...
+[2026-03-30 22:46:35] Idea: Increase latent_dim to 32 for a more expressive latent space to improve validation loss
+[2026-03-30 22:46:35] File: configs/training_default.yaml
+[2026-03-30 22:46:35] Committed: 4864e46
