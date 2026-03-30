@@ -94,6 +94,7 @@ class SamplingMPC:
         current_state: Float[Array, "state_dim"],
         params: Float[Array, "param_dim"],
         setpoints: Float[Array, "state_dim"],
+        disturbance_forecast: Float[Array, "horizon disturbance_dim"],
         dt: float,
         key: PRNGKeyArray,
         u_prev: Float[Array, "control_dim"],
@@ -104,6 +105,7 @@ class SamplingMPC:
             current_state: Current state
             params: System parameters
             setpoints: State setpoints
+            disturbance_forecast: Predicted disturbance sequence over the horizon
             dt: Time step
             key: PRNG key
             u_prev: Previous control action
@@ -150,7 +152,13 @@ class SamplingMPC:
                 
                 # Predict using mean trajectory (deterministic)
                 z0, _, _ = self.model.encode(current_state, params, controls[0], None)
-                z_traj = self.model.latent_sde.mean_trajectory(ts, z0, controls, params)
+                z_traj = self.model.latent_sde.mean_trajectory(
+                    ts,
+                    z0,
+                    controls,
+                    params,
+                    disturbances=disturbance_forecast,
+                )
                 
                 # Decode
                 decode_fn = jax.vmap(lambda z, u: self.model.decode(z, params, u), in_axes=(0, 0))
@@ -178,6 +186,7 @@ class SamplingMPC:
         current_state: Float[Array, "state_dim"],
         params: Float[Array, "param_dim"],
         setpoints: Float[Array, "state_dim"],
+        disturbance_forecast: Float[Array, "horizon disturbance_dim"],
         dt: float,
         key: PRNGKeyArray,
         u_prev: Float[Array, "control_dim"],
@@ -188,6 +197,7 @@ class SamplingMPC:
             current_state: Current state
             params: System parameters
             setpoints: State setpoints
+            disturbance_forecast: Predicted disturbance sequence over the horizon
             dt: Time step
             key: PRNG key
             u_prev: Previous control action
@@ -196,7 +206,15 @@ class SamplingMPC:
             Control action for this step
         """
         # Solve MPC
-        optimal_sequence = self.solve(current_state, params, setpoints, dt, key, u_prev)
+        optimal_sequence = self.solve(
+            current_state,
+            params,
+            setpoints,
+            disturbance_forecast,
+            dt,
+            key,
+            u_prev,
+        )
         
         # Store for warm start
         self.prev_solution = optimal_sequence
@@ -250,7 +268,24 @@ class SamplingMPC:
             
             # Compute MPC action
             key, subkey = jax.random.split(key)
-            control = self.step(current_state, params, setpoints, dt, subkey, u_prev)
+            forecast_end = min(i + self.horizon, n_steps)
+            disturbance_forecast = disturbances[i:forecast_end]
+            if disturbance_forecast.shape[0] < self.horizon:
+                pad = jnp.tile(
+                    disturbance_forecast[-1][None, :],
+                    (self.horizon - disturbance_forecast.shape[0], 1),
+                )
+                disturbance_forecast = jnp.concatenate([disturbance_forecast, pad], axis=0)
+
+            control = self.step(
+                current_state,
+                params,
+                setpoints,
+                disturbance_forecast,
+                dt,
+                subkey,
+                u_prev,
+            )
             controls = controls.at[i].set(control)
             
             # Apply to simulator (ground truth)
@@ -273,7 +308,16 @@ class SamplingMPC:
         
         # Last control
         key, subkey = jax.random.split(key)
-        control = self.step(current_state, params, setpoints, dt, subkey, u_prev)
+        disturbance_forecast = jnp.tile(disturbances[-1][None, :], (self.horizon, 1))
+        control = self.step(
+            current_state,
+            params,
+            setpoints,
+            disturbance_forecast,
+            dt,
+            subkey,
+            u_prev,
+        )
         controls = controls.at[-1].set(control)
         
         return {

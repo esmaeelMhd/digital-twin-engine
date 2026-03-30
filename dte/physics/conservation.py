@@ -54,6 +54,54 @@ def mass_balance_residual(
     return residual
 
 
+def species_mass_balance_residuals(
+    states: Float[Array, "n_steps 4"],
+    controls: Float[Array, "n_steps 2"],
+    disturbances: Float[Array, "n_steps 2"],
+    params: CSTRParams,
+    dt: float,
+) -> Float[Array, "n_steps-1 2"]:
+    """Compute species-wise mass-balance residuals for Ca and Cb.
+
+    For the first-order reaction A -> B in a constant-volume CSTR:
+      dCa/dt = (F_in / V) * (Ca_in - Ca) - k(T) * Ca
+      dCb/dt = -(F_in / V) * Cb + k(T) * Ca
+
+    Args:
+        states: State trajectory [Ca, Cb, T, Tc]
+        controls: Control trajectory [F_in, Tc_in]
+        disturbances: Disturbance trajectory [Ca_in, T_in]
+        params: CSTR parameters
+        dt: Time step
+
+    Returns:
+        Residuals with shape (n_steps - 1, 2) for [Ca, Cb]
+    """
+    Ca = states[:, 0]
+    Cb = states[:, 1]
+    T = states[:, 2]
+
+    F_in = controls[:, 0]
+    Ca_in = disturbances[:, 0]
+
+    dCa_dt = jnp.diff(Ca) / dt
+    dCb_dt = jnp.diff(Cb) / dt
+
+    k = params.k0 * jnp.exp(-params.Ea_over_R / T[:-1])
+    flow_over_volume = F_in[:-1] / params.V
+
+    expected_dCa_dt = flow_over_volume * (Ca_in[:-1] - Ca[:-1]) - k * Ca[:-1]
+    expected_dCb_dt = -flow_over_volume * Cb[:-1] + k * Ca[:-1]
+
+    return jnp.stack(
+        [
+            jnp.abs(dCa_dt - expected_dCa_dt),
+            jnp.abs(dCb_dt - expected_dCb_dt),
+        ],
+        axis=-1,
+    )
+
+
 def energy_balance_residual(
     states: Float[Array, "n_steps 4"],
     controls: Float[Array, "n_steps 2"],
@@ -123,11 +171,18 @@ def total_conservation_metric(
         Dictionary with conservation metrics
     """
     mass_res = mass_balance_residual(states, controls, disturbances, params, dt)
+    species_mass_res = species_mass_balance_residuals(
+        states, controls, disturbances, params, dt
+    )
     energy_res = energy_balance_residual(states, controls, disturbances, params, dt)
     
     return {
         "mass_residual_mean": float(jnp.mean(mass_res)),
         "mass_residual_max": float(jnp.max(mass_res)),
+        "ca_mass_residual_mean": float(jnp.mean(species_mass_res[:, 0])),
+        "ca_mass_residual_max": float(jnp.max(species_mass_res[:, 0])),
+        "cb_mass_residual_mean": float(jnp.mean(species_mass_res[:, 1])),
+        "cb_mass_residual_max": float(jnp.max(species_mass_res[:, 1])),
         "energy_residual_mean": float(jnp.mean(energy_res)),
         "energy_residual_max": float(jnp.max(energy_res)),
     }

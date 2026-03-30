@@ -7,6 +7,31 @@ from jaxtyping import Array, Float, PRNGKeyArray
 import diffrax
 
 
+def _normalize_control(u: Float[Array, "control_dim"]) -> Float[Array, "control_dim"]:
+    """Apply light normalization to control inputs when using the CSTR layout."""
+    if u.shape[-1] == 2:
+        center = jnp.array([55.0, 300.0], dtype=u.dtype)
+        scale = jnp.array([0.02, 0.02], dtype=u.dtype)
+        return (u - center) * scale
+    return u
+
+
+def _normalize_disturbance(
+    d: Float[Array, "disturbance_dim"],
+) -> Float[Array, "disturbance_dim"]:
+    """Apply light normalization to disturbances when using the CSTR layout."""
+    if d.shape[-1] == 2:
+        center = jnp.array([1.0, 320.0], dtype=d.dtype)
+        scale = jnp.array([1.0, 0.02], dtype=d.dtype)
+        return (d - center) * scale
+    return d
+
+
+def _normalize_params(c: Float[Array, "param_dim"]) -> Float[Array, "param_dim"]:
+    """Normalize parameter vector before concatenation into the neural networks."""
+    return c * 0.1
+
+
 class LatentDrift(eqx.Module):
     """Drift function f(z, u, c) for the latent SDE: dz = f*dt + g*dW"""
     
@@ -17,6 +42,7 @@ class LatentDrift(eqx.Module):
         self,
         latent_dim: int = 16,
         control_dim: int = 2,
+        disturbance_dim: int = 0,
         param_dim: int = 6,
         hidden_dim: int = 128,
         n_layers: int = 3,
@@ -35,7 +61,7 @@ class LatentDrift(eqx.Module):
         """
         keys = jax.random.split(key, n_layers + 1)
         
-        input_dim = latent_dim + control_dim + param_dim
+        input_dim = latent_dim + control_dim + disturbance_dim + param_dim
         
         # Hidden layers
         self.layers = []
@@ -52,6 +78,7 @@ class LatentDrift(eqx.Module):
         self,
         z: Float[Array, "latent_dim"],
         u: Float[Array, "control_dim"],
+        d: Float[Array, "disturbance_dim"],
         c: Float[Array, "param_dim"],
     ) -> Float[Array, "latent_dim"]:
         """Compute drift.
@@ -59,20 +86,22 @@ class LatentDrift(eqx.Module):
         Args:
             z: Latent state
             u: Control input
+            d: Disturbance input
             c: Conditioning (parameters)
             
         Returns:
             Drift vector dz/dt
         """
-        u_norm = (u - jnp.array([55.0, 300.0])) * 0.01
-        c_norm = c * 0.1
-        x = jnp.concatenate([z, u_norm, c_norm])
+        u_norm = _normalize_control(u)
+        d_norm = _normalize_disturbance(d)
+        c_norm = _normalize_params(c)
+        x = jnp.concatenate([z, u_norm, d_norm, c_norm])
         
         for layer in self.layers:
             x = layer(x)
             x = jax.nn.silu(x)
         
-        return jax.nn.tanh(self.output_layer(x))
+        return 10.0 * jax.nn.tanh(self.output_layer(x) * 0.1)
 
 
 class LatentDiffusion(eqx.Module):
@@ -86,6 +115,7 @@ class LatentDiffusion(eqx.Module):
         self,
         latent_dim: int = 16,
         control_dim: int = 2,
+        disturbance_dim: int = 0,
         param_dim: int = 6,
         hidden_dim: int = 64,
         n_layers: int = 2,
@@ -106,7 +136,7 @@ class LatentDiffusion(eqx.Module):
         """
         keys = jax.random.split(key, n_layers + 1)
         
-        input_dim = latent_dim + control_dim + param_dim
+        input_dim = latent_dim + control_dim + disturbance_dim + param_dim
         
         # Hidden layers
         self.layers = []
@@ -126,6 +156,7 @@ class LatentDiffusion(eqx.Module):
         self,
         z: Float[Array, "latent_dim"],
         u: Float[Array, "control_dim"],
+        d: Float[Array, "disturbance_dim"],
         c: Float[Array, "param_dim"],
     ) -> Float[Array, "latent_dim"]:
         """Compute diffusion coefficients.
@@ -133,14 +164,16 @@ class LatentDiffusion(eqx.Module):
         Args:
             z: Latent state
             u: Control input
+            d: Disturbance input
             c: Conditioning (parameters)
             
         Returns:
             Diffusion vector (diagonal elements)
         """
-        u_norm = (u - jnp.array([55.0, 300.0])) * 0.01
-        c_norm = c * 0.1
-        x = jnp.concatenate([z, u_norm, c_norm])
+        u_norm = _normalize_control(u)
+        d_norm = _normalize_disturbance(d)
+        c_norm = _normalize_params(c)
+        x = jnp.concatenate([z, u_norm, d_norm, c_norm])
         
         for layer in self.layers:
             x = layer(x)
@@ -155,14 +188,16 @@ class LatentSDE(eqx.Module):
     
     drift: LatentDrift
     diffusion: LatentDiffusion
-    latent_dim: int
-    control_dim: int
-    param_dim: int
+    latent_dim: int = eqx.field(static=True)
+    control_dim: int = eqx.field(static=True)
+    disturbance_dim: int = eqx.field(static=True)
+    param_dim: int = eqx.field(static=True)
     
     def __init__(
         self,
         latent_dim: int = 16,
         control_dim: int = 2,
+        disturbance_dim: int = 0,
         param_dim: int = 6,
         hidden_dim: int = 128,
         drift_layers: int = 3,
@@ -177,6 +212,7 @@ class LatentSDE(eqx.Module):
         Args:
             latent_dim: Latent dimension
             control_dim: Control dimension
+            disturbance_dim: Disturbance dimension
             param_dim: Parameter dimension
             hidden_dim: Hidden dimension for drift
             drift_layers: Number of drift layers
@@ -190,6 +226,7 @@ class LatentSDE(eqx.Module):
         self.drift = LatentDrift(
             latent_dim=latent_dim,
             control_dim=control_dim,
+            disturbance_dim=disturbance_dim,
             param_dim=param_dim,
             hidden_dim=hidden_dim,
             n_layers=drift_layers,
@@ -199,6 +236,7 @@ class LatentSDE(eqx.Module):
         self.diffusion = LatentDiffusion(
             latent_dim=latent_dim,
             control_dim=control_dim,
+            disturbance_dim=disturbance_dim,
             param_dim=param_dim,
             hidden_dim=diffusion_hidden_dim,
             n_layers=diffusion_layers,
@@ -208,7 +246,22 @@ class LatentSDE(eqx.Module):
         
         self.latent_dim = latent_dim
         self.control_dim = control_dim
+        self.disturbance_dim = disturbance_dim
         self.param_dim = param_dim
+
+    def _default_disturbances(
+        self,
+        ts: Float[Array, "n_steps"],
+        dtype,
+    ) -> Float[Array, "n_steps disturbance_dim"]:
+        """Create a nominal disturbance trajectory when none is provided."""
+        if self.disturbance_dim == 0:
+            return jnp.zeros((ts.shape[0], 0), dtype=dtype)
+        if self.disturbance_dim == 2:
+            nominal = jnp.array([1.0, 320.0], dtype=dtype)
+        else:
+            nominal = jnp.zeros((self.disturbance_dim,), dtype=dtype)
+        return jnp.tile(nominal[None, :], (ts.shape[0], 1))
     
     def __call__(
         self,
@@ -217,6 +270,7 @@ class LatentSDE(eqx.Module):
         controls: Float[Array, "n_steps control_dim"],
         params: Float[Array, "param_dim"],
         key: PRNGKeyArray,
+        disturbances: Float[Array, "n_steps disturbance_dim"] | None = None,
     ) -> Float[Array, "n_steps latent_dim"]:
         """Solve the SDE from z0 over timesteps ts.
         
@@ -226,22 +280,32 @@ class LatentSDE(eqx.Module):
             controls: Control inputs at each time (n_steps, control_dim)
             params: System parameters (param_dim,)
             key: PRNG key for SDE noise
+            disturbances: Disturbance inputs at each time (optional)
             
         Returns:
             Latent trajectory (n_steps, latent_dim)
         """
         # Create interpolation for control signal
         control_interp = diffrax.LinearInterpolation(ts, controls)
+        if self.disturbance_dim > 0:
+            if disturbances is None:
+                disturbances = self._default_disturbances(ts, z0.dtype)
+            disturbance_interp = diffrax.LinearInterpolation(ts, disturbances)
+            disturbance_at_time = disturbance_interp.evaluate
+        else:
+            disturbance_at_time = lambda t: jnp.zeros((0,), dtype=z0.dtype)
         
         # Create drift wrapper for diffrax
         def drift_fn(t, z, args):
             u = control_interp.evaluate(t)
-            return self.drift(z, u, params)
+            d = disturbance_at_time(t)
+            return self.drift(z, u, d, params)
         
         # Create diffusion wrapper for diffrax (diagonal)
         def diffusion_fn(t, z, args):
             u = control_interp.evaluate(t)
-            diffusion_diag = self.diffusion(z, u, params)
+            d = disturbance_at_time(t)
+            diffusion_diag = self.diffusion(z, u, d, params)
             return jnp.diag(diffusion_diag)
         
         # Set up Brownian motion
@@ -285,6 +349,7 @@ class LatentSDE(eqx.Module):
         params: Float[Array, "param_dim"],
         key: PRNGKeyArray,
         n_samples: int = 10,
+        disturbances: Float[Array, "n_steps disturbance_dim"] | None = None,
     ) -> Float[Array, "n_samples n_steps latent_dim"]:
         """Sample multiple SDE paths.
         
@@ -295,6 +360,7 @@ class LatentSDE(eqx.Module):
             params: Parameters
             key: PRNG key
             n_samples: Number of samples
+            disturbances: Disturbance trajectory (optional)
             
         Returns:
             Sampled trajectories (n_samples, n_steps, latent_dim)
@@ -302,7 +368,7 @@ class LatentSDE(eqx.Module):
         keys = jax.random.split(key, n_samples)
         
         def sample_one(k):
-            return self(ts, z0, controls, params, k)
+            return self(ts, z0, controls, params, k, disturbances=disturbances)
         
         return jax.vmap(sample_one)(keys)
     
@@ -312,6 +378,7 @@ class LatentSDE(eqx.Module):
         z0: Float[Array, "latent_dim"],
         controls: Float[Array, "n_steps control_dim"],
         params: Float[Array, "param_dim"],
+        disturbances: Float[Array, "n_steps disturbance_dim"] | None = None,
     ) -> Float[Array, "n_steps latent_dim"]:
         """Deterministic forward pass using only drift (no noise).
         
@@ -320,17 +387,26 @@ class LatentSDE(eqx.Module):
             z0: Initial latent state
             controls: Control trajectory
             params: Parameters
+            disturbances: Disturbance trajectory (optional)
             
         Returns:
             Mean trajectory (n_steps, latent_dim)
         """
         # Create interpolation for control signal
         control_interp = diffrax.LinearInterpolation(ts, controls)
+        if self.disturbance_dim > 0:
+            if disturbances is None:
+                disturbances = self._default_disturbances(ts, z0.dtype)
+            disturbance_interp = diffrax.LinearInterpolation(ts, disturbances)
+            disturbance_at_time = disturbance_interp.evaluate
+        else:
+            disturbance_at_time = lambda t: jnp.zeros((0,), dtype=z0.dtype)
         
         # Create drift wrapper for diffrax
         def drift_fn(t, z, args):
             u = control_interp.evaluate(t)
-            return self.drift(z, u, params)
+            d = disturbance_at_time(t)
+            return self.drift(z, u, d, params)
         
         # Set up ODE (no diffusion)
         term = diffrax.ODETerm(drift_fn)

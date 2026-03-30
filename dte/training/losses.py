@@ -4,12 +4,18 @@ from typing import Dict, Tuple
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from dte.physics.conservation import mass_balance_residual, energy_balance_residual
+from dte.physics.conservation import (
+    energy_balance_residual,
+    mass_balance_residual,
+    species_mass_balance_residuals,
+)
 from dte.simulators.cstr import CSTRParams
 
 
 class LossComputer:
     """Computes all loss terms for the digital twin model."""
+
+    STATE_NAMES = ("Ca", "Cb", "T", "Tc")
     
     def __init__(self, config: dict, normalization_stats: dict, params: CSTRParams):
         """Initialize loss computer.
@@ -28,7 +34,38 @@ class LossComputer:
         self.w_kl = 0.0001
         self.w_traj = config["loss_weights"]["trajectory"]
         self.w_mass = config["loss_weights"]["mass_balance"]
+        self.w_species_mass = config["loss_weights"].get("species_mass_balance", 0.0)
         self.w_energy = config["loss_weights"]["energy_balance"]
+        self.w_one_step = config["loss_weights"].get("one_step", 0.0)
+
+        raw_state_weights = config.get("state_loss_weights", [1.0] * len(self.STATE_NAMES))
+        if isinstance(raw_state_weights, dict):
+            raw_state_weights = [
+                float(raw_state_weights.get(state_name, 1.0))
+                for state_name in self.STATE_NAMES
+            ]
+        self.state_loss_weights = jnp.asarray(raw_state_weights, dtype=jnp.float32)
+        if self.state_loss_weights.shape != (len(self.STATE_NAMES),):
+            raise ValueError(
+                "state_loss_weights must provide exactly four values for "
+                f"{', '.join(self.STATE_NAMES)}."
+            )
+        # Keep the overall loss scale comparable to the unweighted case.
+        self.state_loss_weights = self.state_loss_weights / jnp.mean(self.state_loss_weights)
+
+    @staticmethod
+    def _huber_loss(diff: Array) -> Array:
+        """Compute elementwise Huber loss with delta=0.25."""
+        return jnp.where(
+            jnp.abs(diff) < 0.25,
+            0.5 * diff ** 2,
+            0.25 * jnp.abs(diff) - 0.03125,
+        )
+
+    def _weighted_state_loss(self, diff: Array) -> Float[Array, ""]:
+        """Compute a state-weighted Huber loss in normalized state space."""
+        state_weights = self.state_loss_weights.reshape((1,) * (diff.ndim - 1) + (-1,))
+        return jnp.mean(self._huber_loss(diff) * state_weights)
     
     def reconstruction_loss(
         self,
@@ -44,9 +81,7 @@ class LossComputer:
         Returns:
             Scalar loss
         """
-        diff = predicted_states - true_states
-        mse = jnp.mean(jnp.where(jnp.abs(diff) < 1.0, 0.5 * diff ** 2, jnp.abs(diff) - 0.5))
-        return mse
+        return self._weighted_state_loss(predicted_states - true_states)
     
     def kl_divergence_loss(
         self,
@@ -133,6 +168,29 @@ class LossComputer:
             residuals.append(jnp.mean(res))
         
         return jnp.mean(jnp.array(residuals))
+
+    def physics_species_mass_loss(
+        self,
+        predicted_states: Float[Array, "batch seq_len state_dim"],
+        controls: Float[Array, "batch seq_len control_dim"],
+        disturbances: Float[Array, "batch seq_len dist_dim"],
+        dt: float,
+    ) -> Float[Array, ""]:
+        """Mean species-wise mass-balance residual for Ca and Cb."""
+        batch_size = predicted_states.shape[0]
+        residuals = []
+
+        for i in range(batch_size):
+            res = species_mass_balance_residuals(
+                predicted_states[i],
+                controls[i],
+                disturbances[i],
+                self.params,
+                dt,
+            )
+            residuals.append(jnp.mean(res))
+
+        return jnp.mean(jnp.array(residuals))
     
     def trajectory_loss(
         self,
@@ -156,12 +214,18 @@ class LossComputer:
         weights = jnp.ones(seq_len)
         weights = weights / jnp.mean(weights)  # Normalize to mean 1
         
-        # Weighted Huber loss
         diff = predicted_trajectory - true_trajectory
-        squared_error = jnp.where(jnp.abs(diff) < 1.0, 0.5 * diff ** 2, jnp.abs(diff) - 0.5)
-        weighted_mse = jnp.mean(squared_error * weights[None, :, None])
-        
-        return weighted_mse
+        state_weights = self.state_loss_weights[None, None, :]
+        weighted_huber = self._huber_loss(diff) * weights[None, :, None] * state_weights
+        return jnp.mean(weighted_huber)
+
+    def one_step_loss(
+        self,
+        predicted_next_states: Float[Array, "batch seq_len_minus_one state_dim"],
+        true_next_states: Float[Array, "batch seq_len_minus_one state_dim"],
+    ) -> Float[Array, ""]:
+        """Teacher-forced one-step prediction loss in normalized state space."""
+        return self._weighted_state_loss(predicted_next_states - true_next_states)
     
     def denormalize_states(
         self, states: Float[Array, "... state_dim"]
@@ -227,7 +291,9 @@ class LossComputer:
         return {
             "reconstruction": self.w_recon,
             "kl": kl_weight,
+            "one_step": self.w_one_step,
             "trajectory": self.w_traj,
             "mass_balance": self.w_mass,
+            "species_mass_balance": self.w_species_mass,
             "energy_balance": self.w_energy,
         }

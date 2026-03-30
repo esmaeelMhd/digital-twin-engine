@@ -9,6 +9,7 @@ model:
   state_dim: 4
   param_dim: 6
   control_dim: 2
+  disturbance_dim: 2
 
 sde:
   solver: "euler_heun"
@@ -18,13 +19,13 @@ training:
   n_epochs: 100
   batch_size: 64
   max_batches_per_epoch: 64
-  seq_len: 10
+  seq_len: 25
   stride: 5
   val_split: 0.2
 
 optimizer:
   peak_lr: 1.0e-3
-  warmup_steps: 500
+  warmup_steps: 200
   total_steps: 5000
   end_lr: 1.0e-6
   gradient_clip: 0.5
@@ -33,9 +34,17 @@ optimizer:
 loss_weights:
   reconstruction: 1.0
   kl: 0.0001
+  one_step: 2.0
   trajectory: 10.0
   mass_balance: 0.001
+  species_mass_balance: 0.001
   energy_balance: 0.001
+
+state_loss_weights:
+  Ca: 1.0
+  Cb: 2.0
+  T: 1.0
+  Tc: 1.0
 
 kl_annealing:
   start_weight: 0.0

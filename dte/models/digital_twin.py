@@ -76,6 +76,7 @@ class DigitalTwin(eqx.Module):
         latent_sde = LatentSDE(
             latent_dim=model_config["latent_dim"],
             control_dim=model_config.get("control_dim", 2),
+            disturbance_dim=model_config.get("disturbance_dim", 0),
             param_dim=model_config.get("param_dim", 6),
             hidden_dim=model_config["hidden_dim"],
             drift_layers=model_config.get("drift_layers", 3),
@@ -112,6 +113,8 @@ class DigitalTwin(eqx.Module):
             Tuple of (z, z_mean, z_logvar)
         """
         z_mean, z_logvar = self.encoder.encode(state, params, control)
+        z_mean = 10.0 * jnp.tanh(z_mean / 10.0)
+        z_logvar = 10.0 * jnp.tanh(z_logvar / 10.0)
         
         if key is not None:
             z = self.encoder.sample(z_mean, z_logvar, key)
@@ -156,7 +159,7 @@ class DigitalTwin(eqx.Module):
         Args:
             initial_state: Initial physical state
             controls: Control trajectory
-            disturbances: Disturbance trajectory (not used in latent dynamics but kept for API consistency)
+            disturbances: Disturbance trajectory
             params: System parameters
             ts: Time points
             key: PRNG key
@@ -176,7 +179,14 @@ class DigitalTwin(eqx.Module):
         )
         
         # Roll out latent SDE
-        z_trajectory = self.latent_sde(ts, z0, controls, params, key_sde)
+        z_trajectory = self.latent_sde(
+            ts,
+            z0,
+            controls,
+            params,
+            key_sde,
+            disturbances=disturbances,
+        )
         
         # Decode all timesteps
         decode_fn = jax.vmap(

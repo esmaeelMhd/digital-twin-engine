@@ -74,7 +74,7 @@ class Trainer:
         # Setup optimizer
         opt_config = config["optimizer"]
         schedule = optax.warmup_cosine_decay_schedule(
-            init_value=1e-5,
+            init_value=1e-4,
             peak_value=opt_config["peak_lr"],
             warmup_steps=opt_config["warmup_steps"],
             decay_steps=opt_config["total_steps"],
@@ -83,7 +83,7 @@ class Trainer:
         
         self.optimizer = optax.chain(
             optax.clip_by_global_norm(opt_config["gradient_clip"]),
-            optax.adam(schedule, b1=0.95),
+            optax.adam(schedule, b1=0.95, b2=0.99),
         )
         
         self.opt_state = self.optimizer.init(eqx.filter(model, eqx.is_array))
@@ -142,7 +142,11 @@ class Trainer:
             
             # Roll out latent SDE
             z_traj = model.latent_sde.mean_trajectory(
-                ts[idx], z0, controls[idx], params_batch[idx]
+                ts[idx],
+                z_mean,
+                controls[idx],
+                params_batch[idx],
+                disturbances=disturbances[idx],
             )
             
             # Decode all timesteps
@@ -151,12 +155,54 @@ class Trainer:
                 in_axes=(0, 0)
             )
             pred_states = decode_fn(z_traj, controls[idx])
+
+            def teacher_forced_one_step(
+                state_t,
+                control_t,
+                control_tp1,
+                disturbance_t,
+                disturbance_tp1,
+                t_t,
+                t_tp1,
+            ):
+                _, z_mean_t, _ = model.encode(
+                    state_t,
+                    params_batch[idx],
+                    control_t,
+                    None,
+                )
+                step_dt = t_tp1 - t_t
+                drift_start = model.latent_sde.drift(
+                    z_mean_t,
+                    control_t,
+                    disturbance_t,
+                    params_batch[idx],
+                )
+                z_euler = z_mean_t + step_dt * drift_start
+                drift_end = model.latent_sde.drift(
+                    z_euler,
+                    control_tp1,
+                    disturbance_tp1,
+                    params_batch[idx],
+                )
+                z_next = z_mean_t + 0.5 * step_dt * (drift_start + drift_end)
+                return model.decode(z_next, params_batch[idx], control_tp1)
+
+            pred_next_states = jax.vmap(teacher_forced_one_step)(
+                states[idx, :-1],
+                controls[idx, :-1],
+                controls[idx, 1:],
+                disturbances[idx, :-1],
+                disturbances[idx, 1:],
+                ts[idx, :-1],
+                ts[idx, 1:],
+            )
             
-            return pred_states, z_mean, z_logvar
+            return pred_states, z_mean, z_logvar, pred_next_states
         
         # Process batch
         results = jax.vmap(process_one, in_axes=(0, 0))(jnp.arange(batch_size), keys)
-        pred_states_batch, z_means, z_logvars = results
+        pred_states_batch, z_means, z_logvars, pred_next_states_batch = results
         
         # Normalize states for losses
         norm_stats = self.train_dataset.get_normalization_stats()
@@ -165,6 +211,10 @@ class Trainer:
         
         # Compute losses in normalized space
         loss_recon = self.loss_computer.reconstruction_loss(pred_states_norm, true_states_norm)
+        loss_one_step = self.loss_computer.one_step_loss(
+            (pred_next_states_batch - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
+            (states[:, 1:] - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
+        )
         loss_traj = self.loss_computer.trajectory_loss(pred_states_norm, true_states_norm)
         loss_kl = self.loss_computer.kl_divergence_loss(z_means, z_logvars)
         
@@ -178,6 +228,9 @@ class Trainer:
         loss_mass = self.loss_computer.physics_mass_loss(
             pred_states_phys, controls_phys, disturbances_phys, dt
         )
+        loss_species_mass = self.loss_computer.physics_species_mass_loss(
+            pred_states_phys, controls_phys, disturbances_phys, dt
+        )
         loss_energy = self.loss_computer.physics_energy_loss(
             pred_states_phys, controls_phys, disturbances_phys, dt
         )
@@ -186,8 +239,10 @@ class Trainer:
         total_loss = (
             weights["reconstruction"] * loss_recon
             + weights["kl"] * loss_kl
+            + weights["one_step"] * loss_one_step
             + weights["trajectory"] * loss_traj
             + weights["mass_balance"] * loss_mass
+            + weights["species_mass_balance"] * loss_species_mass
             + weights["energy_balance"] * loss_energy
         )
         
@@ -196,8 +251,10 @@ class Trainer:
             "total": total_loss,
             "reconstruction": loss_recon,
             "kl": loss_kl,
+            "one_step": loss_one_step,
             "trajectory": loss_traj,
             "mass_balance": loss_mass,
+            "species_mass_balance": loss_species_mass,
             "energy_balance": loss_energy,
         }
         
@@ -235,6 +292,17 @@ class Trainer:
         new_model = eqx.apply_updates(model, updates)
         
         return new_model, new_opt_state, loss_dict
+
+    @eqx.filter_jit
+    def eval_step(
+        self,
+        model: DigitalTwin,
+        batch: Dict[str, Array],
+        key: PRNGKeyArray,
+    ):
+        """Single validation step without gradient computation."""
+        _, loss_dict = self.compute_loss(model, batch, key)
+        return loss_dict
     
     def train_epoch(
         self,
@@ -265,8 +333,10 @@ class Trainer:
             "total": [],
             "reconstruction": [],
             "kl": [],
+            "one_step": [],
             "trajectory": [],
             "mass_balance": [],
+            "species_mass_balance": [],
             "energy_balance": [],
         }
         
@@ -347,24 +417,29 @@ class Trainer:
         max_val_batches = self.config.get("checkpointing", {}).get("max_val_batches")
         if max_val_batches is not None:
             n_batches = max(1, min(n_batches, int(max_val_batches)))
+        desc = "Validation" if epoch is None else f"Validation (epoch {epoch})"
+        print(f"Starting {desc.lower()} across {n_batches} batch(es)...")
         
         val_losses = {
             "total": [],
             "reconstruction": [],
             "kl": [],
+            "one_step": [],
             "trajectory": [],
             "mass_balance": [],
+            "species_mass_balance": [],
             "energy_balance": [],
         }
-        
-        for i in range(n_batches):
+
+        pbar = tqdm(range(n_batches), desc=desc)
+        for i in pbar:
             # Sample batch
             key, subkey = jax.random.split(key)
             batch = self.val_dataset.sample_batch(subkey, batch_size)
             
             # Compute loss (no gradients)
             key, subkey = jax.random.split(key)
-            _, loss_dict = self.compute_loss(self.model, batch, subkey)
+            loss_dict = self.eval_step(self.model, batch, subkey)
             
             # Record losses (convert to Python floats)
             loss_dict_float = {k: float(v) for k, v in loss_dict.items()}
@@ -380,6 +455,7 @@ class Trainer:
                 return None, failure_reason
             for k, v in loss_dict_float.items():
                 val_losses[k].append(v)
+            pbar.set_postfix({"loss": f"{loss_dict_float['total']:.4f}"})
         
         # Compute mean losses
         mean_losses = {k: float(jnp.mean(jnp.array(v))) for k, v in val_losses.items()}
@@ -454,26 +530,39 @@ class Trainer:
                 )
 
             if should_validate:
+                print("Running validation...")
+                validation_start = time.perf_counter()
                 key, subkey = jax.random.split(key)
                 val_losses, val_failure = self.validate(subkey, epoch=epoch + 1)
+                validation_seconds = time.perf_counter() - validation_start
                 if val_failure is not None:
                     failure_reason = val_failure
                     non_finite_detected = True
                     print(f"Validation stopped early: {failure_reason}")
                     break
+                print(f"Validation finished in {validation_seconds:.2f}s")
                 print(f"Val losses: {val_losses}")
                 
                 # Save best model
                 if val_losses["total"] < self.best_val_loss:
                     self.best_val_loss = val_losses["total"]
                     best_path = os.path.join(output_dir, "best_model.eqx")
+                    best_save_start = time.perf_counter()
                     self.model.save(best_path)
-                    print(f"✓ Saved best model (val_loss={self.best_val_loss:.4f})")
+                    best_save_seconds = time.perf_counter() - best_save_start
+                    print(
+                        f"✓ Saved best model "
+                        f"(val_loss={self.best_val_loss:.4f}, {best_save_seconds:.2f}s)"
+                    )
             
             # Save checkpoint
             if (epoch + 1) % self.config["checkpointing"]["save_every"] == 0:
                 ckpt_path = os.path.join(output_dir, f"checkpoint_epoch_{epoch+1}.eqx")
+                print(f"Saving checkpoint to {ckpt_path}...")
+                checkpoint_start = time.perf_counter()
                 self.model.save(ckpt_path)
+                checkpoint_seconds = time.perf_counter() - checkpoint_start
+                print(f"Checkpoint saved in {checkpoint_seconds:.2f}s")
             
             # Record history
             self.history["train_loss"].append(train_losses["total"])
