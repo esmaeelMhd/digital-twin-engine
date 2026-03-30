@@ -1368,6 +1368,11 @@ def build_dashboard(state: dict) -> Layout:
     history: list[dict] = state.get("history", [])
     kept = [r for r in history if r["status"] == "keep"]
     llm_name = state.get("llm_name", "LLM")
+    config_path = state.get("config_path", "")
+    workspace_dir = state.get("workspace_dir", "")
+    train_epochs = state.get("train_epochs")
+    time_budget_minutes = state.get("time_budget_minutes")
+    val_every = state.get("val_every")
     eh, rem = divmod(int(elapsed), 3600)
     em, es = divmod(rem, 60)
 
@@ -1503,6 +1508,33 @@ def build_dashboard(state: dict) -> Layout:
     if not log_lines:
         log_text.append(" Waiting...\n", style="dim")
     layout["activity"].update(Panel(log_text, title="[dim]Activity[/]", border_style="dim"))
+
+    # ---- Footer ----
+    footer = Text()
+    footer.append(" Config: ", style="bold")
+    footer.append(f"{config_path or 'N/A'}", style="cyan")
+    footer.append("   Workspace: ", style="bold")
+    footer.append(f"{workspace_dir or 'N/A'}", style="cyan")
+    footer.append("   LLM: ", style="bold")
+    footer.append(llm_name, style="magenta")
+    footer.append("\n")
+    footer.append(" Train: ", style="bold")
+    footer.append(
+        f"{train_epochs if train_epochs is not None else 'N/A'} epochs",
+        style="green",
+    )
+    footer.append("   Budget: ", style="bold")
+    if time_budget_minutes is not None:
+        footer.append(f"{float(time_budget_minutes):.0f} min", style="green")
+    else:
+        footer.append("N/A", style="dim")
+    footer.append("   Val every: ", style="bold")
+    footer.append(f"{val_every if val_every is not None else 'N/A'}", style="green")
+    footer.append("   Results: ", style="bold")
+    footer.append(str(len(history)), style="yellow")
+    footer.append("   Kept: ", style="bold")
+    footer.append(str(len(kept)), style="green")
+    layout["footer"].update(Panel(footer, title="[dim]Run Context[/]", border_style="dim"))
 
     return layout
 
@@ -1763,6 +1795,8 @@ def main() -> None:
     except Exception:
         ar_cfg = {}
         modifiable_files = MODIFIABLE_FILES
+    research_cfg = ar_cfg.get("research", {})
+    train_cfg = ar_cfg.get("train", {})
     agent_context = load_agent_context(ar_cfg)
     recent_run_context = build_recent_run_context()
 
@@ -1845,6 +1879,11 @@ def main() -> None:
         "total_elapsed": 0.0,
         "phase_start": time.time(),
         "phase_elapsed": 0.0,
+        "config_path": str(active_config_path.relative_to(PROJECT_ROOT)),
+        "workspace_dir": str(get_workspace_dir().relative_to(PROJECT_ROOT)),
+        "train_epochs": train_cfg.get("n_epochs"),
+        "time_budget_minutes": research_cfg.get("time_budget_minutes"),
+        "val_every": train_cfg.get("val_every"),
     }
 
     t_start = time.time()
