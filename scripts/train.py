@@ -109,6 +109,8 @@ def main():
     config.setdefault("model", {}).setdefault("disturbance_dim", 2)
     config.setdefault("training", {})["peak_lr"] = 2.0e-3
     config.setdefault("training", {})["gradient_clip"] = 0.5
+    config.setdefault("loss_weights", {})
+    config["loss_weights"]["kl"] = 0.0001
     
     with open(args.cstr_config, "r") as f:
         cstr_config = yaml.safe_load(f)
