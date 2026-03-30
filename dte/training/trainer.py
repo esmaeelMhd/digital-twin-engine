@@ -142,7 +142,11 @@ class Trainer:
             
             # Roll out latent SDE
             z_traj = model.latent_sde.mean_trajectory(
-                ts[idx], z_mean, controls[idx], params_batch[idx]
+                ts[idx],
+                z_mean,
+                controls[idx],
+                params_batch[idx],
+                disturbances=disturbances[idx],
             )
             
             # Decode all timesteps

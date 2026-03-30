@@ -10,6 +10,8 @@ from dte.simulators.cstr import CSTRParams
 
 class LossComputer:
     """Computes all loss terms for the digital twin model."""
+
+    STATE_NAMES = ("Ca", "Cb", "T", "Tc")
     
     def __init__(self, config: dict, normalization_stats: dict, params: CSTRParams):
         """Initialize loss computer.
@@ -29,6 +31,30 @@ class LossComputer:
         self.w_traj = config["loss_weights"]["trajectory"]
         self.w_mass = config["loss_weights"]["mass_balance"]
         self.w_energy = config["loss_weights"]["energy_balance"]
+
+        raw_state_weights = config.get("state_loss_weights", [1.0] * len(self.STATE_NAMES))
+        if isinstance(raw_state_weights, dict):
+            raw_state_weights = [
+                float(raw_state_weights.get(state_name, 1.0))
+                for state_name in self.STATE_NAMES
+            ]
+        self.state_loss_weights = jnp.asarray(raw_state_weights, dtype=jnp.float32)
+        if self.state_loss_weights.shape != (len(self.STATE_NAMES),):
+            raise ValueError(
+                "state_loss_weights must provide exactly four values for "
+                f"{', '.join(self.STATE_NAMES)}."
+            )
+        # Keep the overall loss scale comparable to the unweighted case.
+        self.state_loss_weights = self.state_loss_weights / jnp.mean(self.state_loss_weights)
+
+    @staticmethod
+    def _huber_loss(diff: Array) -> Array:
+        """Compute elementwise Huber loss with delta=0.25."""
+        return jnp.where(
+            jnp.abs(diff) < 0.25,
+            0.5 * diff ** 2,
+            0.25 * jnp.abs(diff) - 0.03125,
+        )
     
     def reconstruction_loss(
         self,
@@ -45,8 +71,9 @@ class LossComputer:
             Scalar loss
         """
         diff = predicted_states - true_states
-        mse = jnp.mean(jnp.where(jnp.abs(diff) < 0.25, 0.5 * diff ** 2, 0.25 * jnp.abs(diff) - 0.03125))
-        return mse
+        state_weights = self.state_loss_weights[None, None, :]
+        weighted_loss = jnp.mean(self._huber_loss(diff) * state_weights)
+        return weighted_loss
     
     def kl_divergence_loss(
         self,
@@ -158,8 +185,9 @@ class LossComputer:
         
         # Weighted Huber loss
         diff = predicted_trajectory - true_trajectory
-        squared_error = jnp.where(jnp.abs(diff) < 0.25, 0.5 * diff ** 2, 0.25 * jnp.abs(diff) - 0.03125)
-        weighted_mse = jnp.mean(squared_error * weights[None, :, None])
+        squared_error = self._huber_loss(diff)
+        state_weights = self.state_loss_weights[None, None, :]
+        weighted_mse = jnp.mean(squared_error * weights[None, :, None] * state_weights)
         
         return weighted_mse
     

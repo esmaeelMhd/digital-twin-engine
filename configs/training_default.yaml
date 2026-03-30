@@ -9,6 +9,7 @@ model:
   state_dim: 4
   param_dim: 6
   control_dim: 2
+  disturbance_dim: 2
 
 sde:
   solver: "euler_heun"
@@ -36,6 +37,12 @@ loss_weights:
   trajectory: 10.0
   mass_balance: 0.001
   energy_balance: 0.001
+
+state_loss_weights:
+  Ca: 1.0
+  Cb: 2.0
+  T: 1.0
+  Tc: 1.0
 
 kl_annealing:
   start_weight: 0.0
