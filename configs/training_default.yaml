@@ -24,7 +24,7 @@ training:
 
 optimizer:
   peak_lr: 1.0e-3
-  warmup_steps: 500
+  warmup_steps: 200
   total_steps: 5000
   end_lr: 1.0e-6
   gradient_clip: 0.5
