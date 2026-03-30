@@ -415,6 +415,7 @@ class LatentSDE(eqx.Module):
         # Solve
         dt0 = (ts[1] - ts[0]) / 2
         saveat = diffrax.SaveAt(ts=ts)
+        stepsize_controller = diffrax.PIDController(rtol=1e-3, atol=1e-5)
         solution = diffrax.diffeqsolve(
             term,
             solver,
@@ -423,7 +424,8 @@ class LatentSDE(eqx.Module):
             dt0=dt0,
             y0=z0,
             saveat=saveat,
-            max_steps=len(ts) * 10,
+            stepsize_controller=stepsize_controller,
+            max_steps=4096,
         )
         
         return solution.ys
