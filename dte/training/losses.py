@@ -45,7 +45,7 @@ class LossComputer:
             Scalar loss
         """
         diff = predicted_states - true_states
-        mse = jnp.mean(jnp.where(jnp.abs(diff) < 1.0, 0.5 * diff ** 2, jnp.abs(diff) - 0.5))
+        mse = jnp.mean(jnp.where(jnp.abs(diff) < 0.25, 0.5 * diff ** 2, 0.25 * jnp.abs(diff) - 0.03125))
         return mse
     
     def kl_divergence_loss(
