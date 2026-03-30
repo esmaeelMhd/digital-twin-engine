@@ -872,3 +872,7 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-03-30 09:53:27] RESULT: crash | val_loss=n/a | scripts/train.py | APPLY FAIL: Reduce warmup_steps from the config default to 100 directly in the learning rate schedule, allowing the model to reach peak learning rate even earlier and spend more of the bounded run time making maximal progress.
 [2026-03-30 09:53:27] Exp 149/150: querying Gemini 3.1 Pro...
 [2026-03-30 09:56:27] LLM request timed out after 180s. Skipping.
+[2026-03-30 22:30:57] Created branch: autoresearch/mar30
+[2026-03-30 22:30:57] Ignoring stale agent_state.json from an earlier run
+[2026-03-30 22:30:57] Agent started: llm=Gemini 3.1 Pro max_runs=100 branch=autoresearch/mar30 prior=0 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-03-30 22:30:57] Running baseline experiment...

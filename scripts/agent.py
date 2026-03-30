@@ -6,6 +6,7 @@ keeps improvements, reverts failures, and shows a Rich TUI dashboard.
 
 Usage:
     python scripts/agent.py                    # Gemini 3.1 Pro (default)
+    python scripts/agent.py --config configs/autoresearch_stage1.yaml
     python scripts/agent.py --claude           # Claude Sonnet 4.6
     python scripts/agent.py --opus             # Claude Opus 4.6 with 32k thinking
     python scripts/agent.py --openai o3        # OpenAI o3
@@ -57,7 +58,8 @@ from rich.text import Text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AUTORESEARCH_SCRIPT = PROJECT_ROOT / "scripts" / "autoresearch.py"
-AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
+DEFAULT_AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
+ACTIVE_AUTORESEARCH_CONFIG = DEFAULT_AUTORESEARCH_CONFIG
 DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "outputs" / "autoresearch"
 DEFAULT_AGENT_CONTEXT_FILE = PROJECT_ROOT / "auto_research.md"
 LOG_FILE = PROJECT_ROOT / "agent.log"
@@ -199,11 +201,23 @@ def other_agent_process_running() -> bool:
     return False
 
 
+def set_autoresearch_config(path_value: str | Path) -> Path:
+    """Set the active autoresearch config path for this agent session."""
+
+    global ACTIVE_AUTORESEARCH_CONFIG
+
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    ACTIVE_AUTORESEARCH_CONFIG = path
+    return ACTIVE_AUTORESEARCH_CONFIG
+
+
 def get_workspace_dir() -> Path:
     """Resolve the active autoresearch workspace from config."""
 
     try:
-        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
     except Exception:
         return DEFAULT_WORKSPACE_DIR
@@ -1164,7 +1178,7 @@ def get_train_timeout_seconds() -> int:
     """Align the agent-side timeout with the autoresearch config."""
 
     try:
-        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
         research = config.get("research", {})
         minutes = float(research.get("time_budget_minutes", 30))
@@ -1182,7 +1196,7 @@ def run_experiment(
     cmd = [
         sys.executable,
         str(AUTORESEARCH_SCRIPT),
-        "--config", str(AUTORESEARCH_CONFIG),
+        "--config", str(ACTIVE_AUTORESEARCH_CONFIG),
         "--description", description,
     ]
 
@@ -1664,6 +1678,12 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Autonomous research agent for Digital Twin Engine")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(DEFAULT_AUTORESEARCH_CONFIG.relative_to(PROJECT_ROOT)),
+        help="Path to autoresearch config",
+    )
     parser.add_argument("--max-runs",    type=int, default=100)
     parser.add_argument("--resume",      action="store_true", help="Resume existing branch")
     parser.add_argument("--tag",         type=str,  default=None, help="Branch tag (default: date)")
@@ -1680,6 +1700,7 @@ def main() -> None:
     parser.add_argument("--grok",    action="store_true", help="Use xAI Grok 3")
     parser.add_argument("--local",   action="store_true", help="Use local LM Studio")
     args = parser.parse_args()
+    active_config_path = set_autoresearch_config(args.config)
 
     # Select LLM — default is Gemini 2.5 Pro
     if args.local:
@@ -1736,7 +1757,7 @@ def main() -> None:
 
     # Load modifiable files from config
     try:
-        with AUTORESEARCH_CONFIG.open("r") as f:
+        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as f:
             ar_cfg = yaml.safe_load(f) or {}
         modifiable_files = ar_cfg.get("agent", {}).get("modifiable_files", MODIFIABLE_FILES)
     except Exception:
@@ -1774,7 +1795,10 @@ def main() -> None:
     valid_losses = [r["val_loss"] for r in history if r["val_loss"] < 999]
     best_loss = min(valid_losses) if valid_losses else 999.0
 
-    log_to_file(f"Agent started: llm={llm_name} max_runs={args.max_runs} branch={branch} prior={prior_count}")
+    log_to_file(
+        f"Agent started: llm={llm_name} max_runs={args.max_runs} "
+        f"branch={branch} prior={prior_count} config={active_config_path}"
+    )
 
     if args.no_dashboard:
         if not history:

@@ -182,6 +182,34 @@ For production experiments, point `--data_dir` at `data/cstr/`.
 **Agent workflow:** See `program.md` for the autonomous keep/discard loop instructions.
 `scripts/agent.py` also reads `auto_research.md` for repo-specific prompt context and practical search guidance.
 
+**Two-stage autoresearch:**
+
+```bash
+# Stage 1: cheap exploration
+python scripts/agent.py \
+  --config configs/autoresearch_stage1.yaml \
+  --max-runs 20
+```
+
+This uses a 10-minute wall-clock budget and 15 epochs per experiment.
+
+```bash
+# Stage 2: rerun promising ideas more carefully
+python scripts/agent.py \
+  --config configs/autoresearch_stage2.yaml \
+  --max-runs 10
+```
+
+This uses a 25-minute wall-clock budget and 40 epochs per experiment.
+
+You can also run the bounded harness directly for manual reruns:
+
+```bash
+python scripts/autoresearch.py \
+  --config configs/autoresearch_stage2.yaml \
+  --description "manual stage2 rerun"
+```
+
 **Web monitor:** If you want a browser-based live status page for the agent, run:
 
 ```bash
