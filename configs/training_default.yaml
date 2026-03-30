@@ -1,5 +1,5 @@
 model:
-  latent_dim: 16
+  latent_dim: 32
   hidden_dim: 128
   n_layers: 3
   drift_layers: 3
