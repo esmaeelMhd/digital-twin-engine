@@ -235,6 +235,17 @@ class Trainer:
         new_model = eqx.apply_updates(model, updates)
         
         return new_model, new_opt_state, loss_dict
+
+    @eqx.filter_jit
+    def eval_step(
+        self,
+        model: DigitalTwin,
+        batch: Dict[str, Array],
+        key: PRNGKeyArray,
+    ):
+        """Single validation step without gradient computation."""
+        _, loss_dict = self.compute_loss(model, batch, key)
+        return loss_dict
     
     def train_epoch(
         self,
@@ -347,6 +358,8 @@ class Trainer:
         max_val_batches = self.config.get("checkpointing", {}).get("max_val_batches")
         if max_val_batches is not None:
             n_batches = max(1, min(n_batches, int(max_val_batches)))
+        desc = "Validation" if epoch is None else f"Validation (epoch {epoch})"
+        print(f"Starting {desc.lower()} across {n_batches} batch(es)...")
         
         val_losses = {
             "total": [],
@@ -356,15 +369,16 @@ class Trainer:
             "mass_balance": [],
             "energy_balance": [],
         }
-        
-        for i in range(n_batches):
+
+        pbar = tqdm(range(n_batches), desc=desc)
+        for i in pbar:
             # Sample batch
             key, subkey = jax.random.split(key)
             batch = self.val_dataset.sample_batch(subkey, batch_size)
             
             # Compute loss (no gradients)
             key, subkey = jax.random.split(key)
-            _, loss_dict = self.compute_loss(self.model, batch, subkey)
+            loss_dict = self.eval_step(self.model, batch, subkey)
             
             # Record losses (convert to Python floats)
             loss_dict_float = {k: float(v) for k, v in loss_dict.items()}
@@ -380,6 +394,7 @@ class Trainer:
                 return None, failure_reason
             for k, v in loss_dict_float.items():
                 val_losses[k].append(v)
+            pbar.set_postfix({"loss": f"{loss_dict_float['total']:.4f}"})
         
         # Compute mean losses
         mean_losses = {k: float(jnp.mean(jnp.array(v))) for k, v in val_losses.items()}
@@ -454,26 +469,39 @@ class Trainer:
                 )
 
             if should_validate:
+                print("Running validation...")
+                validation_start = time.perf_counter()
                 key, subkey = jax.random.split(key)
                 val_losses, val_failure = self.validate(subkey, epoch=epoch + 1)
+                validation_seconds = time.perf_counter() - validation_start
                 if val_failure is not None:
                     failure_reason = val_failure
                     non_finite_detected = True
                     print(f"Validation stopped early: {failure_reason}")
                     break
+                print(f"Validation finished in {validation_seconds:.2f}s")
                 print(f"Val losses: {val_losses}")
                 
                 # Save best model
                 if val_losses["total"] < self.best_val_loss:
                     self.best_val_loss = val_losses["total"]
                     best_path = os.path.join(output_dir, "best_model.eqx")
+                    best_save_start = time.perf_counter()
                     self.model.save(best_path)
-                    print(f"✓ Saved best model (val_loss={self.best_val_loss:.4f})")
+                    best_save_seconds = time.perf_counter() - best_save_start
+                    print(
+                        f"✓ Saved best model "
+                        f"(val_loss={self.best_val_loss:.4f}, {best_save_seconds:.2f}s)"
+                    )
             
             # Save checkpoint
             if (epoch + 1) % self.config["checkpointing"]["save_every"] == 0:
                 ckpt_path = os.path.join(output_dir, f"checkpoint_epoch_{epoch+1}.eqx")
+                print(f"Saving checkpoint to {ckpt_path}...")
+                checkpoint_start = time.perf_counter()
                 self.model.save(ckpt_path)
+                checkpoint_seconds = time.perf_counter() - checkpoint_start
+                print(f"Checkpoint saved in {checkpoint_seconds:.2f}s")
             
             # Record history
             self.history["train_loss"].append(train_losses["total"])
