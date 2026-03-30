@@ -155,12 +155,54 @@ class Trainer:
                 in_axes=(0, 0)
             )
             pred_states = decode_fn(z_traj, controls[idx])
+
+            def teacher_forced_one_step(
+                state_t,
+                control_t,
+                control_tp1,
+                disturbance_t,
+                disturbance_tp1,
+                t_t,
+                t_tp1,
+            ):
+                _, z_mean_t, _ = model.encode(
+                    state_t,
+                    params_batch[idx],
+                    control_t,
+                    None,
+                )
+                step_dt = t_tp1 - t_t
+                drift_start = model.latent_sde.drift(
+                    z_mean_t,
+                    control_t,
+                    disturbance_t,
+                    params_batch[idx],
+                )
+                z_euler = z_mean_t + step_dt * drift_start
+                drift_end = model.latent_sde.drift(
+                    z_euler,
+                    control_tp1,
+                    disturbance_tp1,
+                    params_batch[idx],
+                )
+                z_next = z_mean_t + 0.5 * step_dt * (drift_start + drift_end)
+                return model.decode(z_next, params_batch[idx], control_tp1)
+
+            pred_next_states = jax.vmap(teacher_forced_one_step)(
+                states[idx, :-1],
+                controls[idx, :-1],
+                controls[idx, 1:],
+                disturbances[idx, :-1],
+                disturbances[idx, 1:],
+                ts[idx, :-1],
+                ts[idx, 1:],
+            )
             
-            return pred_states, z_mean, z_logvar
+            return pred_states, z_mean, z_logvar, pred_next_states
         
         # Process batch
         results = jax.vmap(process_one, in_axes=(0, 0))(jnp.arange(batch_size), keys)
-        pred_states_batch, z_means, z_logvars = results
+        pred_states_batch, z_means, z_logvars, pred_next_states_batch = results
         
         # Normalize states for losses
         norm_stats = self.train_dataset.get_normalization_stats()
@@ -169,6 +211,10 @@ class Trainer:
         
         # Compute losses in normalized space
         loss_recon = self.loss_computer.reconstruction_loss(pred_states_norm, true_states_norm)
+        loss_one_step = self.loss_computer.one_step_loss(
+            (pred_next_states_batch - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
+            (states[:, 1:] - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
+        )
         loss_traj = self.loss_computer.trajectory_loss(pred_states_norm, true_states_norm)
         loss_kl = self.loss_computer.kl_divergence_loss(z_means, z_logvars)
         
@@ -182,6 +228,9 @@ class Trainer:
         loss_mass = self.loss_computer.physics_mass_loss(
             pred_states_phys, controls_phys, disturbances_phys, dt
         )
+        loss_species_mass = self.loss_computer.physics_species_mass_loss(
+            pred_states_phys, controls_phys, disturbances_phys, dt
+        )
         loss_energy = self.loss_computer.physics_energy_loss(
             pred_states_phys, controls_phys, disturbances_phys, dt
         )
@@ -190,8 +239,10 @@ class Trainer:
         total_loss = (
             weights["reconstruction"] * loss_recon
             + weights["kl"] * loss_kl
+            + weights["one_step"] * loss_one_step
             + weights["trajectory"] * loss_traj
             + weights["mass_balance"] * loss_mass
+            + weights["species_mass_balance"] * loss_species_mass
             + weights["energy_balance"] * loss_energy
         )
         
@@ -200,8 +251,10 @@ class Trainer:
             "total": total_loss,
             "reconstruction": loss_recon,
             "kl": loss_kl,
+            "one_step": loss_one_step,
             "trajectory": loss_traj,
             "mass_balance": loss_mass,
+            "species_mass_balance": loss_species_mass,
             "energy_balance": loss_energy,
         }
         
@@ -280,8 +333,10 @@ class Trainer:
             "total": [],
             "reconstruction": [],
             "kl": [],
+            "one_step": [],
             "trajectory": [],
             "mass_balance": [],
+            "species_mass_balance": [],
             "energy_balance": [],
         }
         
@@ -369,8 +424,10 @@ class Trainer:
             "total": [],
             "reconstruction": [],
             "kl": [],
+            "one_step": [],
             "trajectory": [],
             "mass_balance": [],
+            "species_mass_balance": [],
             "energy_balance": [],
         }
 

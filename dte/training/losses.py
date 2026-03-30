@@ -4,7 +4,11 @@ from typing import Dict, Tuple
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from dte.physics.conservation import mass_balance_residual, energy_balance_residual
+from dte.physics.conservation import (
+    energy_balance_residual,
+    mass_balance_residual,
+    species_mass_balance_residuals,
+)
 from dte.simulators.cstr import CSTRParams
 
 
@@ -30,7 +34,9 @@ class LossComputer:
         self.w_kl = 0.0001
         self.w_traj = config["loss_weights"]["trajectory"]
         self.w_mass = config["loss_weights"]["mass_balance"]
+        self.w_species_mass = config["loss_weights"].get("species_mass_balance", 0.0)
         self.w_energy = config["loss_weights"]["energy_balance"]
+        self.w_one_step = config["loss_weights"].get("one_step", 0.0)
 
         raw_state_weights = config.get("state_loss_weights", [1.0] * len(self.STATE_NAMES))
         if isinstance(raw_state_weights, dict):
@@ -55,6 +61,11 @@ class LossComputer:
             0.5 * diff ** 2,
             0.25 * jnp.abs(diff) - 0.03125,
         )
+
+    def _weighted_state_loss(self, diff: Array) -> Float[Array, ""]:
+        """Compute a state-weighted Huber loss in normalized state space."""
+        state_weights = self.state_loss_weights.reshape((1,) * (diff.ndim - 1) + (-1,))
+        return jnp.mean(self._huber_loss(diff) * state_weights)
     
     def reconstruction_loss(
         self,
@@ -70,10 +81,7 @@ class LossComputer:
         Returns:
             Scalar loss
         """
-        diff = predicted_states - true_states
-        state_weights = self.state_loss_weights[None, None, :]
-        weighted_loss = jnp.mean(self._huber_loss(diff) * state_weights)
-        return weighted_loss
+        return self._weighted_state_loss(predicted_states - true_states)
     
     def kl_divergence_loss(
         self,
@@ -160,6 +168,29 @@ class LossComputer:
             residuals.append(jnp.mean(res))
         
         return jnp.mean(jnp.array(residuals))
+
+    def physics_species_mass_loss(
+        self,
+        predicted_states: Float[Array, "batch seq_len state_dim"],
+        controls: Float[Array, "batch seq_len control_dim"],
+        disturbances: Float[Array, "batch seq_len dist_dim"],
+        dt: float,
+    ) -> Float[Array, ""]:
+        """Mean species-wise mass-balance residual for Ca and Cb."""
+        batch_size = predicted_states.shape[0]
+        residuals = []
+
+        for i in range(batch_size):
+            res = species_mass_balance_residuals(
+                predicted_states[i],
+                controls[i],
+                disturbances[i],
+                self.params,
+                dt,
+            )
+            residuals.append(jnp.mean(res))
+
+        return jnp.mean(jnp.array(residuals))
     
     def trajectory_loss(
         self,
@@ -183,13 +214,18 @@ class LossComputer:
         weights = jnp.ones(seq_len)
         weights = weights / jnp.mean(weights)  # Normalize to mean 1
         
-        # Weighted Huber loss
         diff = predicted_trajectory - true_trajectory
-        squared_error = self._huber_loss(diff)
         state_weights = self.state_loss_weights[None, None, :]
-        weighted_mse = jnp.mean(squared_error * weights[None, :, None] * state_weights)
-        
-        return weighted_mse
+        weighted_huber = self._huber_loss(diff) * weights[None, :, None] * state_weights
+        return jnp.mean(weighted_huber)
+
+    def one_step_loss(
+        self,
+        predicted_next_states: Float[Array, "batch seq_len_minus_one state_dim"],
+        true_next_states: Float[Array, "batch seq_len_minus_one state_dim"],
+    ) -> Float[Array, ""]:
+        """Teacher-forced one-step prediction loss in normalized state space."""
+        return self._weighted_state_loss(predicted_next_states - true_next_states)
     
     def denormalize_states(
         self, states: Float[Array, "... state_dim"]
@@ -255,7 +291,9 @@ class LossComputer:
         return {
             "reconstruction": self.w_recon,
             "kl": kl_weight,
+            "one_step": self.w_one_step,
             "trajectory": self.w_traj,
             "mass_balance": self.w_mass,
+            "species_mass_balance": self.w_species_mass,
             "energy_balance": self.w_energy,
         }
