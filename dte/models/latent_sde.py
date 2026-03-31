@@ -97,9 +97,10 @@ class LatentDrift(eqx.Module):
         c_norm = _normalize_params(c)
         x = jnp.concatenate([z, u_norm, d_norm, c_norm])
         
-        for layer in self.layers:
-            x = layer(x)
-            x = jax.nn.silu(x)
+        for i, layer in enumerate(self.layers):
+            h = layer(x)
+            h = jax.nn.silu(h)
+            x = x + h if i > 0 else h
         
         return self.output_layer(x)
 
