@@ -76,7 +76,7 @@ class DigitalTwin(eqx.Module):
         latent_sde = LatentSDE(
             latent_dim=model_config["latent_dim"],
             control_dim=model_config.get("control_dim", 2),
-            disturbance_dim=model_config.get("disturbance_dim", 0),
+            disturbance_dim=model_config.get("disturbance_dim", 2),
             param_dim=model_config.get("param_dim", 6),
             hidden_dim=model_config["hidden_dim"],
             drift_layers=model_config.get("drift_layers", 3),
