@@ -13,10 +13,11 @@ import jax
 import json
 
 from dte.models.digital_twin import DigitalTwin
+from dte.physics.registry import get_physics_loss
 from dte.training.trainer import Trainer
 from dte.training.losses import LossComputer
 from dte.data.dataset import TrajectoryDataset
-from dte.simulators.registry import get_system_spec, get_simulator
+from dte.simulators.registry import get_system_spec
 
 
 def _json_safe_float(value):
@@ -210,24 +211,12 @@ def main():
     print(f"Train samples: {train_dataset.n_samples}")
     print(f"Val samples: {val_dataset.n_samples}")
     
-    # Build system-specific physics loss
-    system_name = system_spec.name
-    if system_name == "cstr":
-        from dte.physics.cstr import CSTRPhysicsLoss
-        from dte.simulators.cstr import CSTRParams
-        cstr_cfg = system_config.get("cstr", {})
-        cstr_params = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
-        physics_loss = CSTRPhysicsLoss(cstr_params)
-    elif system_name == "heat_exchanger":
-        from dte.physics.heat_exchanger import HeatExchangerPhysicsLoss
-        from dte.simulators.heat_exchanger import HeatExchangerParams
-        hx_cfg = system_config.get("heat_exchanger", {})
-        hx_params = HeatExchangerParams(**{k: float(v) for k, v in hx_cfg.items()})
-        physics_loss = HeatExchangerPhysicsLoss(hx_params)
-    else:
-        from dte.physics.base import NullPhysicsLoss
-        physics_loss = NullPhysicsLoss()
-        print(f"Note: no physics loss implementation found for system '{system_name}', using null.")
+    physics_loss = get_physics_loss(system_spec.name, system_config)
+    if not physics_loss.residual_names():
+        print(
+            f"Note: no physics loss implementation found for system "
+            f"'{system_spec.name}', using null."
+        )
 
     # Create loss computer
     norm_stats = train_dataset.get_normalization_stats()

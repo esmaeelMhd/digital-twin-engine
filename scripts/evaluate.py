@@ -15,6 +15,7 @@ import numpy as np
 from pathlib import Path
 
 from dte.models.digital_twin import DigitalTwin
+from dte.physics.registry import get_physics_diagnostic_fn, zero_residual
 from dte.data.dataset import TrajectoryDataset
 from dte.simulators.registry import get_system_spec
 from dte.utils.plotting import (
@@ -91,20 +92,21 @@ def _record_prediction_metrics(metric_store, true_states, pred_states, state_std
     metric_store["nrmse_per_state"].append(np.asarray(nrmse_per_state))
 
 
-def _record_physics_metrics(metric_store, pred_states, controls, disturbances, physics_loss_fn, dt):
+def _record_physics_metrics(metric_store, pred_states, controls, disturbances, physics_diagnostic_fn, dt):
     """Accumulate conservation-law metrics in physical units.
 
-    ``physics_loss_fn`` is a callable with the signature
-    ``(states, controls, disturbances, dt) -> (mass_res, energy_res)``
-    or ``None`` when no physics loss is available.
+    ``physics_diagnostic_fn`` is a callable with the signature
+    ``(states, controls, disturbances, dt) -> dict[str, residual_array]``
+    or ``None`` when no physics diagnostics are available.
     """
-    if physics_loss_fn is None:
-        # No system-specific physics; fill with zeros so metrics still exist.
-        n = pred_states.shape[0] - 1
-        mass_res = jnp.zeros(max(n, 1))
-        energy_res = jnp.zeros(max(n, 1))
+    if physics_diagnostic_fn is None:
+        residuals = {}
     else:
-        mass_res, energy_res = physics_loss_fn(pred_states, controls, disturbances, dt)
+        residuals = physics_diagnostic_fn(pred_states, controls, disturbances, dt)
+
+    n = pred_states.shape[0] - 1
+    mass_res = residuals.get("mass", zero_residual(n))
+    energy_res = residuals.get("energy", zero_residual(n))
 
     metric_store["mass_violation_mean"].append(float(jnp.mean(mass_res)))
     metric_store["mass_violation_max"].append(float(jnp.max(mass_res)))
@@ -330,32 +332,7 @@ def main():
     system_spec = get_system_spec(system_config)
     state_names = system_spec.state_names
 
-    # Build physics evaluation function (returns mass_res, energy_res arrays)
-    system_name = system_spec.name
-    if system_name == "cstr":
-        from dte.physics.cstr import mass_balance_residual, energy_balance_residual
-        from dte.simulators.cstr import CSTRParams
-        cstr_cfg = system_config.get("cstr", {})
-        cstr_params = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
-
-        def _physics_fn(states, controls, disturbances, dt):
-            return (
-                mass_balance_residual(states, controls, disturbances, cstr_params, dt),
-                energy_balance_residual(states, controls, disturbances, cstr_params, dt),
-            )
-    elif system_name == "heat_exchanger":
-        from dte.physics.heat_exchanger import energy_balance_residual as hx_energy
-        from dte.simulators.heat_exchanger import HeatExchangerParams
-        hx_cfg = system_config.get("heat_exchanger", {})
-        hx_params = HeatExchangerParams(**{k: float(v) for k, v in hx_cfg.items()})
-        import jax.numpy as _jnp
-
-        def _physics_fn(states, controls, disturbances, dt):
-            energy_res = hx_energy(states, controls, disturbances, hx_params, dt)
-            mass_res = _jnp.zeros_like(energy_res)
-            return mass_res, energy_res
-    else:
-        _physics_fn = None
+    physics_diagnostic_fn = get_physics_diagnostic_fn(system_spec.name, system_config)
 
     # Initialize PRNG
     key = jax.random.PRNGKey(args.seed)
@@ -414,10 +391,10 @@ def main():
         # Samples from TrajectoryDataset are already in physical units.
         dt = float(ts[1] - ts[0])
         mass_res, energy_res = _record_physics_metrics(
-            model_metrics, pred_states, controls, disturbances, _physics_fn, dt
+            model_metrics, pred_states, controls, disturbances, physics_diagnostic_fn, dt
         )
         _record_physics_metrics(
-            baseline_metrics, baseline_states, controls, disturbances, _physics_fn, dt
+            baseline_metrics, baseline_states, controls, disturbances, physics_diagnostic_fn, dt
         )
 
         plot_candidates.append(
