@@ -11,7 +11,7 @@ def _normalize_control(u: Float[Array, "control_dim"]) -> Float[Array, "control_
     """Apply light normalization to control inputs when using the CSTR layout."""
     if u.shape[-1] == 2:
         center = jnp.array([55.0, 300.0], dtype=u.dtype)
-        scale = jnp.array([0.02, 0.02], dtype=u.dtype)
+        scale = jnp.array([0.02, 0.05], dtype=u.dtype)
         return (u - center) * scale
     return u
 
