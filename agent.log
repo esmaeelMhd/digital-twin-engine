@@ -1448,3 +1448,134 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-03-31 17:43:40] Agent started: llm=Gemini 3.1 Pro max_runs=93 branch=autoresearch/mar31 prior=73 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
 [2026-03-31 17:43:40] Ready. Best val_loss=0.065900 | 73 prior experiments
 [2026-03-31 17:43:40] Exp 74/93: querying Gemini 3.1 Pro...
+[2026-03-31 17:44:40] Idea: Decrease sequence extraction stride from 5 to 2 to significantly increase the number of overlapping training windows, improving dataset diversity and generalization without increasing epoch runtime
+[2026-03-31 17:44:40] File: configs/training_default.yaml
+[2026-03-31 17:44:40] Committed: cf5416c
+[2026-03-31 17:53:25] DISCARD: val_loss=0.070697 (best=0.065900)
+[2026-03-31 17:53:25] Elapsed: 525s
+[2026-03-31 17:53:31] Exp 75/93: querying Gemini 3.1 Pro...
+[2026-03-31 17:54:58] Idea: Reduce peak learning rate from 1.0e-3 to 5.0e-4 to further improve stability and help the optimizer settle into a deeper minimum now that the architecture and losses are more robust.
+[2026-03-31 17:54:58] File: scripts/train.py
+[2026-03-31 17:54:58] Committed: 51e282a
+[2026-03-31 18:03:18] KEEP: val_loss=0.065432 NEW BEST!
+[2026-03-31 18:03:20] git push: ok
+[2026-03-31 18:03:20] Elapsed: 500s
+[2026-03-31 18:03:26] Exp 76/93: querying Gemini 3.1 Pro...
+[2026-03-31 18:04:39] Idea: Fix the normalization scale for the coolant inlet temperature control (Tc_in) from 0.02 to 0.05. This perfectly expands its normalized range from roughly [-0.4, 0.4] to [-1.0, 1.0], matching the variance of F_in and ensuring the encoder gives equal initial weight to both control inputs.
+[2026-03-31 18:04:39] File: dte/models/encoder.py
+[2026-03-31 18:04:39] Committed: dff245d
+[2026-03-31 18:12:57] KEEP: val_loss=0.064503 NEW BEST!
+[2026-03-31 18:12:58] git push: ok
+[2026-03-31 18:12:58] Elapsed: 497s
+[2026-03-31 18:13:04] Exp 77/93: querying Gemini 3.1 Pro...
+[2026-03-31 18:14:19] Idea: Adjust the decoder normalization scale for Tc_in to 0.02 so its span matches F_in without destabilizing the initialization center, ensuring balanced control gradients.
+[2026-03-31 18:14:19] File: dte/models/decoder.py
+[2026-03-31 18:14:19] Committed: a599c27
+[2026-03-31 18:22:25] DISCARD: val_loss=0.065735 (best=0.064503)
+[2026-03-31 18:22:25] Elapsed: 486s
+[2026-03-31 18:22:31] Exp 78/93: querying Gemini 3.1 Pro...
+[2026-03-31 18:23:44] Idea: Scale down the initial drift output by 0.1 to initialize the SDE closer to an identity mapping, preventing wild early-training latent trajectories and stabilizing trajectory loss gradients.
+[2026-03-31 18:23:44] File: dte/models/latent_sde.py
+[2026-03-31 18:23:44] Committed: 86c2dfa
+[2026-03-31 18:31:43] DISCARD: val_loss=0.066909 (best=0.064503)
+[2026-03-31 18:31:43] Elapsed: 478s
+[2026-03-31 18:31:49] Exp 79/93: querying Gemini 3.1 Pro...
+[2026-03-31 18:33:01] Idea: Decrease Huber loss delta to 0.01 to further improve robustness to SDE rollout outliers and stabilize trajectory gradients, continuing the proven trend that progressively smaller deltas perform better.
+[2026-03-31 18:33:01] File: dte/training/losses.py
+[2026-03-31 18:33:01] APPLY FAIL: ambiguous match (3x): '0.025'
+[2026-03-31 18:33:01] Could not apply patch. Skipping.
+[2026-03-31 18:33:01] RESULT: crash | val_loss=n/a | dte/training/losses.py | APPLY FAIL: Decrease Huber loss delta to 0.01 to further improve robustness to SDE rollout outliers and stabilize trajectory gradients, continuing the proven trend that progressively smaller deltas perform better.
+[2026-03-31 18:33:01] Exp 80/93: querying Gemini 3.1 Pro...
+[2026-03-31 18:33:01] Streak 3 failures — trying simpler approach
+[2026-03-31 18:34:18] Idea: Simplify the latent SDE drift network by reducing its layer count from the config default to 2. This creates a stronger regularization bottleneck on the temporal dynamics, helping to prevent the SDE from overfitting noisy rollout trajectories while the 3-layer encoder/decoder handle spatial complexity.
+[2026-03-31 18:34:18] File: dte/models/digital_twin.py
+[2026-03-31 18:34:18] Committed: f21e645
+[2026-03-31 18:42:22] DISCARD: val_loss=0.065968 (best=0.064503)
+[2026-03-31 18:42:22] Elapsed: 484s
+[2026-03-31 18:42:28] Exp 81/93: querying Gemini 3.1 Pro...
+[2026-03-31 18:42:28] Streak 4 failures — trying simpler approach
+[2026-03-31 18:43:40] Idea: Change init_value in the warmup schedule from 1e-4 to 0.0 to ensure a completely smooth learning rate ramp-up. Since peak_lr was reduced to 5e-4, starting at 1e-4 (20% of peak) was causing an initial gradient shock; 0.0 prevents early disruption of the initialization bounds.
+[2026-03-31 18:43:40] File: dte/training/trainer.py
+[2026-03-31 18:43:40] Committed: d8e0bd8
+[2026-03-31 18:51:43] KEEP: val_loss=0.063948 NEW BEST!
+[2026-03-31 18:51:46] git push: ok
+[2026-03-31 18:51:46] Elapsed: 483s
+[2026-03-31 18:51:52] Exp 82/93: querying Gemini 3.1 Pro...
+[2026-03-31 18:53:27] Idea: Reduce total_steps and anneal_steps to 1000 to perfectly align the cosine decay and KL schedules with the ~960 steps of the 15-epoch bounded autoresearch runs, allowing the optimizer to fully cool down and settle into a deeper validation minimum.
+[2026-03-31 18:53:27] File: configs/training_default.yaml
+[2026-03-31 18:53:27] Committed: 802bfb6
+[2026-03-31 19:01:33] DISCARD: val_loss=0.066529 (best=0.063948)
+[2026-03-31 19:01:33] Elapsed: 486s
+[2026-03-31 19:01:39] Exp 83/93: querying Gemini 3.1 Pro...
+[2026-03-31 19:02:52] Idea: Increase max_batches_per_epoch from 8 to 16 to double the number of training updates per epoch, leveraging the stabilized architecture and bounded runtime to find a deeper validation minimum without timing out.
+[2026-03-31 19:02:52] File: scripts/train.py
+[2026-03-31 19:02:52] Committed: f505adb
+[2026-03-31 19:11:04] DISCARD: val_loss=0.065058 (best=0.063948)
+[2026-03-31 19:11:05] Elapsed: 492s
+[2026-03-31 19:11:11] Exp 84/93: querying Gemini 3.1 Pro...
+[2026-03-31 19:12:23] Idea: Shift initial latent variance closer to standard normal by changing logvar bias from -2.0 to -1.0, improving initial exploration and preventing premature convergence to deterministic behavior.
+[2026-03-31 19:12:23] File: dte/models/encoder.py
+[2026-03-31 19:12:23] Committed: 79aeeb5
+[2026-03-31 19:20:31] DISCARD: val_loss=0.065511 (best=0.063948)
+[2026-03-31 19:20:31] Elapsed: 488s
+[2026-03-31 19:20:37] Exp 85/93: querying Gemini 3.1 Pro...
+[2026-03-31 19:20:37] Streak 3 failures — trying simpler approach
+[2026-03-31 19:21:49] Idea: Perfectly match the variance span of Tc_in to F_in (span 0.9) while rigorously preserving its exact initialization mean of 3.0 to prevent gradient explosions that ruined previous control normalization attempts.
+[2026-03-31 19:21:49] File: dte/models/decoder.py
+[2026-03-31 19:21:49] Committed: 21ad5cd
+[2026-03-31 19:30:01] DISCARD: val_loss=0.066302 (best=0.063948)
+[2026-03-31 19:30:01] Elapsed: 493s
+[2026-03-31 19:30:08] Exp 86/93: querying Gemini 3.1 Pro...
+[2026-03-31 19:30:08] Streak 4 failures — trying simpler approach
+[2026-03-31 19:31:30] Idea: Halve dt0 in the mean_trajectory deterministic ODE solver to (ts[1] - ts[0]) / 2.0 to perfectly align its integration steps with the SDE stochastic solver, reducing truncation error without breaking fixed-step stability.
+[2026-03-31 19:31:30] File: dte/models/latent_sde.py
+[2026-03-31 19:31:30] Committed: 2587d23
+[2026-03-31 19:40:53] DISCARD: val_loss=0.065151 (best=0.063948)
+[2026-03-31 19:40:53] Elapsed: 563s
+[2026-03-31 19:40:59] Exp 87/93: querying Gemini 3.1 Pro...
+[2026-03-31 19:40:59] Streak 5 failures — strategy change needed
+[2026-03-31 19:42:13] Idea: Reduce the variance of the sampled latent state during training by scaling the noise by 0.1, preventing wild early-training trajectories while still allowing the VAE to learn a distribution.
+[2026-03-31 19:42:13] File: dte/models/digital_twin.py
+[2026-03-31 19:42:13] Committed: b5b3845
+[2026-03-31 19:50:23] KEEP: val_loss=0.063843 NEW BEST!
+[2026-03-31 19:50:25] git push: ok
+[2026-03-31 19:50:25] Elapsed: 490s
+[2026-03-31 19:50:31] Exp 88/93: querying Gemini 3.1 Pro...
+[2026-03-31 19:51:45] Idea: Increase Adam b2 parameter from 0.99 to 0.999 to increase the exponential decay window for the second moment estimate, smoothing out the variance of the gradients from noisy trajectory rollouts without changing the b1 momentum.
+[2026-03-31 19:51:45] File: dte/training/trainer.py
+[2026-03-31 19:51:45] Committed: cc163db
+[2026-03-31 19:59:54] DISCARD: val_loss=0.064896 (best=0.063843)
+[2026-03-31 19:59:54] Elapsed: 490s
+[2026-03-31 20:00:00] Exp 89/93: querying Gemini 3.1 Pro...
+[2026-03-31 20:01:10] Idea: Decrease Huber loss delta to 0.01 to further improve robustness to SDE rollout outliers and stabilize trajectory gradients, continuing the proven trend that progressively smaller deltas perform better.
+[2026-03-31 20:01:10] File: dte/training/losses.py
+[2026-03-31 20:01:10] Committed: fb8517d
+[2026-03-31 20:09:12] KEEP: val_loss=0.030669 NEW BEST!
+[2026-03-31 20:09:13] git push: ok
+[2026-03-31 20:09:13] Elapsed: 482s
+[2026-03-31 20:09:19] Exp 90/93: querying Gemini 3.1 Pro...
+[2026-03-31 20:09:57] Idea: Decrease dt_ratio from 0.5 to 0.25 to increase SDE solver resolution to 4 steps per observation interval, reducing integration truncation error and smoothing trajectory gradients.
+[2026-03-31 20:09:57] File: configs/training_default.yaml
+[2026-03-31 20:09:57] Committed: 08e536a
+[2026-03-31 20:18:03] KEEP: val_loss=0.030082 NEW BEST!
+[2026-03-31 20:18:05] git push: ok
+[2026-03-31 20:18:05] Elapsed: 486s
+[2026-03-31 20:18:11] Exp 91/93: querying Gemini 3.1 Pro...
+[2026-03-31 20:18:59] Idea: Reduce peak learning rate from 5.0e-4 to 2.5e-4 to further stabilize optimization and find a deeper validation minimum.
+[2026-03-31 20:18:59] File: scripts/train.py
+[2026-03-31 20:19:00] Committed: 81a3de5
+[2026-03-31 20:27:08] DISCARD: val_loss=0.030244 (best=0.030082)
+[2026-03-31 20:27:08] Elapsed: 489s
+[2026-03-31 20:27:14] Exp 92/93: querying Gemini 3.1 Pro...
+[2026-03-31 20:28:25] Idea: Restrict maximum latent variance by reducing the tanh amplitude on z_logvar from 5.0 to 3.0, capping max logvar at 1.0 (std ~1.64) to prevent numerical instability from extreme variance spikes during stochastic rollouts.
+[2026-03-31 20:28:25] File: dte/models/encoder.py
+[2026-03-31 20:28:25] Committed: 2aebe7d
+[2026-03-31 20:36:35] KEEP: val_loss=0.029986 NEW BEST!
+[2026-03-31 20:36:37] git push: ok
+[2026-03-31 20:36:37] Elapsed: 491s
+[2026-03-31 20:36:43] Exp 93/93: querying Gemini 3.1 Pro...
+[2026-03-31 20:37:53] Idea: Tighten the decoder sigmoid bounds for T and Tc closer to the true physical operating ranges, forcing the network to use a wider spread of its pre-sigmoid state_raw capacity and improving gradient flow through the nonlinear region.
+[2026-03-31 20:37:53] File: dte/models/decoder.py
+[2026-03-31 20:37:53] Committed: 9c1301e
+[2026-03-31 20:46:01] DISCARD: val_loss=0.031140 (best=0.029986)
+[2026-03-31 20:46:01] Elapsed: 489s
