@@ -1,5 +1,5 @@
 research:
-  workspace_dir: outputs/autoresearch_exp0
+  workspace_dir: outputs/autoresearch_stage1
   metric_name: best_val_loss
   metric_mode: min
   time_budget_minutes: 10

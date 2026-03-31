@@ -6,6 +6,7 @@ keeps improvements, reverts failures, and shows a Rich TUI dashboard.
 
 Usage:
     python scripts/agent.py                    # Gemini 3.1 Pro (default)
+    python scripts/agent.py --config configs/autoresearch_stage1.yaml
     python scripts/agent.py --claude           # Claude Sonnet 4.6
     python scripts/agent.py --opus             # Claude Opus 4.6 with 32k thinking
     python scripts/agent.py --openai o3        # OpenAI o3
@@ -22,6 +23,9 @@ Required environment variables (for the chosen provider):
     ANTHROPIC_API_KEY   -- Claude
     OPENAI_API_KEY      -- OpenAI
     XAI_API_KEY         -- xAI Grok
+
+The agent also auto-loads `.env` and `.env.local` from the project root
+when present.
 """
 
 from __future__ import annotations
@@ -57,11 +61,54 @@ from rich.text import Text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AUTORESEARCH_SCRIPT = PROJECT_ROOT / "scripts" / "autoresearch.py"
-AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
+DEFAULT_AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
+ACTIVE_AUTORESEARCH_CONFIG = DEFAULT_AUTORESEARCH_CONFIG
 DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "outputs" / "autoresearch"
 DEFAULT_AGENT_CONTEXT_FILE = PROJECT_ROOT / "auto_research.md"
 LOG_FILE = PROJECT_ROOT / "agent.log"
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
+
+
+# ---------------------------------------------------------------------------
+# Environment loading
+# ---------------------------------------------------------------------------
+
+def load_env_file(path: Path, override: bool = False) -> None:
+    """Load simple KEY=VALUE pairs from a .env-style file."""
+
+    if not path.exists():
+        return
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:
+        print(f"WARNING env load failed: {path} ({exc})", file=sys.stderr)
+        return
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        if value and len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+
+        if override or key not in os.environ:
+            os.environ[key] = value
+
+
+load_env_file(PROJECT_ROOT / ".env", override=False)
+load_env_file(PROJECT_ROOT / ".env.local", override=True)
 
 
 # ---------------------------------------------------------------------------
@@ -199,11 +246,23 @@ def other_agent_process_running() -> bool:
     return False
 
 
+def set_autoresearch_config(path_value: str | Path) -> Path:
+    """Set the active autoresearch config path for this agent session."""
+
+    global ACTIVE_AUTORESEARCH_CONFIG
+
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    ACTIVE_AUTORESEARCH_CONFIG = path
+    return ACTIVE_AUTORESEARCH_CONFIG
+
+
 def get_workspace_dir() -> Path:
     """Resolve the active autoresearch workspace from config."""
 
     try:
-        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
     except Exception:
         return DEFAULT_WORKSPACE_DIR
@@ -1164,7 +1223,7 @@ def get_train_timeout_seconds() -> int:
     """Align the agent-side timeout with the autoresearch config."""
 
     try:
-        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
         research = config.get("research", {})
         minutes = float(research.get("time_budget_minutes", 30))
@@ -1182,7 +1241,7 @@ def run_experiment(
     cmd = [
         sys.executable,
         str(AUTORESEARCH_SCRIPT),
-        "--config", str(AUTORESEARCH_CONFIG),
+        "--config", str(ACTIVE_AUTORESEARCH_CONFIG),
         "--description", description,
     ]
 
@@ -1354,6 +1413,11 @@ def build_dashboard(state: dict) -> Layout:
     history: list[dict] = state.get("history", [])
     kept = [r for r in history if r["status"] == "keep"]
     llm_name = state.get("llm_name", "LLM")
+    config_path = state.get("config_path", "")
+    workspace_dir = state.get("workspace_dir", "")
+    train_epochs = state.get("train_epochs")
+    time_budget_minutes = state.get("time_budget_minutes")
+    val_every = state.get("val_every")
     eh, rem = divmod(int(elapsed), 3600)
     em, es = divmod(rem, 60)
 
@@ -1489,6 +1553,33 @@ def build_dashboard(state: dict) -> Layout:
     if not log_lines:
         log_text.append(" Waiting...\n", style="dim")
     layout["activity"].update(Panel(log_text, title="[dim]Activity[/]", border_style="dim"))
+
+    # ---- Footer ----
+    footer = Text()
+    footer.append(" Config: ", style="bold")
+    footer.append(f"{config_path or 'N/A'}", style="cyan")
+    footer.append("   Workspace: ", style="bold")
+    footer.append(f"{workspace_dir or 'N/A'}", style="cyan")
+    footer.append("   LLM: ", style="bold")
+    footer.append(llm_name, style="magenta")
+    footer.append("\n")
+    footer.append(" Train: ", style="bold")
+    footer.append(
+        f"{train_epochs if train_epochs is not None else 'N/A'} epochs",
+        style="green",
+    )
+    footer.append("   Budget: ", style="bold")
+    if time_budget_minutes is not None:
+        footer.append(f"{float(time_budget_minutes):.0f} min", style="green")
+    else:
+        footer.append("N/A", style="dim")
+    footer.append("   Val every: ", style="bold")
+    footer.append(f"{val_every if val_every is not None else 'N/A'}", style="green")
+    footer.append("   Results: ", style="bold")
+    footer.append(str(len(history)), style="yellow")
+    footer.append("   Kept: ", style="bold")
+    footer.append(str(len(kept)), style="green")
+    layout["footer"].update(Panel(footer, title="[dim]Run Context[/]", border_style="dim"))
 
     return layout
 
@@ -1664,6 +1755,12 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Autonomous research agent for Digital Twin Engine")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(DEFAULT_AUTORESEARCH_CONFIG.relative_to(PROJECT_ROOT)),
+        help="Path to autoresearch config",
+    )
     parser.add_argument("--max-runs",    type=int, default=100)
     parser.add_argument("--resume",      action="store_true", help="Resume existing branch")
     parser.add_argument("--tag",         type=str,  default=None, help="Branch tag (default: date)")
@@ -1680,6 +1777,7 @@ def main() -> None:
     parser.add_argument("--grok",    action="store_true", help="Use xAI Grok 3")
     parser.add_argument("--local",   action="store_true", help="Use local LM Studio")
     args = parser.parse_args()
+    active_config_path = set_autoresearch_config(args.config)
 
     # Select LLM — default is Gemini 2.5 Pro
     if args.local:
@@ -1736,12 +1834,14 @@ def main() -> None:
 
     # Load modifiable files from config
     try:
-        with AUTORESEARCH_CONFIG.open("r") as f:
+        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as f:
             ar_cfg = yaml.safe_load(f) or {}
         modifiable_files = ar_cfg.get("agent", {}).get("modifiable_files", MODIFIABLE_FILES)
     except Exception:
         ar_cfg = {}
         modifiable_files = MODIFIABLE_FILES
+    research_cfg = ar_cfg.get("research", {})
+    train_cfg = ar_cfg.get("train", {})
     agent_context = load_agent_context(ar_cfg)
     recent_run_context = build_recent_run_context()
 
@@ -1774,7 +1874,10 @@ def main() -> None:
     valid_losses = [r["val_loss"] for r in history if r["val_loss"] < 999]
     best_loss = min(valid_losses) if valid_losses else 999.0
 
-    log_to_file(f"Agent started: llm={llm_name} max_runs={args.max_runs} branch={branch} prior={prior_count}")
+    log_to_file(
+        f"Agent started: llm={llm_name} max_runs={args.max_runs} "
+        f"branch={branch} prior={prior_count} config={active_config_path}"
+    )
 
     if args.no_dashboard:
         if not history:
@@ -1821,6 +1924,11 @@ def main() -> None:
         "total_elapsed": 0.0,
         "phase_start": time.time(),
         "phase_elapsed": 0.0,
+        "config_path": str(active_config_path.relative_to(PROJECT_ROOT)),
+        "workspace_dir": str(get_workspace_dir().relative_to(PROJECT_ROOT)),
+        "train_epochs": train_cfg.get("n_epochs"),
+        "time_budget_minutes": research_cfg.get("time_budget_minutes"),
+        "val_every": train_cfg.get("val_every"),
     }
 
     t_start = time.time()

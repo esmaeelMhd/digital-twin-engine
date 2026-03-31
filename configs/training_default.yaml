@@ -1,5 +1,5 @@
 model:
-  latent_dim: 16
+  latent_dim: 32
   hidden_dim: 128
   n_layers: 3
   drift_layers: 3
@@ -17,7 +17,7 @@ sde:
 
 training:
   n_epochs: 100
-  batch_size: 64
+  batch_size: 128
   max_batches_per_epoch: 64
   seq_len: 25
   stride: 5
