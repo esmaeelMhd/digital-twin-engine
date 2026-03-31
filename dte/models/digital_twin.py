@@ -155,7 +155,8 @@ class DigitalTwin(eqx.Module):
         z_mean, z_logvar = self.encoder.encode(state, params, control)
 
         if key is not None:
-            z = self.encoder.sample(z_mean, z_logvar, key)
+            # Keep stochasticity while damping early-training latent jumps.
+            z = z_mean + 0.1 * (self.encoder.sample(z_mean, z_logvar, key) - z_mean)
         else:
             z = z_mean
 

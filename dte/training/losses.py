@@ -81,11 +81,11 @@ class LossComputer:
 
     @staticmethod
     def _huber_loss(diff: Array) -> Array:
-        """Elementwise Huber loss with delta=0.1."""
+        """Elementwise Huber loss with delta=0.01."""
         return jnp.where(
-            jnp.abs(diff) < 0.1,
+            jnp.abs(diff) < 0.01,
             0.5 * diff ** 2,
-            0.1 * jnp.abs(diff) - 0.005,
+            0.01 * jnp.abs(diff) - 0.00005,
         )
 
     def _weighted_state_loss(self, diff: Array) -> Float[Array, ""]:

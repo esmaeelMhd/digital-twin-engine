@@ -87,6 +87,10 @@ def test_decoder_output_shapes():
 def test_decoder_constraints():
     """Test 3: Decoder outputs satisfy constraints."""
     key = jax.random.PRNGKey(2)
+    constraints = [
+        {"type": "softplus", "indices": [0, 1], "bias": 0.5},
+        {"type": "sigmoid_range", "indices": [2, 3], "low": 250.0, "high": 400.0},
+    ]
     
     decoder = Decoder(
         latent_dim=16,
@@ -95,6 +99,7 @@ def test_decoder_constraints():
         state_dim=4,
         hidden_dim=128,
         n_layers=3,
+        constraints=constraints,
         key=key,
     )
     
@@ -111,8 +116,8 @@ def test_decoder_constraints():
         # Check constraints
         assert Ca >= 0, f"Ca must be non-negative, got {Ca}"
         assert Cb >= 0, f"Cb must be non-negative, got {Cb}"
-        assert 200.0 <= T <= 500.0, f"T must be in [200, 500], got {T}"
-        assert 200.0 <= Tc <= 500.0, f"Tc must be in [200, 500], got {Tc}"
+        assert 250.0 <= T <= 400.0, f"T must be in [250, 400], got {T}"
+        assert 250.0 <= Tc <= 400.0, f"Tc must be in [250, 400], got {Tc}"
 
 
 def test_encoder_decoder_roundtrip():
