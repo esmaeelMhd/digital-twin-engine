@@ -75,8 +75,8 @@ class Encoder(eqx.Module):
         """
         # Concatenate inputs
         log_params = jnp.sign(params) * jnp.log1p(jnp.abs(params))
-        scaled_state = (state - jnp.array([1.0, 1.0, 325.0, 325.0])) * jnp.array([1.0, 1.0, 0.01, 0.01])
-        scaled_control = (control - jnp.array([55.0, 300.0])) * jnp.array([0.02, 0.02])
+        scaled_state = (state - jnp.array([1.0, 1.0, 320.0, 300.0])) * jnp.array([1.0, 1.0, 0.02, 0.02])
+        scaled_control = (control - jnp.array([55.0, 300.0])) * jnp.array([0.02, 0.05])
         x = jnp.concatenate([scaled_state, log_params * 0.1, scaled_control])
         
         # Forward through hidden layers
@@ -85,8 +85,8 @@ class Encoder(eqx.Module):
             x = jax.nn.silu(x)
         
         # Output heads
-        z_mean = jnp.tanh(self.mean_layer(x) * 0.01) * 10.0
-        z_logvar = jnp.clip(self.logvar_layer(x) - 2.0, a_max=0.0)
+        z_mean = jnp.tanh(self.mean_layer(x) * 0.05) * 5.0
+        z_logvar = jnp.tanh(self.logvar_layer(x) * 0.1) * 3.0 - 2.0
         
         return z_mean, z_logvar
     

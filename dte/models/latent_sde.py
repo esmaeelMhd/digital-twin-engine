@@ -11,7 +11,7 @@ def _normalize_control(u: Float[Array, "control_dim"]) -> Float[Array, "control_
     """Apply light normalization to control inputs when using the CSTR layout."""
     if u.shape[-1] == 2:
         center = jnp.array([55.0, 300.0], dtype=u.dtype)
-        scale = jnp.array([0.02, 0.02], dtype=u.dtype)
+        scale = jnp.array([0.02, 0.05], dtype=u.dtype)
         return (u - center) * scale
     return u
 
@@ -97,9 +97,10 @@ class LatentDrift(eqx.Module):
         c_norm = _normalize_params(c)
         x = jnp.concatenate([z, u_norm, d_norm, c_norm])
         
-        for layer in self.layers:
-            x = layer(x)
-            x = jax.nn.silu(x)
+        for i, layer in enumerate(self.layers):
+            h = layer(x)
+            h = jax.nn.silu(h)
+            x = x + h if i > 0 else h
         
         return self.output_layer(x)
 
@@ -410,12 +411,11 @@ class LatentSDE(eqx.Module):
         
         # Set up ODE (no diffusion)
         term = diffrax.ODETerm(drift_fn)
-        solver = diffrax.Tsit5()  # Higher-order ODE solver
+        solver = diffrax.Heun()  # Fixed-step ODE solver
         
         # Solve
-        dt0 = (ts[1] - ts[0]) / 2
+        dt0 = ts[1] - ts[0]
         saveat = diffrax.SaveAt(ts=ts)
-        stepsize_controller = diffrax.PIDController(rtol=1e-3, atol=1e-5)
         solution = diffrax.diffeqsolve(
             term,
             solver,
@@ -424,7 +424,6 @@ class LatentSDE(eqx.Module):
             dt0=dt0,
             y0=z0,
             saveat=saveat,
-            stepsize_controller=stepsize_controller,
             max_steps=4096,
         )
         

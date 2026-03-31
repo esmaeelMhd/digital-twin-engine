@@ -74,7 +74,7 @@ class Trainer:
         # Setup optimizer
         opt_config = config["optimizer"]
         schedule = optax.warmup_cosine_decay_schedule(
-            init_value=1e-4,
+            init_value=0.0,
             peak_value=opt_config["peak_lr"],
             warmup_steps=opt_config["warmup_steps"],
             decay_steps=opt_config["total_steps"],
@@ -210,7 +210,7 @@ class Trainer:
         true_states_norm = (states - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8)
         
         # Compute losses in normalized space
-        loss_recon = self.loss_computer.reconstruction_loss(pred_states_norm, true_states_norm)
+        loss_recon = self.loss_computer.reconstruction_loss(pred_states_norm[:, 0], true_states_norm[:, 0])
         loss_one_step = self.loss_computer.one_step_loss(
             (pred_next_states_batch - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
             (states[:, 1:] - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),

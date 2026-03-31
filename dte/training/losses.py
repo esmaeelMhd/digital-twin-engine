@@ -55,11 +55,11 @@ class LossComputer:
 
     @staticmethod
     def _huber_loss(diff: Array) -> Array:
-        """Compute elementwise Huber loss with delta=0.25."""
+        """Compute elementwise Huber loss with delta=0.01."""
         return jnp.where(
-            jnp.abs(diff) < 0.25,
+            jnp.abs(diff) < 0.01,
             0.5 * diff ** 2,
-            0.25 * jnp.abs(diff) - 0.03125,
+            0.01 * jnp.abs(diff) - 0.00005,
         )
 
     def _weighted_state_loss(self, diff: Array) -> Float[Array, ""]:
@@ -210,8 +210,8 @@ class LossComputer:
         """
         seq_len = predicted_trajectory.shape[1]
         
-        # Uniform weights to prevent over-penalizing inherently noisy later SDE steps
-        weights = jnp.ones(seq_len)
+        # Linearly decreasing weights to prioritize clean early-step gradients over noisy late-step SDE rollouts
+        weights = jnp.linspace(1.0, 0.1, seq_len)
         weights = weights / jnp.mean(weights)  # Normalize to mean 1
         
         diff = predicted_trajectory - true_trajectory
