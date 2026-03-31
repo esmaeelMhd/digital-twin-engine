@@ -171,18 +171,17 @@ class DigitalTwin(eqx.Module):
         """
         key_enc, key_sde = jax.random.split(key)
         
-        # Encode initial state
+        # Encode initial state deterministically
         z0, z_mean, z_logvar = self.encode(
-            initial_state, params, controls[0], key_enc
+            initial_state, params, controls[0], key=None
         )
         
-        # Roll out latent SDE
-        z_trajectory = self.latent_sde(
+        # Roll out deterministic latent trajectory (matches training)
+        z_trajectory = self.latent_sde.mean_trajectory(
             ts,
-            z0,
+            z_mean,
             controls,
             params,
-            key_sde,
             disturbances=disturbances,
         )
         
