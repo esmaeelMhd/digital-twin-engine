@@ -93,7 +93,7 @@ displays a Rich TUI dashboard.
 ### Launch commands
 
 ```bash
-# Default: Claude Sonnet 4.6, 100 experiments, Rich dashboard
+# Default: Gemini 3.1 Pro, 100 experiments, Rich dashboard
 python scripts/agent.py
 
 # Resume an existing branch
@@ -123,7 +123,8 @@ python scripts/agent.py --local                 # Local LM Studio at 127.0.0.1:1
 
 | Provider | Variable |
 |----------|----------|
-| Claude (default) | `ANTHROPIC_API_KEY` |
+| Gemini (default) | `GEMINI_API_KEY` |
+| Claude | `ANTHROPIC_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | xAI Grok | `XAI_API_KEY` |
 | Local LM Studio | none (uses localhost:1234) |

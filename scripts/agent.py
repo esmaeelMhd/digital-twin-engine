@@ -877,8 +877,6 @@ MODIFIABLE_FILES = [
     "dte/models/digital_twin.py",
     "dte/training/trainer.py",
     "dte/training/losses.py",
-    "dte/simulators/base.py",
-    "dte/physics/base.py",
 ]
 
 KNOWN_GOOD = """
@@ -1776,7 +1774,7 @@ def main() -> None:
     parser.add_argument("--tag",         type=str,  default=None, help="Branch tag (default: date)")
     parser.add_argument("--no-dashboard", action="store_true", help="Text-only output")
     parser.add_argument("--file",        type=str,  default=None, help="Restrict to one modifiable file")
-    # LLM provider flags (default: Gemini 2.5 Pro)
+    # LLM provider flags (default: Gemini 3.1 Pro)
     parser.add_argument("--gemini",  type=str, nargs="?", const="gemini-3.1-pro-preview", default=None,
                         help="Use Google Gemini model (default: gemini-3.1-pro-preview)")
     parser.add_argument("--claude",  action="store_true", help="Use Claude Sonnet 4.6")
@@ -1789,7 +1787,7 @@ def main() -> None:
     args = parser.parse_args()
     active_config_path = set_autoresearch_config(args.config)
 
-    # Select LLM — default is Gemini 2.5 Pro
+    # Select LLM — default is Gemini 3.1 Pro
     if args.local:
         _call_llm_fn = call_local
         llm_name = "LM Studio (local)"

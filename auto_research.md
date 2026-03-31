@@ -27,8 +27,9 @@ The product goal is not just forecasting. The learned model must be useful for:
 | `cstr` | 4 (Ca, Cb, T, Tc) | 2 (F_in, Tc_in) | 2 (Ca_in, T_in) | Mass + Energy balance |
 | `heat_exchanger` | 2 (T_hot, T_cold) | 2 (F_hot, F_cold) | 2 (T_hot_in, T_cold_in) | Energy balance |
 
-New systems require only: a simulator class, a physics loss class, a YAML config, and
-one registration entry. No core engine changes are needed.
+New systems require only: a simulator class, an optional physics loss class, a YAML
+config, and registration in the simulator and physics registries. No core engine
+changes are needed.
 
 ---
 
@@ -220,6 +221,7 @@ Be cautious with:
 
 ## Current Search Context
 
-- Default autoresearch config points to `data/cstr/` (CSTR system)
+- Default autoresearch config currently targets the CSTR benchmark (`data/cstr/` +
+  `configs/cstr_default.yaml`)
 - Search is based on bounded runs, not full-convergence comparisons
 - Stable partial training > ambitious edits that collapse numerically
