@@ -8,6 +8,7 @@ import subprocess
 from collections import deque
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import streamlit as st
 import streamlit.components.v1 as components
 import yaml
@@ -260,6 +261,81 @@ def _loss_chart_series(results: list[dict]) -> tuple[list[float], list[float]]:
     return valid_losses, best_so_far
 
 
+def _metric_points(results: list[dict]) -> list[dict]:
+    points: list[dict] = []
+    running_best = float("inf")
+    for index, row in enumerate(results, start=1):
+        value = row["val_loss"]
+        if value is None:
+            continue
+        running_best = min(running_best, value)
+        points.append(
+            {
+                "x": index,
+                "val_loss": value,
+                "best_so_far": running_best,
+                "status": row["status"],
+                "description": row["description"],
+                "commit": row["commit"][:7] if row["commit"] else "—",
+            }
+        )
+    return points
+
+
+def _short_label(text: str, limit: int = 60) -> str:
+    clean = " ".join((text or "").split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 3].rstrip() + "..."
+
+
+def _render_validation_trend(results: list[dict]) -> None:
+    points = _metric_points(results)
+    if not points:
+        st.info("No validation-loss points logged yet.")
+        return
+
+    x_vals = [point["x"] for point in points]
+    val_losses = [point["val_loss"] for point in points]
+    best_losses = [point["best_so_far"] for point in points]
+    keep_points = [point for point in points if point["status"] == "keep"]
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(x_vals, val_losses, color="#4C78A8", marker="o", linewidth=1.8, markersize=4, label="val_loss")
+    ax.plot(x_vals, best_losses, color="#54A24B", linewidth=2.0, linestyle="--", label="best_so_far")
+
+    if keep_points:
+        keep_x = [point["x"] for point in keep_points]
+        keep_y = [point["val_loss"] for point in keep_points]
+        ax.scatter(keep_x, keep_y, color="#E45756", s=50, zorder=3, label="kept improvement")
+
+        for idx, point in enumerate(keep_points):
+            y_offset = 14 if idx % 2 == 0 else -18
+            label = f"{point['commit']}: {_short_label(point['description'])}"
+            ax.annotate(
+                label,
+                xy=(point["x"], point["val_loss"]),
+                xytext=(6, y_offset),
+                textcoords="offset points",
+                fontsize=8,
+                color="#222222",
+                bbox={"boxstyle": "round,pad=0.25", "fc": "#FFF7D6", "ec": "#D9C98E", "alpha": 0.95},
+                arrowprops={"arrowstyle": "-", "color": "#D9C98E", "lw": 1.0},
+            )
+
+    ax.set_title("Validation Trend")
+    ax.set_xlabel("Experiment")
+    ax.set_ylabel("best_val_loss")
+    ax.grid(True, linestyle=":", linewidth=0.7, alpha=0.5)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    st.pyplot(fig, width="stretch")
+    plt.close(fig)
+
+    if keep_points:
+        st.caption("Kept points are annotated with commit and truncated description.")
+
+
 st.set_page_config(
     page_title="Autoresearch Monitor",
     page_icon="🧪",
@@ -403,16 +479,9 @@ with right:
     else:
         st.info("No baseline metadata found yet.")
 
-losses, best_so_far = _loss_chart_series(results)
-if losses:
+if any(row["val_loss"] is not None for row in results):
     st.subheader("Validation Trend")
-    st.line_chart(
-        {
-            "val_loss": losses,
-            "best_so_far": best_so_far,
-        },
-        width="stretch",
-    )
+    _render_validation_trend(results)
 
 st.subheader("Activity Log")
 if log_tail:
