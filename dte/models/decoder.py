@@ -87,7 +87,7 @@ class Decoder(eqx.Module):
         
         # T, Tc: must be in reasonable range ~200-500K
         # Use 200 + 300*sigmoid to get range [200, 500]
-        T = 250.0 + 150.0 * jax.nn.sigmoid(state_raw[2])
-        Tc = 250.0 + 150.0 * jax.nn.sigmoid(state_raw[3])
+        T = 270.0 + 110.0 * jax.nn.sigmoid(state_raw[2])
+        Tc = 260.0 + 90.0 * jax.nn.sigmoid(state_raw[3])
         
         return jnp.array([Ca, Cb, T, Tc])
