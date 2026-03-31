@@ -17,7 +17,7 @@ def apply_decoder_constraints(
     Each constraint dict has the form::
 
         {"type": "softplus",     "indices": [0, 1], "bias": 0.5}
-        {"type": "sigmoid_range","indices": [2, 3], "low": 250.0, "high": 400.0}
+        {"type": "sigmoid_range","indices": [2, 3], "low": 0.0, "high": 1.0}
         {"type": "none",         "indices": [4]}
 
     This function is JAX-traceable and works correctly under ``jit`` and
@@ -97,7 +97,7 @@ class Decoder(eqx.Module):
 
         self.constraints = constraints if constraints is not None else []
         self.control_scale = jnp.array(
-            control_scale if control_scale is not None else [0.01] * control_dim
+            control_scale if control_scale is not None else [1.0] * control_dim
         )
         self.param_scale = param_scale
 

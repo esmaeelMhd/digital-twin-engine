@@ -29,66 +29,49 @@ class DigitalTwin(eqx.Module):
         self.latent_sde = latent_sde
 
     @classmethod
-    def from_config(cls, config: dict, key: PRNGKeyArray, system_spec=None) -> "DigitalTwin":
+    def from_config(cls, config: dict, key: PRNGKeyArray, system_spec) -> "DigitalTwin":
         """Create model from config dict.
 
         Args:
             config: Training configuration dictionary.
             key: PRNG key.
-            system_spec: Optional :class:`~dte.simulators.base.SystemSpec`.
-                When provided, normalization arrays and decoder constraints are
-                taken from the spec rather than falling back to defaults.
+            system_spec: :class:`~dte.simulators.base.SystemSpec` providing
+                dimensions, normalization arrays, and decoder constraints.
         """
         key_enc, key_dec, key_sde = jax.random.split(key, 3)
 
         model_config = config["model"]
 
-        # Dimensions: system_spec takes priority over config file values
-        if system_spec is not None:
-            state_dim = system_spec.state_dim
-            param_dim = system_spec.param_dim
-            control_dim = system_spec.control_dim
-            disturbance_dim = system_spec.disturbance_dim
-        else:
-            state_dim = model_config.get("state_dim", 4)
-            param_dim = model_config.get("param_dim", 6)
-            control_dim = model_config.get("control_dim", 2)
-            disturbance_dim = model_config.get("disturbance_dim", 2)
+        if system_spec is None:
+            raise ValueError("DigitalTwin.from_config requires a system_spec.")
+
+        state_dim = system_spec.state_dim
+        param_dim = system_spec.param_dim
+        control_dim = system_spec.control_dim
+        disturbance_dim = system_spec.disturbance_dim
         latent_dim = model_config["latent_dim"]
         hidden_dim = model_config["hidden_dim"]
         n_layers = model_config["n_layers"]
 
-        # Pull normalization and constraints from system_spec when available
-        if system_spec is not None:
-            norm = system_spec.normalization
-            state_center = norm.state_center
-            state_scale = norm.state_scale
-            control_center = norm.control_center
-            control_scale = norm.control_scale
-            disturbance_center = norm.disturbance_center
-            disturbance_scale = norm.disturbance_scale
-            param_scale = norm.param_scale
-            decoder_constraints = [
-                {
-                    "type": c.type,
-                    "indices": c.indices,
-                    "bias": c.bias,
-                    "low": c.low,
-                    "high": c.high,
-                }
-                for c in system_spec.decoder_constraints
-            ]
-            nominal_disturbance = system_spec.default_nominal_disturbance
-        else:
-            state_center = None
-            state_scale = None
-            control_center = None
-            control_scale = None
-            disturbance_center = None
-            disturbance_scale = None
-            param_scale = 0.1
-            decoder_constraints = None
-            nominal_disturbance = None
+        norm = system_spec.normalization
+        state_center = norm.state_center
+        state_scale = norm.state_scale
+        control_center = norm.control_center
+        control_scale = norm.control_scale
+        disturbance_center = norm.disturbance_center
+        disturbance_scale = norm.disturbance_scale
+        param_scale = norm.param_scale
+        decoder_constraints = [
+            {
+                "type": c.type,
+                "indices": c.indices,
+                "bias": c.bias,
+                "low": c.low,
+                "high": c.high,
+            }
+            for c in system_spec.decoder_constraints
+        ]
+        nominal_disturbance = system_spec.default_nominal_disturbance
 
         encoder = Encoder(
             state_dim=state_dim,
@@ -113,7 +96,7 @@ class DigitalTwin(eqx.Module):
             hidden_dim=hidden_dim,
             n_layers=n_layers,
             constraints=decoder_constraints,
-            control_scale=[0.01] * control_dim if control_scale is None else [s * 0.01 / max(s, 1e-8) for s in control_scale],
+            control_scale=control_scale,
             param_scale=param_scale,
             key=key_dec,
         )
@@ -233,8 +216,10 @@ class DigitalTwin(eqx.Module):
         print(f"Model saved to {path}")
 
     @classmethod
-    def load(cls, path: str, config: dict, system_spec=None) -> "DigitalTwin":
+    def load(cls, path: str, config: dict, system_spec) -> "DigitalTwin":
         """Load model using equinox deserialization."""
+        if system_spec is None:
+            raise ValueError("DigitalTwin.load requires a system_spec.")
         key = jax.random.PRNGKey(0)
         template = cls.from_config(config, key, system_spec=system_spec)
 

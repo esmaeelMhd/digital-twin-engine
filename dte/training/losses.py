@@ -60,8 +60,13 @@ class LossComputer:
 
         # Per-state loss weights
         if state_names is None:
+            state_mean = normalization_stats.get("state_mean")
+            if state_mean is None:
+                raise ValueError(
+                    "normalization_stats must include state_mean when state_names are omitted."
+                )
             # Fall back to generic state_0, state_1, ... labels
-            n_states = normalization_stats.get("state_mean", jnp.zeros(4)).shape[-1]
+            n_states = state_mean.shape[-1]
             state_names = [f"state_{i}" for i in range(n_states)]
         self.state_names = state_names
 

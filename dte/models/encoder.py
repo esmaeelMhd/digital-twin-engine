@@ -34,7 +34,7 @@ class Encoder(eqx.Module):
         latent_dim: int = 16,
         hidden_dim: int = 128,
         n_layers: int = 3,
-        # Normalization -- defaults match original CSTR values
+        # Neutral defaults; real system scaling should come from SystemSpec.
         state_center: list | None = None,
         state_scale: list | None = None,
         control_center: list | None = None,
