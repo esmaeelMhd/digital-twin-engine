@@ -916,13 +916,17 @@ JAX_PITFALLS = """
 ARCHITECTURE_GUARDRAILS = """
 ## Architecture guardrails:
 - Preserve the generic SystemSpec / ProcessSimulator / PhysicsLoss architecture.
-- For files under dte/, keep changes system-agnostic: no branches or string literals for specific systems.
-- Do NOT hardcode numeric decoder bounds, normalization constants, default physical states, or fixed dimensions in dte/.
+- In dte/models and dte/training, keep changes system-agnostic: no branches or string literals for specific systems.
+- Do NOT hardcode config-like numeric values in the generic core: decoder bounds, normalization constants, default physical states, or fixed dimensions.
 - If a numeric bound, scale, or constraint matters, put it in configs or thread it through SystemSpec/config instead.
-- Generic algorithmic changes that apply across systems are encouraged.
+- Generic algorithmic changes that apply across systems are encouraged, including ordinary numeric tuning that is not a baked-in system constraint.
 """
 
-_ARCH_GUARD_LINE_KEYWORDS = (
+_GENERIC_CORE_PREFIXES = (
+    "dte/models/",
+    "dte/training/",
+)
+_CONFIG_LIKE_NAMES = (
     "state_center",
     "state_scale",
     "control_center",
@@ -930,12 +934,11 @@ _ARCH_GUARD_LINE_KEYWORDS = (
     "disturbance_center",
     "disturbance_scale",
     "decoder_constraints",
-    "constraint",
-    "constraints",
-    "sigmoid_range",
-    "softplus",
     "default_initial_state",
     "default_nominal_disturbance",
+    "nominal_disturbance",
+)
+_DIMENSION_NAMES = (
     "state_dim",
     "control_dim",
     "disturbance_dim",
@@ -943,8 +946,19 @@ _ARCH_GUARD_LINE_KEYWORDS = (
 )
 _SYSTEM_NAME_LITERAL_RE = re.compile(r"""["'](?:cstr|heat_exchanger)["']""")
 _NUMERIC_LITERAL_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:e[+-]?\d+)?(?![\w.])", re.IGNORECASE)
-_SHAPE_LITERAL_RE = re.compile(r"\bjnp\.(?:zeros|ones|full)\(\s*(\d+)")
 _ALLOWED_GENERIC_LITERALS = {"0", "1", "0.0", "1.0"}
+_CONFIG_LIKE_ASSIGNMENT_RE = re.compile(
+    rf"""\b(?:{"|".join(_CONFIG_LIKE_NAMES)})\s*=\s*(?:jnp\.)?(?:array\s*\(|zeros\s*\(|ones\s*\(|full\s*\(|\[)"""
+)
+_DIMENSION_ASSIGNMENT_RE = re.compile(
+    rf"""\b(?:{"|".join(_DIMENSION_NAMES)})\s*=\s*\d+"""
+)
+_DECODER_CONSTRAINT_LITERAL_RE = re.compile(
+    r"""(?:"type"\s*:\s*"softplus"|"""
+    r""""type"\s*:\s*"sigmoid_range"|"""
+    r"""\b(?:low|high|bias)\s*=\s*[-+]?\d|"""
+    r""""(?:low|high|bias)"\s*:\s*[-+]?\d)"""
+)
 
 
 def _iter_added_lines(original_source: str, modified_source: str):
@@ -962,12 +976,12 @@ def validate_architecture_guardrails(
 ) -> str | None:
     """Reject proposals that reintroduce hardcoded system assumptions into dte/."""
 
-    if not filepath.startswith("dte/"):
+    if not filepath.startswith(_GENERIC_CORE_PREFIXES):
         return None
 
     for line in _iter_added_lines(original_source, modified_source):
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped.startswith("#"):
             continue
 
         if _SYSTEM_NAME_LITERAL_RE.search(line):
@@ -976,7 +990,11 @@ def validate_architecture_guardrails(
                 "do not introduce system-specific names or branches."
             )
 
-        if any(keyword in stripped for keyword in _ARCH_GUARD_LINE_KEYWORDS):
+        if (
+            _CONFIG_LIKE_ASSIGNMENT_RE.search(line)
+            or _DIMENSION_ASSIGNMENT_RE.search(line)
+            or _DECODER_CONSTRAINT_LITERAL_RE.search(line)
+        ):
             literals = [
                 match.group(0)
                 for match in _NUMERIC_LITERAL_RE.finditer(line)
@@ -984,17 +1002,11 @@ def validate_architecture_guardrails(
             ]
             if literals:
                 return (
-                    "Architecture guardrail: avoid hardcoded numeric constraints, "
-                    "normalization constants, or fixed dimensions in dte/; move "
-                    "them to config/SystemSpec instead."
+                    "Architecture guardrail: avoid hardcoded config-like numeric "
+                    "constraints in dte/models or dte/training; move bounds, "
+                    "normalization values, defaults, and fixed dims to "
+                    "config/SystemSpec instead."
                 )
-
-        shape_match = _SHAPE_LITERAL_RE.search(line)
-        if shape_match and shape_match.group(1) not in {"0", "1"}:
-            return (
-                "Architecture guardrail: avoid hardcoded array sizes in dte/ core "
-                "code; derive them from SystemSpec/config."
-            )
 
     return None
 
@@ -1107,7 +1119,7 @@ physics-informed latent Neural SDE (digital twin) trained on process system data
 {files_list}
 - Do NOT modify the experiment harness: scripts/autoresearch.py, dte/autoresearch/*, program.md
 - One idea per experiment. Keep changes minimal and surgical.
-- Preserve the generic architecture. In dte/, do not add system-specific branches or hardcoded numeric constraints; move tunable values to config/SystemSpec.
+- Preserve the generic architecture. In dte/models and dte/training, do not add system-specific branches or bake config-like numbers into code; generic numeric algorithmic tweaks are fine, but bounds/scales/defaults/dims should live in config/SystemSpec.
 - Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
 {JAX_PITFALLS}{ARCHITECTURE_GUARDRAILS}
 ## Current best_val_loss: {best_loss:.6f}

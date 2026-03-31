@@ -60,7 +60,8 @@ The harness will:
 
 When modifying `dte/` code during autoresearch:
 - keep the architecture generic across systems
-- do not hardcode system-specific constraints, normalization constants, or fixed dimensions
+- in `dte/models` and `dte/training`, do not hardcode config-like constraints, normalization constants, default states, or fixed dimensions
+- ordinary generic numeric algorithmic tweaks are okay
 - prefer config-driven or `SystemSpec`-driven values for numeric bounds/scales
 
 ## What You Should Not Modify During Experiments

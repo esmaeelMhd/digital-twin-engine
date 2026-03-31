@@ -177,8 +177,9 @@ Do **not** modify the measurement harness:
 Architecture invariants:
 - Preserve the generic `SystemSpec` / `ProcessSimulator` / `PhysicsLoss` flow.
 - In `dte/`, do not introduce system-specific branches or string literals like `cstr` / `heat_exchanger`.
-- In `dte/`, do not hardcode numeric decoder bounds, normalization constants, default physical states, or fixed dimensions.
+- In `dte/models` and `dte/training`, do not hardcode config-like numeric values such as decoder bounds, normalization constants, default physical states, or fixed dimensions.
 - If a numeric constraint or scale is needed, put it in YAML / `SystemSpec` / config-driven plumbing instead.
+- Ordinary generic numeric algorithmic changes are fine if they are not baked-in system constraints.
 
 ---
 
