@@ -411,12 +411,11 @@ class LatentSDE(eqx.Module):
         
         # Set up ODE (no diffusion)
         term = diffrax.ODETerm(drift_fn)
-        solver = diffrax.Tsit5()  # Higher-order ODE solver
+        solver = diffrax.Heun()  # Fixed-step ODE solver
         
         # Solve
-        dt0 = (ts[1] - ts[0]) / 2
+        dt0 = ts[1] - ts[0]
         saveat = diffrax.SaveAt(ts=ts)
-        stepsize_controller = diffrax.PIDController(rtol=1e-3, atol=1e-5)
         solution = diffrax.diffeqsolve(
             term,
             solver,
@@ -425,7 +424,6 @@ class LatentSDE(eqx.Module):
             dt0=dt0,
             y0=z0,
             saveat=saveat,
-            stepsize_controller=stepsize_controller,
             max_steps=4096,
         )
         
