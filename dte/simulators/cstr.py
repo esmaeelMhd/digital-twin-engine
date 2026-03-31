@@ -8,12 +8,14 @@ Implements a continuous stirred-tank reactor with:
 """
 
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 import diffrax
+
+from dte.simulators.base import ProcessSimulator, SystemSpec
 
 
 @dataclass(frozen=True)
@@ -32,7 +34,7 @@ class CSTRParams:
     Fc: float = 15.0  # Coolant flow rate (L/min)
 
 
-class CSTRSimulator:
+class CSTRSimulator(ProcessSimulator):
     """Fully differentiable non-isothermal CSTR simulator."""
 
     def __init__(self, params: CSTRParams):
@@ -42,6 +44,15 @@ class CSTRSimulator:
             params: CSTR parameters
         """
         self.params = params
+        self._spec: Optional[SystemSpec] = None
+
+    @property
+    def spec(self) -> SystemSpec:
+        if self._spec is None:
+            from dte.simulators.registry import _build_cstr_spec
+
+            self._spec = _build_cstr_spec({})
+        return self._spec
 
     def _arrhenius(self, T: Float[Array, ""]) -> Float[Array, ""]:
         """Compute reaction rate constant using Arrhenius equation.

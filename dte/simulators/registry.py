@@ -1,6 +1,6 @@
 """System registry: maps system names to SystemSpec and ProcessSimulator instances."""
 
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from dte.simulators.base import (
     DecoderConstraint,
@@ -144,10 +144,31 @@ def _build_heat_exchanger_spec(system_config: dict) -> SystemSpec:
     )
 
 
+def _build_cstr_simulator(system_config: dict) -> ProcessSimulator:
+    from dte.simulators.cstr import CSTRParams, CSTRSimulator
+
+    cstr_cfg = system_config.get("cstr", {})
+    params = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
+    return CSTRSimulator(params)
+
+
+def _build_heat_exchanger_simulator(system_config: dict) -> ProcessSimulator:
+    from dte.simulators.heat_exchanger import HeatExchangerParams, HeatExchangerSimulator
+
+    hx_cfg = system_config.get("heat_exchanger", {})
+    params = HeatExchangerParams(**{k: float(v) for k, v in hx_cfg.items()})
+    return HeatExchangerSimulator(params)
+
+
 # Registry mapping system name -> builder function
 _SPEC_BUILDERS = {
     "cstr": _build_cstr_spec,
     "heat_exchanger": _build_heat_exchanger_spec,
+}
+
+_SIMULATOR_BUILDERS: Dict[str, Callable[[dict], ProcessSimulator]] = {
+    "cstr": _build_cstr_simulator,
+    "heat_exchanger": _build_heat_exchanger_simulator,
 }
 
 
@@ -168,24 +189,13 @@ def get_system_spec(system_config: dict) -> SystemSpec:
 
 def get_simulator(system_name: str, system_config: dict) -> ProcessSimulator:
     """Instantiate and return the ProcessSimulator for ``system_name``."""
-    if system_name == "cstr":
-        from dte.simulators.cstr import CSTRSimulator, CSTRParams
-
-        cstr_cfg = system_config.get("cstr", {})
-        params = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
-        return CSTRSimulator(params)
-
-    if system_name == "heat_exchanger":
-        from dte.simulators.heat_exchanger import HeatExchangerSimulator, HeatExchangerParams
-
-        hx_cfg = system_config.get("heat_exchanger", {})
-        params = HeatExchangerParams(**{k: float(v) for k, v in hx_cfg.items()})
-        return HeatExchangerSimulator(params)
-
-    raise ValueError(
-        f"Unknown system '{system_name}'. "
-        f"Available systems: {list(_SPEC_BUILDERS.keys())}"
-    )
+    builder = _SIMULATOR_BUILDERS.get(system_name)
+    if builder is None:
+        raise ValueError(
+            f"Unknown system '{system_name}'. "
+            f"Available systems: {list(_SPEC_BUILDERS.keys())}"
+        )
+    return builder(system_config)
 
 
 def list_systems() -> list:
