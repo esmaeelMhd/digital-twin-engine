@@ -58,6 +58,11 @@ The harness will:
 - `dte/training/*.py`
 - Other model/training code that directly affects the learned digital twin
 
+When modifying `dte/` code during autoresearch:
+- keep the architecture generic across systems
+- do not hardcode system-specific constraints, normalization constants, or fixed dimensions
+- prefer config-driven or `SystemSpec`-driven values for numeric bounds/scales
+
 ## What You Should Not Modify During Experiments
 
 - `scripts/autoresearch.py`

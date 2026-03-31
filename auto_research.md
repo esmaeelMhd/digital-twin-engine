@@ -174,6 +174,12 @@ Do **not** modify the measurement harness:
 - `program.md`
 - this file, unless the human explicitly asks
 
+Architecture invariants:
+- Preserve the generic `SystemSpec` / `ProcessSimulator` / `PhysicsLoss` flow.
+- In `dte/`, do not introduce system-specific branches or string literals like `cstr` / `heat_exchanger`.
+- In `dte/`, do not hardcode numeric decoder bounds, normalization constants, default physical states, or fixed dimensions.
+- If a numeric constraint or scale is needed, put it in YAML / `SystemSpec` / config-driven plumbing instead.
+
 ---
 
 ## Physics and Losses

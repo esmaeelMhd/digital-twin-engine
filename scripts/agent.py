@@ -31,6 +31,7 @@ when present.
 from __future__ import annotations
 
 import ast
+import difflib
 import json
 import os
 import re
@@ -912,6 +913,91 @@ JAX_PITFALLS = """
 - The system is chosen via --system_config (SystemSpec + ProcessSimulator registry), not hardcoded.
 """
 
+ARCHITECTURE_GUARDRAILS = """
+## Architecture guardrails:
+- Preserve the generic SystemSpec / ProcessSimulator / PhysicsLoss architecture.
+- For files under dte/, keep changes system-agnostic: no branches or string literals for specific systems.
+- Do NOT hardcode numeric decoder bounds, normalization constants, default physical states, or fixed dimensions in dte/.
+- If a numeric bound, scale, or constraint matters, put it in configs or thread it through SystemSpec/config instead.
+- Generic algorithmic changes that apply across systems are encouraged.
+"""
+
+_ARCH_GUARD_LINE_KEYWORDS = (
+    "state_center",
+    "state_scale",
+    "control_center",
+    "control_scale",
+    "disturbance_center",
+    "disturbance_scale",
+    "decoder_constraints",
+    "constraint",
+    "constraints",
+    "sigmoid_range",
+    "softplus",
+    "default_initial_state",
+    "default_nominal_disturbance",
+    "state_dim",
+    "control_dim",
+    "disturbance_dim",
+    "param_dim",
+)
+_SYSTEM_NAME_LITERAL_RE = re.compile(r"""["'](?:cstr|heat_exchanger)["']""")
+_NUMERIC_LITERAL_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:e[+-]?\d+)?(?![\w.])", re.IGNORECASE)
+_SHAPE_LITERAL_RE = re.compile(r"\bjnp\.(?:zeros|ones|full)\(\s*(\d+)")
+_ALLOWED_GENERIC_LITERALS = {"0", "1", "0.0", "1.0"}
+
+
+def _iter_added_lines(original_source: str, modified_source: str):
+    """Yield added lines from a proposed patch."""
+
+    for line in difflib.ndiff(original_source.splitlines(), modified_source.splitlines()):
+        if line.startswith("+ "):
+            yield line[2:]
+
+
+def validate_architecture_guardrails(
+    filepath: str,
+    original_source: str,
+    modified_source: str,
+) -> str | None:
+    """Reject proposals that reintroduce hardcoded system assumptions into dte/."""
+
+    if not filepath.startswith("dte/"):
+        return None
+
+    for line in _iter_added_lines(original_source, modified_source):
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if _SYSTEM_NAME_LITERAL_RE.search(line):
+            return (
+                "Architecture guardrail: keep dte/ system-agnostic; "
+                "do not introduce system-specific names or branches."
+            )
+
+        if any(keyword in stripped for keyword in _ARCH_GUARD_LINE_KEYWORDS):
+            literals = [
+                match.group(0)
+                for match in _NUMERIC_LITERAL_RE.finditer(line)
+                if match.group(0).lower() not in _ALLOWED_GENERIC_LITERALS
+            ]
+            if literals:
+                return (
+                    "Architecture guardrail: avoid hardcoded numeric constraints, "
+                    "normalization constants, or fixed dimensions in dte/; move "
+                    "them to config/SystemSpec instead."
+                )
+
+        shape_match = _SHAPE_LITERAL_RE.search(line)
+        if shape_match and shape_match.group(1) not in {"0", "1"}:
+            return (
+                "Architecture guardrail: avoid hardcoded array sizes in dte/ core "
+                "code; derive them from SystemSpec/config."
+            )
+
+    return None
+
 
 def _categorize(desc: str) -> str:
     d = desc.lower()
@@ -1021,8 +1107,9 @@ physics-informed latent Neural SDE (digital twin) trained on process system data
 {files_list}
 - Do NOT modify the experiment harness: scripts/autoresearch.py, dte/autoresearch/*, program.md
 - One idea per experiment. Keep changes minimal and surgical.
+- Preserve the generic architecture. In dte/, do not add system-specific branches or hardcoded numeric constraints; move tunable values to config/SystemSpec.
 - Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
-{JAX_PITFALLS}
+{JAX_PITFALLS}{ARCHITECTURE_GUARDRAILS}
 ## Current best_val_loss: {best_loss:.6f}
 {streak_str}{history_section}{KNOWN_GOOD}{context_section}{recent_runs_section}
 ## Currently showing: {file_path}
@@ -1205,7 +1292,7 @@ def apply_changes(source: str, changes: list[dict]) -> str | None:
     return modified
 
 
-def validate_file(filepath: str, source: str) -> str | None:
+def validate_file(filepath: str, source: str, original_source: str | None = None) -> str | None:
     """Return error string or None if valid."""
     if filepath.endswith(".py"):
         try:
@@ -1217,6 +1304,10 @@ def validate_file(filepath: str, source: str) -> str | None:
             yaml.safe_load(source)
         except yaml.YAMLError as e:
             return f"YAMLError: {e}"
+    if original_source is not None:
+        guardrail_error = validate_architecture_guardrails(filepath, original_source, source)
+        if guardrail_error:
+            return guardrail_error
     return None
 
 
@@ -1712,7 +1803,7 @@ def _run_text_mode(
             history = get_results_history()
             continue
 
-        err = validate_file(proposed_file, modified)
+        err = validate_file(proposed_file, modified, original_source=original)
         if err:
             print(f"  Validation failed: {err}. Skipping.")
             git_revert_file(proposed_file)
@@ -2176,7 +2267,7 @@ def main() -> None:
                     refresh()
                     continue
 
-                validate_err = validate_file(proposed_file, modified)
+                validate_err = validate_file(proposed_file, modified, original_source=original)
                 if validate_err:
                     add_log(f"Validation failed: {validate_err}")
                     log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{validate_err}]")
