@@ -14,14 +14,53 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
+DEFAULT_AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
 LOG_FILE = PROJECT_ROOT / "agent.log"
 
 
-def _load_config() -> dict:
+def _list_config_options() -> list[Path]:
+    config_dir = PROJECT_ROOT / "configs"
+    candidates = sorted(config_dir.glob("autoresearch*.yaml"))
+    if DEFAULT_AUTORESEARCH_CONFIG not in candidates and DEFAULT_AUTORESEARCH_CONFIG.exists():
+        candidates.insert(0, DEFAULT_AUTORESEARCH_CONFIG)
+    return candidates
+
+
+def _resolve_config_path() -> Path:
+    state = _read_json_file(STATE_FILE) or {}
+
+    requested = st.query_params.get("config") or os.environ.get("AUTORESEARCH_DASHBOARD_CONFIG")
+    if requested:
+        candidate = Path(str(requested))
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        if candidate.exists():
+            return candidate
+
+    state_config = state.get("config_path")
+    if state_config:
+        candidate = Path(str(state_config))
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        if candidate.exists():
+            return candidate
+
+    config_options = _list_config_options()
+    for candidate in reversed(config_options):
+        try:
+            config = _load_config(candidate)
+            if _results_path(config).exists():
+                return candidate
+        except Exception:
+            continue
+
+    return DEFAULT_AUTORESEARCH_CONFIG
+
+
+def _load_config(config_path: Path) -> dict:
     try:
-        with AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+        with config_path.open("r", encoding="utf-8") as handle:
             return yaml.safe_load(handle) or {}
     except Exception:
         return {}
@@ -228,7 +267,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-config = _load_config()
+config_path = _resolve_config_path()
+config = _load_config(config_path)
 workspace_dir = _workspace_dir(config)
 results = _load_results(config)
 baseline_metadata = _read_json_file(_baseline_metadata_path(config))
@@ -242,8 +282,21 @@ st.caption("Web dashboard for the autonomous experiment loop.")
 
 with st.sidebar:
     st.header("Monitor")
+    config_options = _list_config_options()
+    option_labels = [str(path.relative_to(PROJECT_ROOT)) for path in config_options]
+    selected_label = st.selectbox(
+        "Autoresearch config",
+        option_labels,
+        index=option_labels.index(str(config_path.relative_to(PROJECT_ROOT)))
+        if str(config_path.relative_to(PROJECT_ROOT)) in option_labels else 0,
+    )
+    selected_config_path = PROJECT_ROOT / selected_label
+    if selected_config_path != config_path:
+        st.query_params["config"] = selected_label
+        st.rerun()
+
     auto_refresh = st.toggle("Auto-refresh", value=True)
-    refresh_seconds = st.slider("Refresh every (seconds)", min_value=2, max_value=30, value=5)
+    refresh_seconds = st.slider("Refresh every (seconds)", min_value=2, max_value=30, value=30)
     st.divider()
     st.subheader("Launch URLs")
     st.code(
@@ -296,6 +349,7 @@ keep_col.metric("Keeps", sum(1 for row in results if row["status"] == "keep"))
 crash_col.metric("Crashes", sum(1 for row in results if row["status"] == "crash"))
 
 st.caption(f"Workspace: `{workspace_dir}`")
+st.caption(f"Config: `{config_path.relative_to(PROJECT_ROOT)}`")
 st.caption(f"Results ledger: `{_results_path(config)}`")
 
 left, right = st.columns([3, 2])
