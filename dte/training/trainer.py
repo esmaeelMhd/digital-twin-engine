@@ -127,28 +127,44 @@ class Trainer:
         # Get loss weights (with KL annealing)
         weights = self.loss_computer.get_loss_weights(self.step)
         
+        # Determine whether to use the stochastic SDE path this step.
+        sde_cfg = self.config.get("sde_training", {})
+        sde_enabled = sde_cfg.get("enabled", False)
+        sde_warmup_steps = sde_cfg.get("warmup_steps", 0)
+        sde_active = sde_enabled and (self.step >= sde_warmup_steps)
+
         # Process each sequence in batch
         keys = jax.random.split(key, batch_size)
-        
+
         def process_one(idx, k):
             # Get initial state
             initial_state = states[idx, 0]
-            
+
             # Encode initial state
             key_enc, key_sde = jax.random.split(k)
             z0, z_mean, z_logvar = model.encode(
                 initial_state, params_batch[idx], controls[idx, 0], key_enc
             )
-            
-            # Roll out latent SDE
-            z_traj = model.latent_sde.mean_trajectory(
-                ts[idx],
-                z_mean,
-                controls[idx],
-                params_batch[idx],
-                disturbances=disturbances[idx],
-            )
-            
+
+            # Roll out latent SDE -- stochastic or deterministic
+            if sde_active:
+                z_traj = model.latent_sde(
+                    ts[idx],
+                    z0,
+                    controls[idx],
+                    params_batch[idx],
+                    key_sde,
+                    disturbances=disturbances[idx],
+                )
+            else:
+                z_traj = model.latent_sde.mean_trajectory(
+                    ts[idx],
+                    z_mean,
+                    controls[idx],
+                    params_batch[idx],
+                    disturbances=disturbances[idx],
+                )
+
             # Decode all timesteps
             decode_fn = jax.vmap(
                 lambda z, u: model.decode(z, params_batch[idx], u),
@@ -217,46 +233,66 @@ class Trainer:
         )
         loss_traj = self.loss_computer.trajectory_loss(pred_states_norm, true_states_norm)
         loss_kl = self.loss_computer.kl_divergence_loss(z_means, z_logvars)
-        
+
+        # SDE KL: penalise diffusion magnitudes when stochastic training is active.
+        sde_cfg = self.config.get("sde_training", {})
+        sde_kl_weight = float(sde_cfg.get("sde_kl_weight", 0.0))
+        if sde_active and sde_kl_weight > 0:
+            # Compute diffusion magnitudes over the batch using vmap.
+            def _diffusion_at_traj(idx, k):
+                _, z_mean_i, _ = model.encode(
+                    states[idx, 0], params_batch[idx], controls[idx, 0], k
+                )
+                # Mean trajectory: shape (seq_len, latent_dim)
+                z_traj_i = model.latent_sde.mean_trajectory(
+                    ts[idx], z_mean_i, controls[idx], params_batch[idx],
+                    disturbances=disturbances[idx],
+                )
+                sigma_fn = jax.vmap(
+                    lambda z, u, d: model.latent_sde.diffusion(z, u, d, params_batch[idx]),
+                    in_axes=(0, 0, 0)
+                )
+                return sigma_fn(z_traj_i, controls[idx], disturbances[idx])
+
+            keys_diff = jax.random.split(key, batch_size)
+            diff_values = jax.vmap(_diffusion_at_traj, in_axes=(0, 0))(
+                jnp.arange(batch_size), keys_diff
+            )
+            loss_sde_kl = self.loss_computer.sde_kl_loss(diff_values, dt)
+        else:
+            loss_sde_kl = jnp.array(0.0)
+
         # TrajectoryDataset batches are already stored in physical units.
         pred_states_phys = pred_states_batch
         controls_phys = controls
         disturbances_phys = disturbances
-        
-        # Compute physics losses
+
+        # Compute physics losses via generic PhysicsLoss interface
         dt = ts[0, 1] - ts[0, 0]  # Keep as JAX array, don't convert to float
-        loss_mass = self.loss_computer.physics_mass_loss(
+        total_physics_loss, physics_residuals = self.loss_computer.physics_losses(
             pred_states_phys, controls_phys, disturbances_phys, dt
         )
-        loss_species_mass = self.loss_computer.physics_species_mass_loss(
-            pred_states_phys, controls_phys, disturbances_phys, dt
-        )
-        loss_energy = self.loss_computer.physics_energy_loss(
-            pred_states_phys, controls_phys, disturbances_phys, dt
-        )
-        
+
         # Total loss
         total_loss = (
             weights["reconstruction"] * loss_recon
             + weights["kl"] * loss_kl
             + weights["one_step"] * loss_one_step
             + weights["trajectory"] * loss_traj
-            + weights["mass_balance"] * loss_mass
-            + weights["species_mass_balance"] * loss_species_mass
-            + weights["energy_balance"] * loss_energy
+            + sde_kl_weight * loss_sde_kl
+            + total_physics_loss
         )
-        
-        # Keep as JAX arrays, don't convert to Python floats inside JIT
+
+        # Build loss dict (keep as JAX arrays inside JIT)
         loss_dict = {
             "total": total_loss,
             "reconstruction": loss_recon,
             "kl": loss_kl,
+            "sde_kl": loss_sde_kl,
             "one_step": loss_one_step,
             "trajectory": loss_traj,
-            "mass_balance": loss_mass,
-            "species_mass_balance": loss_species_mass,
-            "energy_balance": loss_energy,
         }
+        loss_dict.update(physics_residuals)
         
         return total_loss, loss_dict
     
@@ -308,6 +344,7 @@ class Trainer:
         self,
         key: PRNGKeyArray,
         deadline: Optional[float] = None,
+        epoch: int = 0,
     ) -> tuple[Optional[Dict[str, float]], bool, Optional[str]]:
         """Train for one epoch.
         
@@ -328,18 +365,44 @@ class Trainer:
             n_batches = full_n_batches
         else:
             n_batches = max(1, min(full_n_batches, int(max_batches_per_epoch)))
-        
-        epoch_losses = {
+
+        # Curriculum: linearly ramp seq_len from initial to final over warmup_epochs
+        curr_cfg = self.config.get("curriculum", {})
+        curr_enabled = curr_cfg.get("enabled", False)
+        base_seq_len = self.config["training"]["seq_len"]
+        if curr_enabled:
+            init_seq = int(curr_cfg.get("initial_seq_len", 5))
+            final_seq = int(curr_cfg.get("final_seq_len", base_seq_len))
+            warmup_epochs = int(curr_cfg.get("warmup_epochs", 20))
+            frac = min(1.0, epoch / max(1, warmup_epochs))
+            effective_seq_len = int(init_seq + frac * (final_seq - init_seq))
+        else:
+            effective_seq_len = base_seq_len
+
+        # Teacher forcing annealing: ramp one_step weight from initial to final ratio
+        tf_cfg = self.config.get("teacher_forcing", {})
+        tf_enabled = tf_cfg.get("initial_ratio", 1.0) != tf_cfg.get("final_ratio", 0.0)
+        if tf_enabled:
+            tf_init = float(tf_cfg.get("initial_ratio", 1.0))
+            tf_final = float(tf_cfg.get("final_ratio", 0.0))
+            tf_epochs = int(tf_cfg.get("anneal_epochs", 30))
+            tf_frac = min(1.0, epoch / max(1, tf_epochs))
+            tf_ratio = tf_init + tf_frac * (tf_final - tf_init)
+            # Override the one_step weight in the loss computer for this epoch
+            original_one_step_weight = self.loss_computer.w_one_step
+            self.loss_computer.w_one_step = original_one_step_weight * tf_ratio
+        else:
+            original_one_step_weight = None
+
+        # Base loss keys; physics residuals are added dynamically below
+        epoch_losses: Dict[str, list] = {
             "total": [],
             "reconstruction": [],
             "kl": [],
             "one_step": [],
             "trajectory": [],
-            "mass_balance": [],
-            "species_mass_balance": [],
-            "energy_balance": [],
         }
-        
+
         pbar = tqdm(range(n_batches), desc="Training")
         timed_out = False
         for i in pbar:
@@ -347,10 +410,12 @@ class Trainer:
                 timed_out = True
                 break
 
-            # Sample batch
+            # Sample batch (with curriculum seq_len)
             key, subkey = jax.random.split(key)
-            batch = self.train_dataset.sample_batch(subkey, batch_size)
-            
+            batch = self.train_dataset.sample_batch(
+                subkey, batch_size, seq_len=effective_seq_len
+            )
+
             # Training step
             key, subkey = jax.random.split(key)
             self.model, self.opt_state, loss_dict = self.train_step(
@@ -370,6 +435,8 @@ class Trainer:
                 )
                 return None, timed_out, failure_reason
             for k, v in loss_dict_float.items():
+                if k not in epoch_losses:
+                    epoch_losses[k] = []
                 epoch_losses[k].append(v)
             
             self.step += 1
@@ -381,6 +448,10 @@ class Trainer:
                 timed_out = True
                 break
         
+        # Restore teacher-forcing weight to original value
+        if original_one_step_weight is not None:
+            self.loss_computer.w_one_step = original_one_step_weight
+
         if not epoch_losses["total"]:
             raise RuntimeError(
                 "No training batches were completed before the time budget expired."
@@ -388,7 +459,7 @@ class Trainer:
 
         # Compute mean losses
         mean_losses = {k: float(jnp.mean(jnp.array(v))) for k, v in epoch_losses.items()}
-        
+
         return mean_losses, timed_out, None
     
     def validate(
@@ -420,15 +491,12 @@ class Trainer:
         desc = "Validation" if epoch is None else f"Validation (epoch {epoch})"
         print(f"Starting {desc.lower()} across {n_batches} batch(es)...")
         
-        val_losses = {
+        val_losses: Dict[str, list] = {
             "total": [],
             "reconstruction": [],
             "kl": [],
             "one_step": [],
             "trajectory": [],
-            "mass_balance": [],
-            "species_mass_balance": [],
-            "energy_balance": [],
         }
 
         pbar = tqdm(range(n_batches), desc=desc)
@@ -436,11 +504,11 @@ class Trainer:
             # Sample batch
             key, subkey = jax.random.split(key)
             batch = self.val_dataset.sample_batch(subkey, batch_size)
-            
+
             # Compute loss (no gradients)
             key, subkey = jax.random.split(key)
             loss_dict = self.eval_step(self.model, batch, subkey)
-            
+
             # Record losses (convert to Python floats)
             loss_dict_float = {k: float(v) for k, v in loss_dict.items()}
             if _non_finite_loss_names(loss_dict_float):
@@ -454,6 +522,8 @@ class Trainer:
                 )
                 return None, failure_reason
             for k, v in loss_dict_float.items():
+                if k not in val_losses:
+                    val_losses[k] = []
                 val_losses[k].append(v)
             pbar.set_postfix({"loss": f"{loss_dict_float['total']:.4f}"})
         
@@ -508,6 +578,7 @@ class Trainer:
             train_losses, epoch_timed_out, epoch_failure = self.train_epoch(
                 subkey,
                 deadline=deadline,
+                epoch=epoch,
             )
 
             if epoch_failure is not None:

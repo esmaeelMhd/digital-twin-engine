@@ -1,4 +1,4 @@
-"""Script to generate training data for CSTR digital twin."""
+"""Script to generate training data for a process system digital twin."""
 
 import argparse
 import os
@@ -11,17 +11,19 @@ import yaml
 import jax
 import jax.numpy as jnp
 
-from dte.simulators.cstr import CSTRSimulator, CSTRParams
+from dte.simulators.registry import get_system_spec, get_simulator
 from dte.data.generation import DataGenerator
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate CSTR training data")
+    parser = argparse.ArgumentParser(description="Generate process system training data")
     parser.add_argument(
         "--config",
+        "--system_config",
         type=str,
         default="configs/cstr_default.yaml",
-        help="Path to config file"
+        dest="config",
+        help="Path to system config file (CSTR, heat exchanger, etc.)"
     )
     parser.add_argument(
         "--n_trajectories",
@@ -65,16 +67,26 @@ def main():
     # Load config
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
-    
+
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Initialize simulator with default parameters
-    params = CSTRParams(**config["cstr"])
-    simulator = CSTRSimulator(params)
-    
-    # Initialize data generator
-    generator = DataGenerator(simulator, config)
+
+    # Build system spec and simulator from registry
+    system_spec = get_system_spec(config)
+    system_name = system_spec.name
+
+    if system_name == "cstr":
+        # Use the original DataGenerator (CSTR-native, fast)
+        from dte.simulators.cstr import CSTRSimulator, CSTRParams
+        cstr_cfg = config.get("cstr", {})
+        params = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
+        simulator = CSTRSimulator(params)
+        generator = DataGenerator(simulator, config)
+    else:
+        # Generic path: use the GenericDataGenerator wrapper
+        from dte.data.generation_generic import GenericDataGenerator
+        simulator = get_simulator(system_name, config)
+        generator = GenericDataGenerator(simulator, config, system_spec)
     batch_size = (
         args.batch_size
         if args.batch_size is not None

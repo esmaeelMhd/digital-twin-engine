@@ -1,0 +1,136 @@
+version: "3.9"
+
+# Digital Twin Engine – compose stack
+#
+# Services:
+#   api        – FastAPI inference service (CPU)
+#   dashboard  – Streamlit monitoring dashboard
+#
+# Optional GPU override: add the `deploy` block to the api service
+# and switch the base image to the CUDA variant.
+#
+# Usage:
+#   docker compose up                       # start API + dashboard
+#   docker compose up api                   # start only the API
+#   docker compose --profile tools up       # also start data-gen / training
+#
+# Data persistence: mount host directories via the volumes section below.
+
+services:
+  # ------------------------------------------------------------------
+  # FastAPI inference API
+  # ------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      target: api
+    image: dte-api:latest
+    container_name: dte-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Override these via a .env file or environment variables on the host
+      - DTE_SYSTEM_CONFIG=${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml}
+      - DTE_MODEL_PATH=${DTE_MODEL_PATH:-outputs/best_model.eqx}
+      - DTE_TRAINING_CONFIG=${DTE_TRAINING_CONFIG:-configs/training_default.yaml}
+      # Uncomment to enable API key authentication:
+      # - DTE_API_KEY=${DTE_API_KEY:-changeme}
+      - JAX_PLATFORMS=cpu
+    volumes:
+      # Mount host output directory so the API can read checkpoints
+      - ./outputs:/app/outputs:ro
+      - ./configs:/app/configs:ro
+      - ./data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dte-api.rule=Host(`api.localhost`)"
+
+  # ------------------------------------------------------------------
+  # Streamlit dashboard
+  # ------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      target: train
+    image: dte-train:latest
+    container_name: dte-dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - DTE_SYSTEM_CONFIG=${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml}
+      - JAX_PLATFORMS=cpu
+      # Basic auth for Streamlit (optional – set STREAMLIT_AUTH_PASSWORD)
+      - STREAMLIT_AUTH_PASSWORD=${STREAMLIT_AUTH_PASSWORD:-}
+    volumes:
+      - ./outputs:/app/outputs:ro
+      - ./configs:/app/configs:ro
+      - ./data:/app/data:ro
+    command: >
+      streamlit run app/dashboard.py
+        --server.port=8501
+        --server.address=0.0.0.0
+        --server.headless=true
+        --browser.gatherUsageStats=false
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dte-dashboard.rule=Host(`dashboard.localhost`)"
+
+  # ------------------------------------------------------------------
+  # Training / data-generation tools  (only with --profile tools)
+  # ------------------------------------------------------------------
+  generate_data:
+    build:
+      context: .
+      target: train
+    image: dte-train:latest
+    container_name: dte-generate-data
+    profiles:
+      - tools
+    environment:
+      - JAX_PLATFORMS=cpu
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs:ro
+    command: >
+      python scripts/generate_data.py
+        --config ${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml}
+        --output_dir /app/data/cstr
+        --n_trajectories 1000
+
+  train:
+    build:
+      context: .
+      target: train
+    image: dte-train:latest
+    container_name: dte-train
+    profiles:
+      - tools
+    environment:
+      - JAX_PLATFORMS=cpu
+    volumes:
+      - ./data:/app/data:ro
+      - ./configs:/app/configs:ro
+      - ./outputs:/app/outputs
+    command: >
+      python scripts/train.py
+        --config ${DTE_TRAINING_CONFIG:-configs/training_default.yaml}
+        --system_config ${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml}
+        --data_dir /app/data/cstr
+        --output_dir /app/outputs/cstr_v1
+
+volumes:
+  # Named volumes for persistent storage across container restarts
+  dte-outputs: {}
+  dte-data: {}

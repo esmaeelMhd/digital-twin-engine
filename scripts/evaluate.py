@@ -16,17 +16,13 @@ from pathlib import Path
 
 from dte.models.digital_twin import DigitalTwin
 from dte.data.dataset import TrajectoryDataset
-from dte.physics.conservation import mass_balance_residual, energy_balance_residual
-from dte.simulators.cstr import CSTRParams
+from dte.simulators.registry import get_system_spec
 from dte.utils.plotting import (
     plot_trajectory_comparison,
     plot_conservation_violation,
     plot_latent_space,
     plot_prediction_error,
 )
-
-
-STATE_NAMES = ("Ca", "Cb", "T", "Tc")
 
 
 def _init_metric_store():
@@ -95,10 +91,20 @@ def _record_prediction_metrics(metric_store, true_states, pred_states, state_std
     metric_store["nrmse_per_state"].append(np.asarray(nrmse_per_state))
 
 
-def _record_physics_metrics(metric_store, pred_states, controls, disturbances, cstr_params, dt):
-    """Accumulate conservation-law metrics in physical units."""
-    mass_res = mass_balance_residual(pred_states, controls, disturbances, cstr_params, dt)
-    energy_res = energy_balance_residual(pred_states, controls, disturbances, cstr_params, dt)
+def _record_physics_metrics(metric_store, pred_states, controls, disturbances, physics_loss_fn, dt):
+    """Accumulate conservation-law metrics in physical units.
+
+    ``physics_loss_fn`` is a callable with the signature
+    ``(states, controls, disturbances, dt) -> (mass_res, energy_res)``
+    or ``None`` when no physics loss is available.
+    """
+    if physics_loss_fn is None:
+        # No system-specific physics; fill with zeros so metrics still exist.
+        n = pred_states.shape[0] - 1
+        mass_res = jnp.zeros(max(n, 1))
+        energy_res = jnp.zeros(max(n, 1))
+    else:
+        mass_res, energy_res = physics_loss_fn(pred_states, controls, disturbances, dt)
 
     metric_store["mass_violation_mean"].append(float(jnp.mean(mass_res)))
     metric_store["mass_violation_max"].append(float(jnp.max(mass_res)))
@@ -136,7 +142,7 @@ def _plot_priority_score(
     return float(np.sum(normalized_state_range))
 
 
-def _summarize_metric_store(metric_store):
+def _summarize_metric_store(metric_store, state_names):
     """Convert metric lists into mean/std summary values."""
     summary = {}
     scalar_metric_names = (
@@ -161,11 +167,11 @@ def _summarize_metric_store(metric_store):
     nrmse_per_state = np.mean(np.stack(metric_store["nrmse_per_state"]), axis=0)
     summary["rmse_per_state"] = {
         state_name: float(value)
-        for state_name, value in zip(STATE_NAMES, rmse_per_state)
+        for state_name, value in zip(state_names, rmse_per_state)
     }
     summary["nrmse_per_state"] = {
         state_name: float(value)
-        for state_name, value in zip(STATE_NAMES, nrmse_per_state)
+        for state_name, value in zip(state_names, nrmse_per_state)
     }
 
     return summary
@@ -191,11 +197,11 @@ def _print_metric_summary(title: str, summary: dict):
         f"{summary['mse_fullseq']['std']:.6f}"
     )
     print("  Per-state RMSE:")
-    for state_name in STATE_NAMES:
-        print(f"    {state_name}: {summary['rmse_per_state'][state_name]:.6f}")
+    for state_name, value in summary["rmse_per_state"].items():
+        print(f"    {state_name}: {value:.6f}")
     print("  Per-state normalized RMSE:")
-    for state_name in STATE_NAMES:
-        print(f"    {state_name}: {summary['nrmse_per_state'][state_name]:.6f}")
+    for state_name, value in summary["nrmse_per_state"].items():
+        print(f"    {state_name}: {value:.6f}")
     print("  Mass balance violation:")
     print(
         f"    Mean: {summary['mass_violation_mean']['mean']:.6f} ± "
@@ -231,10 +237,12 @@ def main():
         help="Path to model config"
     )
     parser.add_argument(
+        "--system_config",
         "--cstr_config",
         type=str,
         default="configs/cstr_default.yaml",
-        help="Path to CSTR config"
+        dest="system_config",
+        help="Path to system config"
     )
     parser.add_argument(
         "--data_dir",
@@ -315,16 +323,46 @@ def main():
     # Load configs
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
-    
-    with open(args.cstr_config, "r") as f:
-        cstr_config = yaml.safe_load(f)
-    
+
+    with open(args.system_config, "r") as f:
+        system_config = yaml.safe_load(f)
+
+    system_spec = get_system_spec(system_config)
+    state_names = system_spec.state_names
+
+    # Build physics evaluation function (returns mass_res, energy_res arrays)
+    system_name = system_spec.name
+    if system_name == "cstr":
+        from dte.physics.cstr import mass_balance_residual, energy_balance_residual
+        from dte.simulators.cstr import CSTRParams
+        cstr_cfg = system_config.get("cstr", {})
+        cstr_params = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
+
+        def _physics_fn(states, controls, disturbances, dt):
+            return (
+                mass_balance_residual(states, controls, disturbances, cstr_params, dt),
+                energy_balance_residual(states, controls, disturbances, cstr_params, dt),
+            )
+    elif system_name == "heat_exchanger":
+        from dte.physics.heat_exchanger import energy_balance_residual as hx_energy
+        from dte.simulators.heat_exchanger import HeatExchangerParams
+        hx_cfg = system_config.get("heat_exchanger", {})
+        hx_params = HeatExchangerParams(**{k: float(v) for k, v in hx_cfg.items()})
+        import jax.numpy as _jnp
+
+        def _physics_fn(states, controls, disturbances, dt):
+            energy_res = hx_energy(states, controls, disturbances, hx_params, dt)
+            mass_res = _jnp.zeros_like(energy_res)
+            return mass_res, energy_res
+    else:
+        _physics_fn = None
+
     # Initialize PRNG
     key = jax.random.PRNGKey(args.seed)
-    
+
     # Load model
     print("\nLoading model...")
-    model = DigitalTwin.load(args.model_path, config)
+    model = DigitalTwin.load(args.model_path, config, system_spec=system_spec)
     param_counts = model.get_parameter_count()
     print(f"Model parameters: {param_counts['total']:,}")
     
@@ -342,10 +380,6 @@ def main():
     _, val_dataset = full_dataset.split(val_split)
     
     print(f"Validation samples: {val_dataset.n_samples}")
-    
-    # Create CSTR params for physics evaluation
-    cstr_params_dict = {k: float(v) for k, v in cstr_config["cstr"].items()}
-    cstr_params = CSTRParams(**cstr_params_dict)
     
     model_metrics = _init_metric_store()
     baseline_metrics = _init_metric_store()
@@ -380,10 +414,10 @@ def main():
         # Samples from TrajectoryDataset are already in physical units.
         dt = float(ts[1] - ts[0])
         mass_res, energy_res = _record_physics_metrics(
-            model_metrics, pred_states, controls, disturbances, cstr_params, dt
+            model_metrics, pred_states, controls, disturbances, _physics_fn, dt
         )
         _record_physics_metrics(
-            baseline_metrics, baseline_states, controls, disturbances, cstr_params, dt
+            baseline_metrics, baseline_states, controls, disturbances, _physics_fn, dt
         )
 
         plot_candidates.append(
@@ -443,8 +477,8 @@ def main():
         )
         plt.close(fig)
     
-    model_summary = _summarize_metric_store(model_metrics)
-    baseline_summary = _summarize_metric_store(baseline_metrics)
+    model_summary = _summarize_metric_store(model_metrics, state_names)
+    baseline_summary = _summarize_metric_store(baseline_metrics, state_names)
 
     # Compute summary statistics
     print("\n" + "="*60)

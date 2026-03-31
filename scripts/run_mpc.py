@@ -14,8 +14,7 @@ import numpy as np
 
 from dte.models.digital_twin import DigitalTwin
 from dte.control.mpc import SamplingMPC
-from dte.control.pid import CSTRPIDController
-from dte.simulators.cstr import CSTRSimulator, CSTRParams
+from dte.simulators.registry import get_system_spec, get_simulator
 from dte.utils.plotting import plot_mpc_results
 
 
@@ -71,10 +70,12 @@ def main():
         help="Model config"
     )
     parser.add_argument(
+        "--system_config",
         "--cstr_config",
         type=str,
         default="configs/cstr_default.yaml",
-        help="CSTR config"
+        dest="system_config",
+        help="System config"
     )
     parser.add_argument(
         "--setpoint_T",
@@ -134,46 +135,57 @@ def main():
     # Load configs
     with open(args.config, "r") as f:
         mpc_config = yaml.safe_load(f)
-    
+
     with open(args.model_config, "r") as f:
         model_config = yaml.safe_load(f)
-    
-    with open(args.cstr_config, "r") as f:
-        cstr_config = yaml.safe_load(f)
-    
+
+    with open(args.system_config, "r") as f:
+        system_config = yaml.safe_load(f)
+
+    system_spec = get_system_spec(system_config)
+
     # Initialize
     key = jax.random.PRNGKey(args.seed)
-    dt = cstr_config["simulation"]["dt"]
-    
+    dt = system_config.get("simulation", {}).get("dt", 0.1)
+
     # Load digital twin
     print("\nLoading digital twin...")
-    model = DigitalTwin.load(args.model_path, model_config)
-    
+    model = DigitalTwin.load(args.model_path, model_config, system_spec=system_spec)
+
     # Create ground truth simulator
-    cstr_params_dict = {k: float(v) for k, v in cstr_config["cstr"].items()}
-    cstr_params = CSTRParams(**cstr_params_dict)
-    simulator = CSTRSimulator(cstr_params)
-    
-    # Initial state
-    initial_state = jnp.array([0.5, 0.5, 350.0, 300.0])
-    
-    # Setpoints
-    setpoints = jnp.array([args.setpoint_Ca, 0.0, args.setpoint_T, 300.0])
-    
+    simulator = get_simulator(system_spec.name, system_config)
+
+    # Initial state and nominal disturbances from system spec
+    initial_state = system_spec.default_initial_state_array()
+    nominal_disturbance = system_spec.default_nominal_disturbance_array()
+
+    # Setpoints: for CSTR use CLI values, for other systems use spec defaults
+    if system_spec.name == "cstr":
+        setpoints = jnp.array([args.setpoint_Ca, 0.0, args.setpoint_T, 300.0])
+    else:
+        setpoints = initial_state  # use initial state as default setpoint
+
     # Generate disturbances
+    dist_dim = system_spec.disturbance_dim
     if args.disturbance_scenario == "step":
-        # Step change in Ca_in at t=50
-        disturbances = jnp.ones((args.n_steps, 2)) * jnp.array([1.0, 320.0])
-        disturbances = disturbances.at[50:, 0].set(1.5)  # Step in Ca_in
+        disturbances = jnp.tile(nominal_disturbance[None, :], (args.n_steps, 1))
+        if dist_dim > 0:
+            step_val = nominal_disturbance[0] * 1.5
+            disturbances = disturbances.at[50:, 0].set(step_val)
     elif args.disturbance_scenario == "random":
         key, subkey = jax.random.split(key)
-        disturbances = jax.random.uniform(subkey, (args.n_steps, 2))
-        disturbances = disturbances * jnp.array([1.0, 30.0]) + jnp.array([0.5, 305.0])
+        dist_ranges = list(system_spec.disturbance_ranges.values())
+        if dist_ranges:
+            lo = jnp.array([r[0] for r in dist_ranges])
+            hi = jnp.array([r[1] for r in dist_ranges])
+            disturbances = jax.random.uniform(subkey, (args.n_steps, dist_dim)) * (hi - lo) + lo
+        else:
+            disturbances = jnp.tile(nominal_disturbance[None, :], (args.n_steps, 1))
     else:
-        disturbances = jnp.ones((args.n_steps, 2)) * jnp.array([1.0, 320.0])
-    
-    # System parameters for MPC
-    params = jnp.ones(6)  # Normalized params
+        disturbances = jnp.tile(nominal_disturbance[None, :], (args.n_steps, 1))
+
+    # System parameters for MPC (normalized)
+    params = jnp.ones(system_spec.param_dim)
     
     # Run MPC
     print("\n" + "="*60)
@@ -215,56 +227,52 @@ def main():
         save_path=os.path.join(args.output_dir, "mpc_results.png")
     )
     
-    # Run PID if requested
+    # Run PID if requested (CSTR only for now)
     if args.compare_pid:
-        print("\n" + "="*60)
-        print("Running PID baseline...")
-        print("="*60)
+        if system_spec.name != "cstr":
+            print(f"\nNote: PID baseline is only implemented for CSTR; skipping for '{system_spec.name}'.")
+        else:
+            from dte.control.pid import CSTRPIDController
+
+        if system_spec.name == "cstr":
+            pid_result = pid_controller.run_closed_loop(
+                simulator,
+                initial_state,
+                disturbances,
+                args.n_steps,
+                dt,
+            )
+
+            pid_metrics = compute_performance_metrics(
+                pid_result["states"], setpoints, pid_result["controls"]
+            )
+
+            print("\nPID Performance:")
+            print(f"  ISE: {pid_metrics['ise']:.2f}")
+            print(f"  Control effort: {pid_metrics['control_effort']:.2f}")
+            print(f"  Settling time: {pid_metrics['settling_time']} steps")
+            print(f"  Overshoot: {pid_metrics['overshoot_percent']:.1f}%")
+
+            # Plot PID results
+            fig = plot_mpc_results(
+                np.array(pid_result["states"]),
+                np.array(pid_result["controls"]),
+                np.array(setpoints_traj),
+                np.array(times),
+                save_path=os.path.join(args.output_dir, "pid_results.png")
+            )
+
+            # Comparison
+            print("\n" + "="*60)
+            print("COMPARISON: MPC vs PID")
+            print("="*60)
+            print(f"ISE:            MPC={mpc_metrics['ise']:.2f}  PID={pid_metrics['ise']:.2f}  (lower is better)")
+            print(f"Control effort: MPC={mpc_metrics['control_effort']:.2f}  PID={pid_metrics['control_effort']:.2f}")
+            print(f"Settling time:  MPC={mpc_metrics['settling_time']}  PID={pid_metrics['settling_time']}  (steps)")
+            print(f"Overshoot:      MPC={mpc_metrics['overshoot_percent']:.1f}%  PID={pid_metrics['overshoot_percent']:.1f}%")
         
-        pid_controller = CSTRPIDController(
-            T_setpoint=args.setpoint_T,
-            Ca_setpoint=args.setpoint_Ca,
-            dt=dt,
-        )
-        
-        pid_result = pid_controller.run_closed_loop(
-            simulator,
-            initial_state,
-            disturbances,
-            args.n_steps,
-            dt,
-        )
-        
-        pid_metrics = compute_performance_metrics(
-            pid_result["states"], setpoints, pid_result["controls"]
-        )
-        
-        print("\nPID Performance:")
-        print(f"  ISE: {pid_metrics['ise']:.2f}")
-        print(f"  Control effort: {pid_metrics['control_effort']:.2f}")
-        print(f"  Settling time: {pid_metrics['settling_time']} steps")
-        print(f"  Overshoot: {pid_metrics['overshoot_percent']:.1f}%")
-        
-        # Plot PID results
-        fig = plot_mpc_results(
-            np.array(pid_result["states"]),
-            np.array(pid_result["controls"]),
-            np.array(setpoints_traj),
-            np.array(times),
-            save_path=os.path.join(args.output_dir, "pid_results.png")
-        )
-        
-        # Comparison
-        print("\n" + "="*60)
-        print("COMPARISON: MPC vs PID")
-        print("="*60)
-        print(f"ISE:            MPC={mpc_metrics['ise']:.2f}  PID={pid_metrics['ise']:.2f}  (lower is better)")
-        print(f"Control effort: MPC={mpc_metrics['control_effort']:.2f}  PID={pid_metrics['control_effort']:.2f}")
-        print(f"Settling time:  MPC={mpc_metrics['settling_time']}  PID={pid_metrics['settling_time']}  (steps)")
-        print(f"Overshoot:      MPC={mpc_metrics['overshoot_percent']:.1f}%  PID={pid_metrics['overshoot_percent']:.1f}%")
-        
-        improvement = (pid_metrics['ise'] - mpc_metrics['ise']) / pid_metrics['ise'] * 100
-        print(f"\n→ MPC achieves {improvement:.1f}% improvement in ISE")
+            improvement = (pid_metrics['ise'] - mpc_metrics['ise']) / pid_metrics['ise'] * 100
+            print(f"\n→ MPC achieves {improvement:.1f}% improvement in ISE")
     
     print("\n" + "="*60)
     print(f"Results saved to {args.output_dir}")

@@ -1,3 +1,25 @@
+system:
+  name: cstr
+  state_names: [Ca, Cb, T, Tc]
+  control_names: [F_in, Tc_in]
+  disturbance_names: [Ca_in, T_in]
+  normalization:
+    state_center: [1.0, 1.0, 325.0, 325.0]
+    state_scale: [1.0, 1.0, 0.01, 0.01]
+    control_center: [55.0, 300.0]
+    control_scale: [0.02, 0.05]
+    disturbance_center: [1.0, 320.0]
+    disturbance_scale: [1.0, 0.02]
+    param_scale: 0.1
+  decoder_constraints:
+    - type: softplus
+      indices: [0, 1]
+      bias: 0.5
+    - type: sigmoid_range
+      indices: [2, 3]
+      low: 250.0
+      high: 400.0
+
 cstr:
   V: 100.0
   Vc: 20.0

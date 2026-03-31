@@ -1,128 +1,117 @@
-# Digital Twin Engine - Complete Workflow
+# Digital Twin Engine — Complete Workflow
 
-This document provides a step-by-step workflow from initial setup to production deployment.
+Step-by-step guide from environment setup to production deployment. All four phases of the generalisation roadmap are complete.
 
 ---
 
-## 🚀 Phase 1: Environment Setup (10 minutes)
+## Phase 1: Environment Setup
 
-### 1.1 Clone and Setup Virtual Environment
+### 1.1 Clone and Create Virtual Environment
 
 ```bash
-# Navigate to project
 cd digital-twin-engine
-
-# Create virtual environment
 python3 -m venv .venv
-
-# Activate virtual environment
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install package
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
 ### 1.2 Verify Installation
 
 ```bash
-# Run verification script
 python scripts/verify_install.py
-
-# Expected output: "✓ ALL CHECKS PASSED"
+# Expected: "✓ ALL CHECKS PASSED"
 ```
 
-### 1.3 Run Tests (Optional but Recommended)
+### 1.3 Run Tests
 
 ```bash
-# Run full test suite (30 tests)
 pytest tests/ -v
-
-# Expected: 30 passed in ~20 seconds
 ```
 
-**Checkpoint:** ✅ All packages installed, tests passing
+**Checkpoint:** all packages installed, tests passing.
 
 ---
 
-## 📊 Phase 2: Data Generation (30-60 minutes)
+## Phase 2: Data
 
-### 2.1 Quick Test Data (2 minutes)
+The engine supports three data sources: **synthetic simulation**, **generic simulator**, and **real plant files**.
 
-```bash
-# Generate small dataset for testing
-python scripts/generate_data.py \
-  --n_trajectories 100 \
-  --n_steps 100 \
-  --output_dir data/test/ \
-  --seed 42
-```
-
-**Output:** `data/test/train_data.h5` (~4MB)
-
-### 2.2 Production Data (30-60 minutes)
+### 2.1 Synthetic Data — CSTR (default)
 
 ```bash
-# Generate full training dataset
 python scripts/generate_data.py \
+  --config configs/cstr_default.yaml \
   --n_trajectories 10000 \
   --n_steps 1000 \
-  --output_dir data/cstr/ \
-  --seed 42
+  --output_dir data/cstr/
 ```
 
-**Output:** `data/cstr/train_data.h5` (~400MB)
+Output: `data/cstr/train_data.h5` (~400 MB)
 
-**What's happening:**
-
-- Random CSTR parameter sampling
-- PRBS + chirp + multi-step control signals
-- Ground truth simulation with Diffrax
-- Measurement noise addition
-- Normalization statistics computation
-
-**Checkpoint:** ✅ Training data generated, no NaN values
-
-### 2.3 Optional: Benchmark Batch Size
-
-If you want to calibrate generation throughput on your current machine before a long run:
+### 2.2 Synthetic Data — Heat Exchanger
 
 ```bash
-python scripts/benchmark_generation.py \
-  --n_trajectories 8 \
-  --n_steps 32 \
-  --batch_sizes 1 2 4 8
+python scripts/generate_data.py \
+  --config configs/heat_exchanger_default.yaml \
+  --n_trajectories 10000 \
+  --n_steps 1000 \
+  --output_dir data/heat_exchanger/
 ```
 
-**Outputs:**
+### 2.3 Synthetic Data — Any Registered System
 
-- JSON benchmark summary under `outputs/benchmarks/`
-- Markdown report under `outputs/benchmarks/`
+The `--config` flag selects the system. The script routes to the appropriate generator automatically.
 
-Use the reported `best observed batch size` to override `--batch_size` for large runs if needed.
+```bash
+python scripts/generate_data.py \
+  --config configs/my_system_default.yaml \
+  --output_dir data/my_system/
+```
+
+### 2.4 Real Plant Data (CSV / Parquet)
+
+```bash
+python scripts/ingest_real_data.py \
+  --source data/raw/plant_run_01.csv \
+  --output data/cstr_real/train_data.h5 \
+  --system_config configs/cstr_default.yaml \
+  --state_columns Ca Cb T Tc \
+  --control_columns F_in Tc_in \
+  --disturbance_columns Ca_in T_in \
+  --timestamp_column time \
+  --dt 0.1 \
+  --trajectory_duration 100.0 \
+  --trajectory_stride 10.0 \
+  --outlier_sigma 5.0
+```
+
+The ingestion pipeline handles:
+- Irregular timestamps (float seconds or ISO datetime strings)
+- Automatic sorting and deduplication
+- Linear interpolation to a uniform grid
+- Configurable large-gap handling (`--max_gap_fill`, `--drop_large_gaps`)
+- Z-score outlier detection and median replacement
+- Sensor noise characterisation
+- Output is a standards-compliant HDF5 file directly loadable by the trainer
+
+Save the ingestion summary as JSON for auditing:
+
+```bash
+python scripts/ingest_real_data.py ... --save_summary data/cstr_real/ingestion_summary.json
+```
+
+**Checkpoint:** HDF5 file created, shape and normalization stats printed.
 
 ---
 
-## 🧠 Phase 3: Model Training (2-4 hours GPU / 8-12 hours CPU)
+## Phase 3: Training
 
-### 3.1 Quick Training Test (5 minutes)
-
-```bash
-# Train on test data to verify pipeline
-python scripts/train.py \
-  --data_dir data/test/ \
-  --output_dir outputs/test_train/ \
-  --n_epochs 5 \
-  --batch_size 8
-```
-
-**Expected:** Loss decreases, no errors
-
-### 3.2 Production Training (2-4 hours)
+### 3.1 Train from Scratch
 
 ```bash
-# Full training run
 python scripts/train.py \
   --config configs/training_default.yaml \
+  --system_config configs/cstr_default.yaml \
   --data_dir data/cstr/ \
   --output_dir outputs/cstr_v1/ \
   --n_epochs 100 \
@@ -130,37 +119,49 @@ python scripts/train.py \
   --seed 42
 ```
 
-**Monitor training:**
+Training features (all configurable in `configs/training_default.yaml`):
 
+| Feature | Config key | Description |
+|---|---|---|
+| Stochastic SDE training | `sde_training.enabled` | Activates the diffusion path; KL term regularises diffusion scale |
+| Curriculum learning | `curriculum.enabled` | `seq_len` ramps linearly from `initial_seq_len` to `final_seq_len` |
+| Teacher-forcing annealing | `teacher_forcing.initial_ratio` | One-step loss weight decays toward free-rollout loss |
+
+Outputs:
+- `outputs/cstr_v1/best_model.eqx` — best validation checkpoint
+- `outputs/cstr_v1/final_model.eqx` — final epoch
+- `outputs/cstr_v1/training_history.json` — loss curves
+- `outputs/cstr_v1/training_summary.json` — machine-readable summary
+
+### 3.2 Train a Different System
+
+Change only `--system_config` and `--data_dir`; everything else is system-agnostic:
+
+```bash
+python scripts/train.py \
+  --config configs/heat_exchanger_training.yaml \
+  --system_config configs/heat_exchanger_default.yaml \
+  --data_dir data/heat_exchanger/ \
+  --output_dir outputs/hx_v1/
 ```
-Epoch 1/100: train_loss=2.456, val_loss=2.389
-Epoch 10/100: train_loss=0.856, val_loss=0.823
-Epoch 50/100: train_loss=0.234, val_loss=0.256
-Epoch 100/100: train_loss=0.089, val_loss=0.095
+
+### 3.3 Few-Shot Transfer Learning (Fine-tune a Pre-trained Model)
+
+Freeze the encoder and latent SDE; update only the decoder on N new-unit trajectories:
+
+```bash
+python scripts/train.py \
+  --finetune outputs/cstr_v1/best_model.eqx \
+  --finetune_part decoder \
+  --system_config configs/cstr_default.yaml \
+  --data_dir data/cstr_unit2/ \
+  --output_dir outputs/cstr_unit2/ \
+  --n_epochs 10
 ```
 
-**Outputs:**
+Options for `--finetune_part`: `decoder` (default), `encoder`, `all`.
 
-- `outputs/cstr_v1/best_model.eqx` - Best model checkpoint
-- `outputs/cstr_v1/final_model.eqx` - Final model
-- `outputs/cstr_v1/training_history.json` - Loss curves
-- `outputs/cstr_v1/config.yaml` - Training configuration
-
-**Loss Components:**
-
-- **Reconstruction**: Trajectory matching (~60% of total)
-- **KL Divergence**: VAE regularization (~20% of total)
-- **Trajectory**: Long-term consistency (~10% of total)
-- **Mass Balance**: Conservation law (~5% of total)
-- **Energy Balance**: Conservation law (~5% of total)
-
-**Checkpoint:** ✅ Model trained, validation loss < 0.1
-
----
-
-### 3.3 Optional: Autoresearch Loop (5 minutes per experiment)
-
-If you want to apply the `karpathy/autoresearch` idea to this repo, use the bounded experiment harness:
+### 3.4 Autoresearch Loop
 
 ```bash
 python scripts/autoresearch.py \
@@ -169,120 +170,74 @@ python scripts/autoresearch.py \
   --data_dir data/test/
 ```
 
-For production experiments, point `--data_dir` at `data/cstr/`.
-
-**What the harness does:**
-
-- Runs `scripts/train.py` with a fixed wall-clock budget
-- Forces regular validation so each run emits a comparable `best_val_loss`
-- Stores run logs and model artifacts under `outputs/autoresearch/runs/<run_id>/`
-- Appends the result to `outputs/autoresearch/results.tsv`
-- Promotes the run into `outputs/autoresearch/baseline/` only if it improves the metric
-
-**Agent workflow:** See `program.md` for the autonomous keep/discard loop instructions.
-`scripts/agent.py` also reads `auto_research.md` for repo-specific prompt context and practical search guidance.
-
-**Two-stage autoresearch:**
+The harness runs training with a fixed wall-clock budget, logs results to `outputs/autoresearch/results.tsv`, and promotes only improvements to the baseline directory.
 
 ```bash
-# Stage 1: cheap exploration
-python scripts/agent.py \
-  --config configs/autoresearch_stage1.yaml \
-  --max-runs 20
+# Autonomous LLM-driven agent (Gemini by default)
+python scripts/agent.py --max-runs 50
+
+# Other providers
+python scripts/agent.py --claude    # Claude Sonnet
+python scripts/agent.py --openai    # OpenAI o3
+python scripts/agent.py --grok      # xAI Grok 3
 ```
 
-This uses a 10-minute wall-clock budget and 15 epochs per experiment.
-
-```bash
-# Stage 2: rerun promising ideas more carefully
-python scripts/agent.py \
-  --config configs/autoresearch_stage2.yaml \
-  --max-runs 10
-```
-
-This uses a 25-minute wall-clock budget and 40 epochs per experiment.
-
-You can also run the bounded harness directly for manual reruns:
-
-```bash
-python scripts/autoresearch.py \
-  --config configs/autoresearch_stage2.yaml \
-  --description "manual stage2 rerun"
-```
-
-**Web monitor:** If you want a browser-based live status page for the agent, run:
-
-```bash
-streamlit run app/agent_dashboard.py --server.address 127.0.0.1 --server.port 8502
-```
-
-For LAN access from another device on the same trusted network:
-
-```bash
-streamlit run app/agent_dashboard.py --server.address 0.0.0.0 --server.port 8502
-```
-
-Then open `http://127.0.0.1:8502` locally, or `http://<your-machine-ip>:8502` from another device.
-This dashboard has no authentication, so do not expose it to the public internet.
-
-**Checkpoint:** ✅ Baseline established, experiments can iterate autonomously
+**Checkpoint:** `best_val_loss` reported, model checkpoint saved.
 
 ---
 
-## 📈 Phase 4: Model Evaluation (10 minutes)
-
-### 4.1 Run Evaluation
+## Phase 4: Evaluation
 
 ```bash
 python scripts/evaluate.py \
   --model_path outputs/cstr_v1/best_model.eqx \
   --config outputs/cstr_v1/config.yaml \
+  --system_config configs/cstr_default.yaml \
   --data_dir data/cstr/ \
-  --output_dir outputs/cstr_v1/eval/ \
-  --n_samples 20 \
-  --n_trajectories 20
+  --output_dir outputs/cstr_v1/eval/
 ```
 
-**Generated Plots:**
+Generated artefacts:
+- Trajectory comparison plots (predicted vs ground truth)
+- Per-state prediction error plots
+- Physics violation metrics (mass / energy balance residuals)
+- Uncertainty calibration statistics (ensemble coverage)
 
-1. `trajectory_0.png`, `trajectory_1.png`, `trajectory_2.png` - Prediction vs ground truth
-2. `error_0.png`, `error_1.png`, `error_2.png` - Absolute and relative errors
-3. `conservation_0.png`, `conservation_1.png`, `conservation_2.png` - Physics violations
-4. `ensemble_prediction.png` - Uncertainty quantification
+Key metrics to target:
 
-**Key Metrics to Check:**
+| Metric | Target |
+|---|---|
+| 1-step normalised MSE | < 0.01 |
+| Full-sequence normalised MSE | < 0.1 |
+| Mass balance violation (mean) | < 0.01 |
+| Energy balance violation (mean) | < 1.0 |
+| Ensemble coverage (±2σ) | ~95% |
 
+### Zero-Shot and Few-Shot Transfer Evaluation (Python API)
+
+```python
+from dte.training.transfer import FewShotAdapter, zero_shot_eval
+
+# Zero-shot: evaluate pre-trained model on a new unit without any updates
+metrics = zero_shot_eval(pretrained_model, new_unit_dataset, n_batches=50)
+print(metrics)  # {"mse": ..., "rmse": ..., "norm_mse": ...}
+
+# Few-shot: fine-tune decoder on 5 trajectories, then evaluate
+adapter = FewShotAdapter(pretrained_model, system_spec, learning_rate=3e-4)
+finetuned = adapter.finetune(new_unit_dataset, n_steps=200, part="decoder")
+metrics_fs = zero_shot_eval(finetuned, new_unit_dataset)
 ```
-Prediction Accuracy (MSE in normalized space):
-  1-step MSE:     0.0023 ± 0.0012  ✓ (target: < 0.01)
-  10-step MSE:    0.0145 ± 0.0089  ✓ (target: < 0.05)
-  Full-seq MSE:   0.0678 ± 0.0234  ✓ (target: < 0.1)
 
-Physics Constraint Satisfaction:
-  Mass balance violation:
-    Mean: 0.0034 ± 0.0012  ✓ (target: < 0.01)
-    Max:  0.0089 ± 0.0023  ✓ (target: < 0.02)
-  Energy balance violation:
-    Mean: 0.45 ± 0.12      ✓ (target: < 1.0)
-    Max:  1.23 ± 0.34      ✓ (target: < 2.0)
-
-Uncertainty Calibration:
-  % within ±2σ: 94.2%  ✓ (target: ~95%)
-```
-
-**Checkpoint:** ✅ Model meets accuracy targets, physics constraints satisfied
+**Checkpoint:** accuracy targets met, physics constraints satisfied.
 
 ---
 
-## 🎮 Phase 5: Control Experiments (15 minutes)
-
-### 5.1 MPC Performance Test
+## Phase 5: Model Predictive Control
 
 ```bash
-# Run MPC with step disturbance
 python scripts/run_mpc.py \
   --model_path outputs/cstr_v1/best_model.eqx \
-  --model_config outputs/cstr_v1/config.yaml \
+  --system_config configs/cstr_default.yaml \
   --setpoint_T 340.0 \
   --setpoint_Ca 0.8 \
   --disturbance_scenario step \
@@ -291,456 +246,403 @@ python scripts/run_mpc.py \
   --output_dir outputs/mpc_results/
 ```
 
-**Expected Results:**
+The `--compare_pid` flag is supported only for CSTR. For other systems, the script runs the AI-MPC only.
 
-```
-MPC Performance:
-  ISE: 45.23
-  Control effort: 12.45
-  Settling time: 35 steps
-  Overshoot: 8.3%
-
-PID Performance:
-  ISE: 68.91
-  Control effort: 18.72
-  Settling time: 52 steps
-  Overshoot: 15.7%
-
-→ MPC achieves 34.4% improvement in ISE
-```
-
-**Generated Plots:**
-
-- `outputs/mpc_results/mpc_results.png` - AI-MPC performance
-- `outputs/mpc_results/pid_results.png` - PID baseline performance
-
-### 5.2 Try Different Scenarios
+Try different scenarios:
 
 ```bash
-# Random disturbances
-python scripts/run_mpc.py \
-  --model_path outputs/cstr_v1/best_model.eqx \
-  --model_config outputs/cstr_v1/config.yaml \
-  --disturbance_scenario random \
-  --compare_pid
+# Random disturbance
+python scripts/run_mpc.py ... --disturbance_scenario random
 
-# Different setpoints
-python scripts/run_mpc.py \
-  --model_path outputs/cstr_v1/best_model.eqx \
-  --model_config outputs/cstr_v1/config.yaml \
-  --setpoint_T 360.0 \
-  --setpoint_Ca 0.5 \
-  --disturbance_scenario step
+# Different setpoint
+python scripts/run_mpc.py ... --setpoint_T 360.0 --setpoint_Ca 0.5
 ```
 
-**Checkpoint:** ✅ MPC outperforms PID, stable control achieved
+**Checkpoint:** MPC stable, ISE improvement over baseline reported.
 
 ---
 
-## 🎨 Phase 6: Interactive Dashboard (Launch Anytime)
+## Phase 6: Online Adaptation
 
-### 6.1 Start Streamlit Dashboard
+Use `OnlineAdapter` when the model is deployed and new plant observations arrive in real time.
+
+```python
+from dte.training.online import OnlineAdapter, OnlineAdapterConfig
+
+adapter = OnlineAdapter(
+    model,
+    system_spec,
+    OnlineAdapterConfig(
+        window_size=500,       # ring buffer of recent observations
+        finetune_every=50,     # run gradient steps every N pushes
+        n_finetune_steps=10,   # gradient steps per trigger
+        seq_len=20,            # subsequence length sampled from buffer
+        drift_threshold=3.0,   # CUSUM alarm threshold
+        drift_slack=0.5,       # allowable deviation before CUSUM accumulates
+        ewc_lambda=0.0,        # set > 0 to penalise forgetting
+    ),
+    key=jax.random.PRNGKey(0),
+)
+
+# In the plant loop:
+for t, measurement in plant_stream:
+    result = adapter.push(
+        states=measurement.states,
+        controls=measurement.controls,
+        disturbances=measurement.disturbances,
+        t=t,
+    )
+    if result["drift"]:
+        print(f"Drift detected at t={t}  CUSUM={result['cusum']:.2f}")
+    model = adapter.model   # always up to date
+
+# Diagnostics
+print(adapter.get_diagnostics())
+```
+
+The CUSUM detector fires when rolling prediction error exceeds `drift_threshold` standard deviations above the baseline. Each alarm triggers an extra fine-tune pass in addition to the periodic schedule.
+
+---
+
+## Phase 7: Dashboard
 
 ```bash
 streamlit run app/dashboard.py
 ```
 
-**Access:** Opens automatically at `http://localhost:8501`
+Access at `http://localhost:8501`.
 
-### 6.2 Dashboard Features
-
-**Left Sidebar:**
-
-- Operating parameters (V, UA)
-- Setpoints (T, Ca)
-- Control mode selection (Open Loop / PID / AI-MPC)
-- Disturbance scenarios
-- Simulation length
-
-**Main Tabs:**
-
-1. **📊 Live Simulation**
-  - Real-time state trajectories
-  - Control actions
-  - Performance metrics
-  - Interactive parameter tuning
-2. **🔬 Digital Twin vs Reality**
-  - Side-by-side comparison
-  - Prediction errors
-3. **📈 Performance Comparison**
-  - PID vs AI-MPC metrics
-  - Settling time, overshoot, ISE
-4. **ℹ️ Model Info**
-  - Architecture details
-  - Parameter counts
-  - Training configuration
-
-**Demo Workflow in Dashboard:**
-
-1. Select "AI-MPC" control mode
-2. Choose "Step in Ca_in" disturbance
-3. Click "▶️ Run Simulation"
-4. Observe smooth setpoint tracking
-5. Switch to "PID" and compare performance
-
-**Checkpoint:** ✅ Dashboard running, interactive demos working
-
----
-
-## 🔬 Phase 7: Exploratory Analysis (Optional)
-
-### 7.1 Launch Jupyter Notebook
+Optional password protection:
 
 ```bash
-jupyter notebook notebooks/01_exploration.ipynb
+STREAMLIT_AUTH_PASSWORD=secret streamlit run app/dashboard.py
 ```
 
-**Notebook Contents:**
-
-1. CSTR Simulator testing
-2. Data generation examples
-3. Digital twin loading and usage
-4. Prediction examples
-5. Uncertainty quantification demos
-
-### 7.2 Custom Analysis
-
-Create your own notebooks for:
-
-- Sensitivity analysis
-- Latent space visualization
-- Controller tuning
-- Physics constraint analysis
-
-**Checkpoint:** ✅ Ready for custom experiments
+Features:
+- Live simulation with Open Loop / PID / AI-MPC modes
+- State trajectory plots with uncertainty bands
+- Disturbance scenario selection
+- Performance metrics (ISE, settling time, overshoot)
+- System selection (CSTR, heat exchanger, or any registered system)
 
 ---
 
-## 🔧 Phase 8: Hyperparameter Tuning (Optional)
+## Phase 8: REST API
 
-### 8.1 Tune Model Architecture
+### Local
 
-Edit `configs/training_default.yaml`:
+```bash
+# Set environment
+export DTE_SYSTEM_CONFIG=configs/cstr_default.yaml
+export DTE_MODEL_PATH=outputs/cstr_v1/best_model.eqx
+export DTE_TRAINING_CONFIG=configs/training_default.yaml
+# Optional auth:
+# export DTE_API_KEY=your-secret-key
+
+uvicorn dte.api.service:app --host 0.0.0.0 --port 8000
+```
+
+### Docker
+
+```bash
+# API only
+docker build --target api -t dte-api .
+docker run -p 8000:8000 \
+  -e DTE_MODEL_PATH=outputs/best_model.eqx \
+  -e DTE_API_KEY=your-secret-key \
+  -v $(pwd)/outputs:/app/outputs \
+  dte-api
+
+# Full stack (API + dashboard)
+docker compose up
+
+# Include training and data-generation tools
+docker compose --profile tools up
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Service health + loaded systems |
+| `POST` | `/predict` | Deterministic mean-trajectory rollout |
+| `POST` | `/ensemble` | Stochastic ensemble (uncertainty bands) |
+| `POST` | `/steady_state` | Steady-state operating point |
+
+Authentication: include `X-API-Key: <key>` header when `DTE_API_KEY` is set.
+
+### Example Requests
+
+```bash
+# Health
+curl http://localhost:8000/health
+
+# Deterministic prediction (10-step horizon)
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "system": "cstr",
+    "initial_state": [0.8, 0.5, 325.0, 320.0],
+    "controls": [[55.0, 300.0], [56.0, 302.0], [55.0, 298.0]],
+    "dt": 0.1
+  }'
+
+# Stochastic ensemble (50 samples)
+curl -X POST http://localhost:8000/ensemble \
+  -H "Content-Type: application/json" \
+  -d '{
+    "system": "cstr",
+    "initial_state": [0.8, 0.5, 325.0, 320.0],
+    "controls": [[55.0, 300.0]],
+    "n_samples": 50,
+    "dt": 0.1
+  }'
+
+# Steady-state query
+curl -X POST http://localhost:8000/steady_state \
+  -H "Content-Type: application/json" \
+  -d '{"system": "cstr"}'
+```
+
+---
+
+## Phase 9: Adding a New System
+
+The engine is fully decoupled from CSTR. Adding a new process requires four steps and zero changes to the core engine.
+
+### Step 1 — Simulator (`dte/simulators/my_system.py`)
+
+```python
+from dte.simulators.base import ProcessSimulator, SystemSpec
+
+class MySystemSimulator(ProcessSimulator):
+    @property
+    def spec(self) -> SystemSpec:
+        return ...  # build from config
+
+    def dynamics(self, state, control, disturbance, params, t):
+        ...  # ODEs
+
+    def simulate(self, initial_state, controls, disturbances, params, ts):
+        ...
+
+    def steady_state(self, nominal_control, nominal_disturbance):
+        ...
+```
+
+### Step 2 — Physics Loss (`dte/physics/my_system.py`)
+
+```python
+from dte.physics.base import PhysicsLoss
+
+class MySystemPhysicsLoss(PhysicsLoss):
+    def residual_names(self):
+        return ["energy"]
+
+    def compute_residuals(self, states, controls, disturbances, dt):
+        return {"energy": ...}  # JAX array
+```
+
+Skip this step and use `NullPhysicsLoss` if no physics constraints are needed.
+
+### Step 3 — Config (`configs/my_system_default.yaml`)
+
+Define `system.name`, `system.state_dim`, `system.state_names`, `system.normalization`, `system.decoder_constraints`, and simulator-specific parameters.
+
+### Step 4 — Register (`dte/simulators/registry.py`)
+
+Add an `elif system_name == "my_system":` branch in `get_system_spec` and `get_simulator`.
+
+That is the complete extension path. The training, evaluation, MPC, API, and dashboard all adapt automatically.
+
+---
+
+## Phase 10: Hyperparameter Reference
+
+### Model (`configs/training_default.yaml → model`)
 
 ```yaml
 model:
-  latent_dim: 16    # Try: 8, 16, 32
-  hidden_dim: 128   # Try: 64, 128, 256
-  encoder_layers: 3 # Try: 2, 3, 4
+  latent_dim: 16       # latent space dimension (try 8–32)
+  hidden_dim: 128      # MLP hidden width (try 64–256)
+  encoder_layers: 3
+  decoder_layers: 3
+  drift_layers: 3
+  diffusion_layers: 2
 ```
 
-### 8.2 Tune Training Parameters
+### Training (`training`)
 
 ```yaml
 training:
-  peak_lr: 3.0e-4   # Try: 1e-4, 3e-4, 1e-3
-  batch_size: 64    # Try: 32, 64, 128
-  seq_len: 50       # Try: 30, 50, 100
-
-loss_weights:
-  reconstruction: 1.0
-  kl: 0.1           # Try: 0.01, 0.1, 1.0
-  trajectory: 0.5
-  mass_balance: 0.1  # Try: 0.01, 0.1, 0.5
-  energy_balance: 0.1
+  n_epochs: 100
+  batch_size: 64       # reduce if OOM
+  seq_len: 50          # sequence length (overridden by curriculum)
+  stride: 10
+  val_split: 0.1
 ```
 
-### 8.3 Tune MPC Parameters
+### Loss Weights (`loss_weights`)
 
-Edit `configs/mpc_default.yaml`:
+```yaml
+loss_weights:
+  reconstruction: 1.0
+  kl: 0.0001
+  trajectory: 0.5
+  one_step: 0.3
+  mass_balance: 0.1    # CSTR only
+  energy_balance: 0.1  # CSTR / heat exchanger
+```
+
+### Stochastic SDE (`sde_training`)
+
+```yaml
+sde_training:
+  enabled: false        # set true to activate diffusion path
+  warmup_steps: 5000    # delay before SDE path activates
+  sde_kl_weight: 0.01
+```
+
+### Curriculum (`curriculum`)
+
+```yaml
+curriculum:
+  enabled: true
+  initial_seq_len: 5
+  final_seq_len: 50
+  warmup_epochs: 20
+```
+
+### Teacher Forcing (`teacher_forcing`)
+
+```yaml
+teacher_forcing:
+  initial_ratio: 1.0   # start: 100% one-step loss
+  final_ratio: 0.0     # end:   100% free-rollout loss
+  anneal_epochs: 30
+```
+
+### Optimizer (`optimizer`)
+
+```yaml
+optimizer:
+  peak_lr: 3.0e-4      # reduce to 1e-4 if loss diverges
+  warmup_steps: 1000
+  total_steps: 50000
+  end_lr: 1.0e-5
+  gradient_clip: 1.0
+```
+
+### MPC (`configs/mpc_default.yaml`)
 
 ```yaml
 mpc:
-  horizon: 10          # Try: 5, 10, 20
-  n_candidates: 500    # Try: 100, 500, 1000
-  n_elite: 50          # Try: 20, 50, 100
-  n_iterations: 3      # Try: 2, 3, 5
-```
-
-**Retrain and Compare:**
-
-```bash
-python scripts/train.py --output_dir outputs/cstr_v2/
-python scripts/evaluate.py --model_path outputs/cstr_v2/best_model.eqx
-```
-
-**Checkpoint:** ✅ Optimized model for your use case
-
----
-
-## 📦 Phase 9: Production Deployment (Optional)
-
-### 9.1 Export Model
-
-```python
-# Model is already serialized as .eqx file
-# Load in production:
-from dte.models.digital_twin import DigitalTwin
-model = DigitalTwin.load("outputs/cstr_v1/best_model.eqx", config)
-```
-
-### 9.2 Deploy Dashboard
-
-```bash
-# Option 1: Local deployment
-streamlit run app/dashboard.py --server.port 8501
-
-# Option 2: Docker deployment (create Dockerfile)
-docker build -t digital-twin-engine .
-docker run -p 8501:8501 digital-twin-engine
-
-# Option 3: Cloud deployment (Streamlit Cloud, AWS, etc.)
-```
-
-### 9.3 API Service (Optional)
-
-Create a FastAPI service:
-
-```python
-from fastapi import FastAPI
-from dte.models.digital_twin import DigitalTwin
-
-app = FastAPI()
-model = DigitalTwin.load("best_model.eqx", config)
-
-@app.post("/predict")
-def predict(state, controls, params):
-    result = model.predict(state, controls, ...)
-    return {"prediction": result}
-```
-
-**Checkpoint:** ✅ Production system deployed
-
----
-
-## 🔄 Phase 10: Continuous Improvement
-
-### 10.1 Regular Monitoring
-
-- Track prediction accuracy on new data
-- Monitor physics constraint violations
-- Log control performance metrics
-
-### 10.2 Model Updates
-
-```bash
-# Generate new data with updated parameters
-python scripts/generate_data.py --n_trajectories 5000 --output_dir data/update/
-
-# Retrain or fine-tune
-python scripts/train.py --data_dir data/update/ --load_model outputs/cstr_v1/best_model.eqx
-```
-
-### 10.3 A/B Testing
-
-- Compare new model versions
-- Measure control improvements
-- Update production model when validated
-
----
-
-## 🎯 Quick Reference Commands
-
-```bash
-# Complete workflow in one go (for testing)
-python scripts/verify_install.py && \
-python scripts/generate_data.py --n_trajectories 100 --output_dir data/test/ && \
-python scripts/train.py --data_dir data/test/ --n_epochs 5 --output_dir outputs/test/ && \
-python scripts/evaluate.py --model_path outputs/test/final_model.eqx --config outputs/test/config.yaml --data_dir data/test/ && \
-streamlit run app/dashboard.py
+  horizon: 10           # prediction horizon (try 5–20)
+  n_candidates: 500     # CEM candidate trajectories
+  n_elite: 50           # elite fraction for refinement
+  n_iterations: 3       # CEM iterations
 ```
 
 ---
 
-## 📊 Success Metrics Summary
+## Troubleshooting
 
-
-| Phase           | Metric                 | Target  | Check |
-| --------------- | ---------------------- | ------- | ----- |
-| Data Generation | No NaN values          | 100%    | ✓     |
-| Training        | Val loss               | < 0.1   | ✓     |
-| Evaluation      | 1-step MSE             | < 0.01  | ✓     |
-| Evaluation      | Mass violation         | < 0.01  | ✓     |
-| Evaluation      | Energy violation       | < 1.0   | ✓     |
-| Control         | MPC vs PID improvement | > 20%   | ✓     |
-| Dashboard       | Interactive demo       | Working | ✓     |
-
-
----
-
-## 🆘 Troubleshooting
-
-### Issue: Out of memory during training
-
-**Solution:** Reduce batch size or sequence length
+### Out of memory during training
 
 ```bash
-python scripts/train.py --batch_size 32 --seq_len 30
+python scripts/train.py --batch_size 16 \
+  --config configs/training_default.yaml
 ```
+Or reduce `seq_len` in the config.
 
-### Issue: Training too slow
-
-**Solution:** Check GPU availability
-
-```python
-import jax; print(jax.devices())  # Should show GPU
-```
-
-### Issue: NaN losses
-
-**Solution:** Reduce learning rate or physics weights
+### NaN losses
 
 ```yaml
-peak_lr: 1.0e-4
-mass_balance: 0.01
+# configs/training_default.yaml
+optimizer:
+  peak_lr: 1.0e-4
+  gradient_clip: 0.5
+loss_weights:
+  mass_balance: 0.01
+  energy_balance: 0.01
 ```
 
-### Issue: Poor MPC performance
+### Training too slow
 
-**Solution:** Increase horizon or candidates
+```python
+import jax
+print(jax.devices())   # should list GPU(s)
+```
+If only CPU is shown, check your CUDA / JAX installation.
 
-```yaml
-horizon: 20
-n_candidates: 1000
+### Real data: "No valid trajectory windows"
+
+- Reduce `--trajectory_duration` to match available data length.
+- Increase `--max_gap_fill` to tolerate larger sensor gaps.
+- Set `--drop_large_gaps` only when gaps are genuinely unusable.
+
+### API returns 503 on /predict
+
+The model checkpoint was not found. Check `DTE_MODEL_PATH` points to a valid `.eqx` file and that the path is mounted in the container (`-v $(pwd)/outputs:/app/outputs`).
+
+### Drift detector fires too often
+
+Increase `drift_threshold` or `drift_slack` in `OnlineAdapterConfig`, or increase `drift_reference_steps` to give the baseline estimator more data.
+
+---
+
+## Quick Reference
+
+```bash
+# Minimal end-to-end smoke test
+python scripts/generate_data.py --n_trajectories 100 --output_dir data/test/
+python scripts/train.py --data_dir data/test/ --n_epochs 3 --batch_size 8 \
+  --output_dir outputs/test/
+python scripts/evaluate.py \
+  --model_path outputs/test/final_model.eqx \
+  --config outputs/test/config.yaml \
+  --data_dir data/test/ --output_dir outputs/test/eval/
+
+# Heat exchanger end-to-end
+python scripts/generate_data.py \
+  --config configs/heat_exchanger_default.yaml --output_dir data/hx/
+python scripts/train.py \
+  --config configs/heat_exchanger_training.yaml \
+  --system_config configs/heat_exchanger_default.yaml \
+  --data_dir data/hx/ --output_dir outputs/hx_v1/
+
+# Deploy
+docker compose up
+# API: http://localhost:8000/docs
+# Dashboard: http://localhost:8501
 ```
 
 ---
 
-## 🤖 Phase 11: Autonomous Research Agent
+## Success Metrics Summary
 
-The autonomous agent iterates on your codebase by proposing single-file code changes via an LLM, running an experiment, and keeping only improvements.
-
-### 11.1 Install the Agent Dependency
-
-```bash
-pip install google-genai   # required for Gemini (default provider)
-```
-
-### 11.2 Set API Keys
-
-Export the key for whichever provider you want to use:
-
-```bash
-# Gemini 3.1 Pro (default)
-export GEMINI_API_KEY="your-gemini-key"
-
-# Claude
-export ANTHROPIC_API_KEY="your-anthropic-key"
-
-# OpenAI
-export OPENAI_API_KEY="your-openai-key"
-
-# xAI Grok
-export XAI_API_KEY="your-xai-key"
-```
-
-### 11.3 Launch the Agent
-
-```bash
-# Default: Gemini 3.1 Pro with Rich TUI dashboard
-python scripts/agent.py
-
-# Specify a different Gemini model
-python scripts/agent.py --gemini gemini-3.1-pro-preview
-
-# Use Claude Sonnet 4.6
-python scripts/agent.py --claude
-
-# Use Claude Opus 4.6 (extended thinking)
-python scripts/agent.py --opus
-
-# Use OpenAI (default model: o3)
-python scripts/agent.py --openai
-python scripts/agent.py --openai gpt-4.1
-
-# Use xAI Grok 3
-python scripts/agent.py --grok
-
-# Use a local LM Studio server
-python scripts/agent.py --local
-
-# Limit the number of experiments
-python scripts/agent.py --max-runs 50
-
-# Resume an existing agent branch
-python scripts/agent.py --resume
-
-# Tag the git branch (useful for tracking runs)
-python scripts/agent.py --tag mar26
-
-# Restrict modifications to a single file
-python scripts/agent.py --file dte/training/trainer.py
-
-# Disable Rich dashboard (plain text output)
-python scripts/agent.py --no-dashboard
-```
-
-### 11.4 What the Agent Does
-
-
-| Phase            | Action                                                                                  |
-| ---------------- | --------------------------------------------------------------------------------------- |
-| **Baseline**     | Runs `scripts/autoresearch.py` once on the current code to record a baseline metric     |
-| **Think**        | Sends the target file + experiment history to the LLM and asks for a single improvement |
-| **Apply**        | Patches the proposed change into the file (find-and-replace)                            |
-| **Validate**     | Checks Python/YAML syntax; reverts immediately on parse errors                          |
-| **Run**          | Executes `scripts/autoresearch.py`; streams output in the TUI                           |
-| **Keep/Discard** | Commits and logs improvement; or reverts via `git checkout`                             |
-| **Repeat**       | Loops until `--max-runs` is reached or you press Ctrl-C                                 |
-
-
-The agent state is persisted to `agent_state.json` so it can be resumed after crashes with `--resume`.
-
-### 11.5 Modifiable Files
-
-By default the agent may only change these files (edit `configs/autoresearch_default.yaml` to add more):
-
-```
-configs/training_default.yaml
-scripts/train.py
-dte/models/encoder.py
-dte/models/decoder.py
-dte/models/latent_sde.py
-dte/models/digital_twin.py
-dte/training/trainer.py
-dte/training/losses.py
-```
-
-### 11.6 Reviewing Results
-
-```bash
-# All experiment results are logged here
-cat outputs/autoresearch/results.tsv
-
-# Each run has its own directory with full logs and checkpoints
-ls outputs/autoresearch/
-
-# Agent activity log
-cat agent.log
-```
+| Phase | Metric | Target |
+|---|---|---|
+| Data generation | No NaN values | 100% |
+| Real data ingestion | Trajectories extracted | > 0 |
+| Training | Validation loss | < 0.1 |
+| Evaluation | 1-step normalised MSE | < 0.01 |
+| Evaluation | Mass balance violation | < 0.01 |
+| Evaluation | Energy balance violation | < 1.0 |
+| Control | AI-MPC vs PID ISE improvement | > 20% |
+| Transfer | Few-shot MSE vs zero-shot | Reduction |
+| Online adaptation | Drift detection and recovery | Working |
+| API | `/health` responds | 200 OK |
+| Dashboard | Interactive demo | Running |
 
 ---
 
-## 📚 Next Steps
+## Additional Resources
 
-1. **Extend to other reactors**: Modify `dte/simulators/` for different processes
-2. **Add more physics**: Implement momentum, reaction kinetics
-3. **Multi-reactor systems**: Extend to reactor networks
-4. **Real-time integration**: Connect to plant data
-5. **Advanced control**: Implement learning-based MPC, adaptive control
-
----
-
-## 📖 Additional Resources
-
-- `README.md` - Project overview and features
-- `QUICK_START.md` - Condensed getting started guide
-- `plan.md` - Original technical specification
-- `notebooks/01_exploration.ipynb` - Interactive examples
-- `tests/` - Unit tests showing usage examples
-
----
-
-**🎉 You're now ready to use the Digital Twin Engine!**
-
-For questions or issues, refer to the test suite in `tests/` for usage examples.
+- `README.md` — Project overview and API reference snippets
+- `QUICK_START.md` — Condensed getting started guide
+- `configs/training_default.yaml` — Annotated training configuration
+- `configs/cstr_default.yaml` — Annotated system spec with all fields
+- `notebooks/01_exploration.ipynb` — Interactive CSTR examples
+- `tests/` — Unit tests showing usage of every module
+- `program.md` — Autonomous agent operating rules

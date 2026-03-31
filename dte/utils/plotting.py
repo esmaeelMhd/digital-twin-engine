@@ -28,10 +28,12 @@ def plot_trajectory_comparison(
         save_path: Path to save figure
         pred_std: Standard deviation for ensemble predictions (n_steps, state_dim)
     """
+    state_dim_inferred = true_states.shape[1]
     if state_names is None:
-        state_names = ["Ca", "Cb", "T", "Tc"]
+        state_names = [f"state_{i}" for i in range(state_dim_inferred)]
     if control_names is None:
-        control_names = ["F_in", "Tc_in"]
+        control_dim_inferred = controls.shape[1] if controls is not None else 0
+        control_names = [f"control_{i}" for i in range(control_dim_inferred)]
     
     # Handle ensemble predictions
     if len(pred_states.shape) == 3:
@@ -258,25 +260,42 @@ def plot_mpc_results(
     controls: np.ndarray,
     setpoints: np.ndarray,
     times: np.ndarray,
+    state_names: List[str] = None,
+    control_names: List[str] = None,
     save_path: Optional[str] = None,
 ):
     """Plot MPC control results.
-    
+
     Args:
         states: State trajectory (n_steps, state_dim)
         controls: Control trajectory (n_steps, control_dim)
         setpoints: Setpoint trajectory (n_steps, state_dim)
         times: Time array (n_steps,)
+        state_names: Names of state variables (inferred if None)
+        control_names: Names of control variables (inferred if None)
         save_path: Path to save figure
     """
-    state_names = ["Ca", "Cb", "T", "Tc"]
-    control_names = ["F_in", "Tc_in"]
-    
-    fig, axes = plt.subplots(3, 2, figsize=(14, 12))
-    
-    # Plot states vs setpoints
-    for i in range(4):
-        ax = axes[i // 2, i % 2]
+    state_dim = states.shape[1]
+    control_dim = controls.shape[1]
+
+    if state_names is None:
+        state_names = [f"state_{i}" for i in range(state_dim)]
+    if control_names is None:
+        control_names = [f"control_{i}" for i in range(control_dim)]
+
+    # Layout: states in left column, controls appended below
+    n_state_rows = state_dim
+    n_control_rows = control_dim
+    n_rows = max(n_state_rows, n_control_rows)
+    # Use 2-column layout: left=states, right=controls
+    total_rows = max(n_state_rows, n_control_rows)
+    fig, axes = plt.subplots(total_rows, 2, figsize=(14, 3 * total_rows + 2))
+    if total_rows == 1:
+        axes = axes[np.newaxis, :]
+
+    # Plot states
+    for i in range(state_dim):
+        ax = axes[i, 0]
         ax.plot(times, states[:, i], 'b-', linewidth=2, label='Actual')
         ax.plot(times, setpoints[:, i], 'r--', linewidth=2, label='Setpoint')
         ax.set_xlabel('Time', fontsize=12)
@@ -284,23 +303,31 @@ def plot_mpc_results(
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.set_title(f'{state_names[i]} Tracking', fontsize=12, fontweight='bold')
-    
+
+    # Hide unused state rows
+    for i in range(state_dim, total_rows):
+        axes[i, 0].axis('off')
+
     # Plot controls
-    for i in range(2):
-        ax = axes[2, i]
+    for i in range(control_dim):
+        ax = axes[i, 1]
         ax.plot(times, controls[:, i], 'g-', linewidth=2)
         ax.set_xlabel('Time', fontsize=12)
         ax.set_ylabel(control_names[i], fontsize=12)
         ax.grid(True, alpha=0.3)
         ax.set_title(f'{control_names[i]} Action', fontsize=12, fontweight='bold')
-    
+
+    # Hide unused control rows
+    for i in range(control_dim, total_rows):
+        axes[i, 1].axis('off')
+
     plt.suptitle('MPC Control Results', fontsize=14, fontweight='bold')
     plt.tight_layout()
-    
+
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Saved plot to {save_path}")
-    
+
     return fig
 
 
@@ -312,29 +339,32 @@ def plot_prediction_error(
     save_path: Optional[str] = None,
 ):
     """Plot prediction error over time.
-    
+
     Args:
         true_states: True states (n_steps, state_dim)
         pred_states: Predicted states (n_steps, state_dim)
         times: Time array (n_steps,)
-        state_names: Names of state variables
+        state_names: Names of state variables (inferred if None)
         save_path: Path to save figure
     """
+    state_dim = true_states.shape[1]
     if state_names is None:
-        state_names = ["Ca", "Cb", "T", "Tc"]
-    
+        state_names = [f"state_{i}" for i in range(state_dim)]
+
     errors = np.abs(true_states - pred_states)
     relative_errors = errors / (np.abs(true_states) + 1e-8) * 100
-    
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes = axes.flatten()
-    
-    for i in range(4):
+
+    ncols = min(state_dim, 2)
+    nrows = (state_dim + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 5 * nrows))
+    axes = np.array(axes).flatten()
+
+    for i in range(state_dim):
         ax = axes[i]
         ax.plot(times, errors[:, i], 'b-', linewidth=2, label='Absolute Error')
         ax_twin = ax.twinx()
         ax_twin.plot(times, relative_errors[:, i], 'r--', linewidth=2, label='Relative Error (%)')
-        
+
         ax.set_xlabel('Time', fontsize=12)
         ax.set_ylabel('Absolute Error', fontsize=12, color='b')
         ax_twin.set_ylabel('Relative Error (%)', fontsize=12, color='r')
@@ -342,17 +372,20 @@ def plot_prediction_error(
         ax_twin.tick_params(axis='y', labelcolor='r')
         ax.grid(True, alpha=0.3)
         ax.set_title(f'{state_names[i]} Prediction Error', fontsize=12, fontweight='bold')
-        
-        # Combine legends
+
         lines1, labels1 = ax.get_legend_handles_labels()
         lines2, labels2 = ax_twin.get_legend_handles_labels()
         ax.legend(lines1 + lines2, labels1 + labels2, fontsize=10)
-    
+
+    # Hide unused subplot slots
+    for i in range(state_dim, len(axes)):
+        axes[i].axis('off')
+
     plt.suptitle('Prediction Error Analysis', fontsize=14, fontweight='bold')
     plt.tight_layout()
-    
+
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Saved plot to {save_path}")
-    
+
     return fig

@@ -1,20 +1,67 @@
 """Decoder module for mapping latent states back to physical space."""
 
+from typing import List
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 
+def apply_decoder_constraints(
+    state_raw: Float[Array, "state_dim"],
+    constraints: list,
+) -> Float[Array, "state_dim"]:
+    """Apply physical constraints to raw decoder outputs.
+
+    Each constraint dict has the form::
+
+        {"type": "softplus",     "indices": [0, 1], "bias": 0.5}
+        {"type": "sigmoid_range","indices": [2, 3], "low": 250.0, "high": 400.0}
+        {"type": "none",         "indices": [4]}
+
+    This function is JAX-traceable and works correctly under ``jit`` and
+    ``vmap`` provided all constraint metadata is static (no data-dependent
+    indexing based on JAX arrays).
+    """
+    out = state_raw
+    for c in constraints:
+        ctype = c["type"]
+        # Convert list to tuple for JAX indexing (avoids deprecated list indexing)
+        raw_idxs = c["indices"]
+        idxs = tuple(raw_idxs) if len(raw_idxs) > 1 else (raw_idxs[0],)
+        if ctype == "softplus":
+            bias = c.get("bias", 0.5)
+            out = out.at[jnp.array(raw_idxs)].set(
+                jax.nn.softplus(state_raw[jnp.array(raw_idxs)] + bias)
+            )
+        elif ctype == "sigmoid_range":
+            low = c.get("low", 0.0)
+            high = c.get("high", 1.0)
+            out = out.at[jnp.array(raw_idxs)].set(
+                low + (high - low) * jax.nn.sigmoid(state_raw[jnp.array(raw_idxs)])
+            )
+        # "none" -> no-op
+    return out
+
+
 class Decoder(eqx.Module):
+    """Decodes latent state z back to physical state.
+
+    Output constraints are fully driven by the ``constraints`` argument so
+    that no system-specific values are hardcoded in this file.
     """
-    Decodes latent state z back to physical state [Ca, Cb, T, Tc].
-    Also conditioned on params and control for better reconstruction.
-    """
-    
+
     layers: list
     output_layer: eqx.nn.Linear
-    
+
+    # Normalization for conditioning inputs
+    control_scale: Float[Array, "control_dim"]
+    param_scale: float = eqx.field(static=True)
+
+    # Constraint specification stored as a plain Python list (static)
+    constraints: list = eqx.field(static=True)
+
     def __init__(
         self,
         latent_dim: int = 16,
@@ -23,71 +70,53 @@ class Decoder(eqx.Module):
         state_dim: int = 4,
         hidden_dim: int = 128,
         n_layers: int = 3,
+        constraints: List[dict] | None = None,
+        control_scale: list | None = None,
+        param_scale: float = 0.1,
         *,
         key: PRNGKeyArray,
     ):
-        """Initialize decoder.
-        
+        """
         Args:
-            latent_dim: Latent dimension
-            param_dim: Parameter dimension
-            control_dim: Control dimension
-            state_dim: State dimension
-            hidden_dim: Hidden layer dimension
-            n_layers: Number of hidden layers
-            key: PRNG key for initialization
+            constraints: List of constraint dicts applied to raw decoder output.
+                Each dict must have ``"type"`` and ``"indices"`` keys.
+                Defaults to no constraints (pass-through).
+            control_scale: Per-element scale applied to control before concat.
+            param_scale: Scalar scale applied to log-params before concat.
         """
         keys = jax.random.split(key, n_layers + 1)
-        
-        # Input dimension
+
         input_dim = latent_dim + param_dim + control_dim
-        
-        # Hidden layers
+
         self.layers = []
         for i in range(n_layers):
             in_dim = input_dim if i == 0 else hidden_dim
-            self.layers.append(
-                eqx.nn.Linear(in_dim, hidden_dim, key=keys[i])
-            )
-        
-        # Output layer
+            self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[i]))
+
         self.output_layer = eqx.nn.Linear(hidden_dim, state_dim, key=keys[-1])
-    
+
+        self.constraints = constraints if constraints is not None else []
+        self.control_scale = jnp.array(
+            control_scale if control_scale is not None else [0.01] * control_dim
+        )
+        self.param_scale = param_scale
+
     def __call__(
         self,
         z: Float[Array, "latent_dim"],
         params: Float[Array, "param_dim"],
         control: Float[Array, "control_dim"],
     ) -> Float[Array, "state_dim"]:
-        """Decode latent vector to physical state.
-        
-        Args:
-            z: Latent vector
-            params: System parameters
-            control: Control input
-            
-        Returns:
-            Reconstructed physical state [Ca, Cb, T, Tc]
-        """
-        # Concatenate inputs
-        x = jnp.concatenate([z, jnp.sign(params) * jnp.log1p(jnp.abs(params)) * 0.1, control * 0.01])
-        
-        # Forward through hidden layers
+        """Decode latent vector to physical state."""
+        log_params = jnp.sign(params) * jnp.log1p(jnp.abs(params)) * self.param_scale
+        scaled_control = control * self.control_scale
+
+        x = jnp.concatenate([z, log_params, scaled_control])
+
         for layer in self.layers:
             x_out = jax.nn.silu(layer(x))
             x = x + x_out if x.shape == x_out.shape else x_out
-        
-        # Output layer
+
         state_raw = 10.0 * jax.nn.tanh(self.output_layer(x) / 10.0)
-        
-        # Apply output constraints
-        # Ca, Cb: must be non-negative (use softplus)
-        Ca = jax.nn.softplus(state_raw[0] + 0.5)
-        Cb = jax.nn.softplus(state_raw[1] + 0.5)
-        
-        # T, Tc: must be in reasonable range ~200-500K
-        # Use 200 + 300*sigmoid to get range [200, 500]
-        T = 250.0 + 150.0 * jax.nn.sigmoid(state_raw[2])
-        Tc = 250.0 + 150.0 * jax.nn.sigmoid(state_raw[3])
-        
-        return jnp.array([Ca, Cb, T, Tc])
+
+        return apply_decoder_constraints(state_raw, self.constraints)

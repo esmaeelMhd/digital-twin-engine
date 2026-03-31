@@ -13,87 +13,137 @@ from dte.models.latent_sde import LatentSDE
 
 class DigitalTwin(eqx.Module):
     """Digital Twin model combining encoder, decoder, and latent SDE."""
-    
+
     encoder: Encoder
     decoder: Decoder
     latent_sde: LatentSDE
-    
+
     def __init__(
         self,
         encoder: Encoder,
         decoder: Decoder,
         latent_sde: LatentSDE,
     ):
-        """Initialize Digital Twin.
-        
-        Args:
-            encoder: Encoder module
-            decoder: Decoder module
-            latent_sde: Latent SDE module
-        """
         self.encoder = encoder
         self.decoder = decoder
         self.latent_sde = latent_sde
-    
+
     @classmethod
-    def from_config(cls, config: dict, key: PRNGKeyArray) -> "DigitalTwin":
+    def from_config(cls, config: dict, key: PRNGKeyArray, system_spec=None) -> "DigitalTwin":
         """Create model from config dict.
-        
+
         Args:
-            config: Configuration dictionary
-            key: PRNG key
-            
-        Returns:
-            Initialized Digital Twin model
+            config: Training configuration dictionary.
+            key: PRNG key.
+            system_spec: Optional :class:`~dte.simulators.base.SystemSpec`.
+                When provided, normalization arrays and decoder constraints are
+                taken from the spec rather than falling back to defaults.
         """
         key_enc, key_dec, key_sde = jax.random.split(key, 3)
-        
+
         model_config = config["model"]
-        
-        # Create encoder
+
+        # Dimensions: system_spec takes priority over config file values
+        if system_spec is not None:
+            state_dim = system_spec.state_dim
+            param_dim = system_spec.param_dim
+            control_dim = system_spec.control_dim
+            disturbance_dim = system_spec.disturbance_dim
+        else:
+            state_dim = model_config.get("state_dim", 4)
+            param_dim = model_config.get("param_dim", 6)
+            control_dim = model_config.get("control_dim", 2)
+            disturbance_dim = model_config.get("disturbance_dim", 2)
+        latent_dim = model_config["latent_dim"]
+        hidden_dim = model_config["hidden_dim"]
+        n_layers = model_config["n_layers"]
+
+        # Pull normalization and constraints from system_spec when available
+        if system_spec is not None:
+            norm = system_spec.normalization
+            state_center = norm.state_center
+            state_scale = norm.state_scale
+            control_center = norm.control_center
+            control_scale = norm.control_scale
+            disturbance_center = norm.disturbance_center
+            disturbance_scale = norm.disturbance_scale
+            param_scale = norm.param_scale
+            decoder_constraints = [
+                {
+                    "type": c.type,
+                    "indices": c.indices,
+                    "bias": c.bias,
+                    "low": c.low,
+                    "high": c.high,
+                }
+                for c in system_spec.decoder_constraints
+            ]
+            nominal_disturbance = system_spec.default_nominal_disturbance
+        else:
+            state_center = None
+            state_scale = None
+            control_center = None
+            control_scale = None
+            disturbance_center = None
+            disturbance_scale = None
+            param_scale = 0.1
+            decoder_constraints = None
+            nominal_disturbance = None
+
         encoder = Encoder(
-            state_dim=model_config.get("state_dim", 4),
-            param_dim=model_config.get("param_dim", 6),
-            control_dim=model_config.get("control_dim", 2),
-            latent_dim=model_config["latent_dim"],
-            hidden_dim=model_config["hidden_dim"],
-            n_layers=model_config["n_layers"],
+            state_dim=state_dim,
+            param_dim=param_dim,
+            control_dim=control_dim,
+            latent_dim=latent_dim,
+            hidden_dim=hidden_dim,
+            n_layers=n_layers,
+            state_center=state_center,
+            state_scale=state_scale,
+            control_center=control_center,
+            control_scale=control_scale,
+            param_scale=param_scale,
             key=key_enc,
         )
-        
-        # Create decoder
+
         decoder = Decoder(
-            latent_dim=model_config["latent_dim"],
-            param_dim=model_config.get("param_dim", 6),
-            control_dim=model_config.get("control_dim", 2),
-            state_dim=model_config.get("state_dim", 4),
-            hidden_dim=model_config["hidden_dim"],
-            n_layers=model_config["n_layers"],
+            latent_dim=latent_dim,
+            param_dim=param_dim,
+            control_dim=control_dim,
+            state_dim=state_dim,
+            hidden_dim=hidden_dim,
+            n_layers=n_layers,
+            constraints=decoder_constraints,
+            control_scale=[0.01] * control_dim if control_scale is None else [s * 0.01 / max(s, 1e-8) for s in control_scale],
+            param_scale=param_scale,
             key=key_dec,
         )
-        
-        # Create latent SDE
+
         latent_sde = LatentSDE(
-            latent_dim=model_config["latent_dim"],
-            control_dim=model_config.get("control_dim", 2),
-            disturbance_dim=model_config.get("disturbance_dim", 2),
-            param_dim=model_config.get("param_dim", 6),
-            hidden_dim=model_config["hidden_dim"],
+            latent_dim=latent_dim,
+            control_dim=control_dim,
+            disturbance_dim=disturbance_dim,
+            param_dim=param_dim,
+            hidden_dim=hidden_dim,
             drift_layers=model_config.get("drift_layers", 3),
             diffusion_layers=model_config.get("diffusion_layers", 2),
             diffusion_hidden_dim=model_config.get("diffusion_hidden_dim", 64),
             initial_diffusion_scale=model_config.get("initial_diffusion_scale", 0.1),
+            control_center=control_center,
+            control_scale=control_scale,
+            disturbance_center=disturbance_center,
+            disturbance_scale=disturbance_scale,
+            param_scale=param_scale,
+            nominal_disturbance=nominal_disturbance,
             key=key_sde,
         )
-        
+
         model = cls(encoder, decoder, latent_sde)
-        
-        # Print parameter count
+
         param_count = sum(x.size for x in jax.tree.leaves(eqx.filter(model, eqx.is_array)))
         print(f"Digital Twin initialized with {param_count:,} parameters")
-        
+
         return model
-    
+
     def encode(
         self,
         state: Float[Array, "state_dim"],
@@ -101,44 +151,25 @@ class DigitalTwin(eqx.Module):
         control: Float[Array, "control_dim"],
         key: PRNGKeyArray = None,
     ) -> Tuple[Float[Array, "latent_dim"], Float[Array, "latent_dim"], Float[Array, "latent_dim"]]:
-        """Encode physical state to latent.
-        
-        Args:
-            state: Physical state
-            params: System parameters
-            control: Control input
-            key: PRNG key (if None, return mean without sampling)
-            
-        Returns:
-            Tuple of (z, z_mean, z_logvar)
-        """
+        """Encode physical state to latent -> (z, z_mean, z_logvar)."""
         z_mean, z_logvar = self.encoder.encode(state, params, control)
-        
+
         if key is not None:
             z = self.encoder.sample(z_mean, z_logvar, key)
         else:
             z = z_mean
-        
+
         return z, z_mean, z_logvar
-    
+
     def decode(
         self,
         z: Float[Array, "latent_dim"],
         params: Float[Array, "param_dim"],
         control: Float[Array, "control_dim"],
     ) -> Float[Array, "state_dim"]:
-        """Decode latent state to physical state.
-        
-        Args:
-            z: Latent state
-            params: System parameters
-            control: Control input
-            
-        Returns:
-            Physical state
-        """
+        """Decode latent state to physical state."""
         return self.decoder(z, params, control)
-    
+
     def predict(
         self,
         initial_state: Float[Array, "state_dim"],
@@ -148,58 +179,27 @@ class DigitalTwin(eqx.Module):
         ts: Float[Array, "n_steps"],
         key: PRNGKeyArray,
     ) -> Dict[str, Array]:
-        """Full prediction pipeline.
-        
-        1. Encode initial state -> z0
-        2. Roll out latent SDE -> z_trajectory
-        3. Decode all timesteps -> predicted_states
-        
-        Args:
-            initial_state: Initial physical state
-            controls: Control trajectory
-            disturbances: Disturbance trajectory
-            params: System parameters
-            ts: Time points
-            key: PRNG key
-            
-        Returns:
-            Dictionary with:
-                - states: (n_steps, state_dim) predicted physical states
-                - latent: (n_steps, latent_dim) latent trajectory
-                - z_mean: (latent_dim,) encoder mean
-                - z_logvar: (latent_dim,) encoder log-variance
-        """
+        """Full prediction pipeline (stochastic SDE rollout)."""
         key_enc, key_sde = jax.random.split(key)
-        
-        # Encode initial state
-        z0, z_mean, z_logvar = self.encode(
-            initial_state, params, controls[0], key_enc
-        )
-        
-        # Roll out latent SDE
+
+        z0, z_mean, z_logvar = self.encode(initial_state, params, controls[0], key_enc)
+
         z_trajectory = self.latent_sde(
-            ts,
-            z0,
-            controls,
-            params,
-            key_sde,
-            disturbances=disturbances,
+            ts, z0, controls, params, key_sde, disturbances=disturbances
         )
-        
-        # Decode all timesteps
+
         decode_fn = jax.vmap(
-            lambda z, u: self.decode(z, params, u),
-            in_axes=(0, 0)
+            lambda z, u: self.decode(z, params, u), in_axes=(0, 0)
         )
         predicted_states = decode_fn(z_trajectory, controls)
-        
+
         return {
             "states": predicted_states,
             "latent": z_trajectory,
             "z_mean": z_mean,
             "z_logvar": z_logvar,
         }
-    
+
     def predict_ensemble(
         self,
         initial_state: Float[Array, "state_dim"],
@@ -210,83 +210,44 @@ class DigitalTwin(eqx.Module):
         key: PRNGKeyArray,
         n_samples: int = 20,
     ) -> Dict[str, Array]:
-        """Sample multiple trajectories from the SDE.
-        
-        Args:
-            initial_state: Initial physical state
-            controls: Control trajectory
-            disturbances: Disturbance trajectory
-            params: System parameters
-            ts: Time points
-            key: PRNG key
-            n_samples: Number of samples
-            
-        Returns:
-            Dictionary with:
-                - states_mean: (n_steps, state_dim) mean prediction
-                - states_std: (n_steps, state_dim) standard deviation
-                - states_samples: (n_samples, n_steps, state_dim) all samples
-        """
+        """Sample multiple trajectories for uncertainty quantification."""
         keys = jax.random.split(key, n_samples)
-        
-        # Generate multiple predictions
+
         def predict_one(k):
             result = self.predict(initial_state, controls, disturbances, params, ts, k)
             return result["states"]
-        
+
         states_samples = jax.vmap(predict_one)(keys)
-        
-        # Compute statistics
-        states_mean = jnp.mean(states_samples, axis=0)
-        states_std = jnp.std(states_samples, axis=0)
-        
+
         return {
-            "states_mean": states_mean,
-            "states_std": states_std,
+            "states_mean": jnp.mean(states_samples, axis=0),
+            "states_std": jnp.std(states_samples, axis=0),
             "states_samples": states_samples,
         }
-    
+
     def save(self, path: str):
-        """Save model using equinox serialization.
-        
-        Args:
-            path: Output file path
-        """
+        """Save model using equinox serialization."""
         with open(path, "wb") as f:
             eqx.tree_serialise_leaves(f, self)
         print(f"Model saved to {path}")
-    
+
     @classmethod
-    def load(cls, path: str, config: dict) -> "DigitalTwin":
-        """Load model using equinox deserialization.
-        
-        Args:
-            path: Input file path
-            config: Configuration dictionary (needed to reconstruct structure)
-            
-        Returns:
-            Loaded Digital Twin model
-        """
-        # Create a template model with same structure
-        key = jax.random.PRNGKey(0)  # Key doesn't matter for structure
-        template = cls.from_config(config, key)
-        
-        # Load parameters into template
+    def load(cls, path: str, config: dict, system_spec=None) -> "DigitalTwin":
+        """Load model using equinox deserialization."""
+        key = jax.random.PRNGKey(0)
+        template = cls.from_config(config, key, system_spec=system_spec)
+
         with open(path, "rb") as f:
             model = eqx.tree_deserialise_leaves(f, template)
-        
+
         print(f"Model loaded from {path}")
         return model
-    
+
     def get_parameter_count(self) -> Dict[str, int]:
-        """Get parameter counts for each submodule.
-        
-        Returns:
-            Dictionary with parameter counts
-        """
+        """Get parameter counts for each submodule."""
         def count_params(module):
             return sum(x.size for x in jax.tree.leaves(eqx.filter(module, eqx.is_array)))
-        
+
         return {
             "encoder": count_params(self.encoder),
             "decoder": count_params(self.decoder),
