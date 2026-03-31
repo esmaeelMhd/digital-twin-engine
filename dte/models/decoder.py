@@ -74,8 +74,8 @@ class Decoder(eqx.Module):
         
         # Forward through hidden layers
         for layer in self.layers:
-            x = layer(x)
-            x = jax.nn.silu(x)
+            x_out = jax.nn.silu(layer(x))
+            x = x + x_out if x.shape == x_out.shape else x_out
         
         # Output layer
         state_raw = 10.0 * jax.nn.tanh(self.output_layer(x) / 10.0)
