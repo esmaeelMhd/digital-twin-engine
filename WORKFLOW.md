@@ -408,7 +408,8 @@ curl -X POST http://localhost:8000/steady_state \
 
 ## Phase 9: Adding a New System
 
-The engine is fully decoupled from CSTR. Adding a new process requires four steps and zero changes to the core engine.
+The engine is fully decoupled from CSTR. Adding a new process requires only
+registry-boundary changes; the core model/training code stays untouched.
 
 ### Step 1 — Simulator (`dte/simulators/my_system.py`)
 
@@ -449,9 +450,14 @@ Skip this step and use `NullPhysicsLoss` if no physics constraints are needed.
 
 Define `system.name`, `system.state_dim`, `system.state_names`, `system.normalization`, `system.decoder_constraints`, and simulator-specific parameters.
 
-### Step 4 — Register (`dte/simulators/registry.py`)
+### Step 4 — Register the System (`dte/simulators/registry.py`)
 
-Add an `elif system_name == "my_system":` branch in `get_system_spec` and `get_simulator`.
+Add builder entries for your spec and simulator in the registry tables.
+
+### Step 5 — Register Physics (`dte/physics/registry.py`)
+
+If the system has physics residuals or evaluation diagnostics, register the
+corresponding builders in the physics registry.
 
 That is the complete extension path. The training, evaluation, MPC, API, and dashboard all adapt automatically.
 
@@ -463,12 +469,12 @@ That is the complete extension path. The training, evaluation, MPC, API, and das
 
 ```yaml
 model:
-  latent_dim: 16       # latent space dimension (try 8–32)
+  latent_dim: 32       # latent space dimension (try 8–32)
   hidden_dim: 128      # MLP hidden width (try 64–256)
-  encoder_layers: 3
-  decoder_layers: 3
+  n_layers: 3
   drift_layers: 3
   diffusion_layers: 2
+  diffusion_hidden_dim: 64
 ```
 
 ### Training (`training`)
@@ -476,10 +482,10 @@ model:
 ```yaml
 training:
   n_epochs: 100
-  batch_size: 64       # reduce if OOM
-  seq_len: 50          # sequence length (overridden by curriculum)
-  stride: 10
-  val_split: 0.1
+  batch_size: 128      # reduce if OOM
+  seq_len: 25          # sequence length (overridden by curriculum)
+  stride: 5
+  val_split: 0.2
 ```
 
 ### Loss Weights (`loss_weights`)
@@ -488,10 +494,11 @@ training:
 loss_weights:
   reconstruction: 1.0
   kl: 0.0001
-  trajectory: 0.5
-  one_step: 0.3
-  mass_balance: 0.1    # CSTR only
-  energy_balance: 0.1  # CSTR / heat exchanger
+  trajectory: 10.0
+  one_step: 0.0
+  mass_balance: 0.001
+  species_mass_balance: 0.001
+  energy_balance: 0.001
 ```
 
 ### Stochastic SDE (`sde_training`)
@@ -499,15 +506,15 @@ loss_weights:
 ```yaml
 sde_training:
   enabled: false        # set true to activate diffusion path
-  warmup_steps: 5000    # delay before SDE path activates
-  sde_kl_weight: 0.01
+  warmup_steps: 2000    # delay before SDE path activates
+  sde_kl_weight: 0.00001
 ```
 
 ### Curriculum (`curriculum`)
 
 ```yaml
 curriculum:
-  enabled: true
+  enabled: false
   initial_seq_len: 5
   final_seq_len: 50
   warmup_epochs: 20
@@ -526,11 +533,11 @@ teacher_forcing:
 
 ```yaml
 optimizer:
-  peak_lr: 3.0e-4      # reduce to 1e-4 if loss diverges
-  warmup_steps: 1000
-  total_steps: 50000
-  end_lr: 1.0e-5
-  gradient_clip: 1.0
+  peak_lr: 5.0e-4
+  warmup_steps: 200
+  total_steps: 5000
+  end_lr: 1.0e-6
+  gradient_clip: 0.5
 ```
 
 ### MPC (`configs/mpc_default.yaml`)

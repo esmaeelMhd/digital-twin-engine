@@ -38,6 +38,7 @@ graph LR
 4. **SystemSpec** — Dataclass that defines a system's dimensions, names, normalizations, and constraints
 5. **PhysicsLoss** — Pluggable interface for system-specific conservation law residuals
 6. **System Registry** — Instantiates any registered system by name from a YAML config
+7. **Physics Registry** — Resolves system-specific physics losses and evaluation diagnostics
 
 **Total Parameters:** ~120K (optimised for RTX 4070)
 
@@ -48,7 +49,7 @@ graph LR
 | `cstr` | 4 (Ca, Cb, T, Tc) | 2 (F_in, Tc_in) | 2 (Ca_in, T_in) | Mass + Energy balance |
 | `heat_exchanger` | 2 (T_hot, T_cold) | 2 (F_hot, F_cold) | 2 (T_hot_in, T_cold_in) | Energy balance |
 
-New systems require only a YAML config, a simulator class, and an optional physics loss — no changes to the core engine.
+New systems require a YAML config, a simulator class, an optional physics loss, and registry entries — no changes to the core model or trainer.
 
 ## Installation
 
@@ -206,6 +207,7 @@ digital-twin-engine/
 │   │   └── digital_twin.py   # Composed DigitalTwin module
 │   ├── physics/
 │   │   ├── base.py           # PhysicsLoss ABC + NullPhysicsLoss
+│   │   ├── registry.py       # Physics loss / diagnostic registry
 │   │   ├── cstr.py           # CSTR mass + energy balance residuals
 │   │   └── heat_exchanger.py # Heat exchanger energy balance residual
 │   ├── training/
@@ -321,7 +323,8 @@ python scripts/train.py --data_dir data/test/ --n_epochs 5 --batch_size 8
 # 1. Create dte/simulators/my_system.py  (subclass ProcessSimulator)
 # 2. Create dte/physics/my_system.py     (subclass PhysicsLoss)
 # 3. Create configs/my_system_default.yaml
-# 4. Register in dte/simulators/registry.py
+# 4. Register spec/simulator builders in dte/simulators/registry.py
+# 5. Register physics builders in dte/physics/registry.py (if needed)
 ```
 
 ## License

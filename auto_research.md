@@ -41,7 +41,7 @@ one registration entry. No core engine changes are needed.
 - **Encoder** (`dte/models/encoder.py`): encodes `state + params + control` → `z_mean`, `z_logvar`; normalisation loaded from `SystemSpec`
 - **Decoder** (`dte/models/decoder.py`): decodes `latent + params + control`; output constraints are generic (`softplus`, `sigmoid_range`) driven by `SystemSpec.decoder_constraints`
 - **LatentSDE** (`dte/models/latent_sde.py`): separate drift and diffusion MLPs conditioned on `z + control + disturbance + params`; normalisation loaded from `SystemSpec`
-- **DigitalTwin** (`dte/models/digital_twin.py`): composes all components; `from_config(config, key, system_spec=spec)` is the constructor
+- **DigitalTwin** (`dte/models/digital_twin.py`): composes all components; `from_config(config, key, system_spec)` and `load(path, config, system_spec)` both require a resolved `SystemSpec`
 
 All dimensions and normalisation constants come from `SystemSpec` — there are no hardcoded
 CSTR values in the model code.
@@ -64,30 +64,48 @@ stochastic `model.latent_sde(...)` call.
 
 ## Current Training Defaults (`configs/training_default.yaml`)
 
+Note: `scripts/train.py` applies a few bootstrap overrides on top of the YAML
+defaults during standard training runs, most notably:
+- `model.initial_diffusion_scale = 1e-4`
+- `optimizer.peak_lr = 5e-4`
+- `optimizer.gradient_clip = 0.5`
+- `loss_weights.kl = 0.0`
+
 ```yaml
 model:
-  latent_dim: 16
+  latent_dim: 32
   hidden_dim: 128
-  encoder_layers: 3
-  decoder_layers: 3
+  n_layers: 3
   drift_layers: 3
   diffusion_layers: 2
+  diffusion_hidden_dim: 64
+  initial_diffusion_scale: 0.1
+
+sde:
+  dt_ratio: 0.25
 
 training:
-  batch_size: 64
-  seq_len: 20           # overridden by curriculum if enabled
-  stride: 10
-  peak_lr: 3.0e-4
+  batch_size: 128
+  seq_len: 25
+  stride: 5
+
+optimizer:
+  peak_lr: 5.0e-4
+  warmup_steps: 200
   gradient_clip: 0.5
 
 loss_weights:
   reconstruction: 1.0
+  kl: 0.0001
+  one_step: 0.0
   trajectory: 10.0
-  kl: 0.001
-  one_step: 0.3
-  mass_balance: 0.01    # CSTR only
-  energy_balance: 0.01  # CSTR / heat exchanger
+  mass_balance: 0.001
+  species_mass_balance: 0.001
+  energy_balance: 0.001
 ```
+
+Physics-loss lookup is registry-driven via `dte/physics/registry.py`, and model
+construction/loading is `SystemSpec`-driven throughout.
 
 ---
 

@@ -47,12 +47,15 @@ normalisation constants anywhere in the model code.
 | File | Role |
 |---|---|
 | `dte/physics/base.py` | `PhysicsLoss` ABC + `NullPhysicsLoss` |
+| `dte/physics/registry.py` | Registry-driven physics loss / diagnostic lookup |
 | `dte/physics/cstr.py` | `CSTRPhysicsLoss` (mass + energy residuals) |
 | `dte/physics/heat_exchanger.py` | `HeatExchangerPhysicsLoss` (energy residual) |
 | `dte/physics/conservation.py` | Re-exports from `cstr.py` for backward compatibility |
 
 `LossComputer` (`dte/training/losses.py`) accepts any `PhysicsLoss` instance and
 queries `residual_names()` dynamically — it has no CSTR coupling.
+Training and evaluation resolve system-specific physics through
+`dte/physics/registry.py`, not through hardcoded script branches.
 
 ### Training features (all implemented)
 
@@ -133,12 +136,14 @@ Physics losses are computed in physical units.
 
 ## Adding a New Process System
 
-Only four files need to be created/modified. Nothing in the core engine changes.
+The core model/training engine does not change. New systems are added at the
+system / physics registry boundary.
 
 1. `dte/simulators/my_system.py` — subclass `ProcessSimulator`
 2. `dte/physics/my_system.py` — subclass `PhysicsLoss` (or use `NullPhysicsLoss`)
 3. `configs/my_system_default.yaml` — define `SystemSpec` fields + simulator params
-4. `dte/simulators/registry.py` — add `elif system_name == "my_system":` branch
+4. `dte/simulators/registry.py` — register spec/simulator builder entries
+5. `dte/physics/registry.py` — register physics-loss / diagnostic builders if applicable
 
 ---
 
@@ -183,6 +188,10 @@ Plain list indexing is deprecated in recent JAX versions.
 Signature is `LossComputer(config, normalization_stats, physics_loss, state_names)`.
 `config` is the **full** config dict (must have `loss_weights` at the top level),
 not just `config["training"]`.
+
+**`DigitalTwin.from_config` / `DigitalTwin.load`**
+Both require a `SystemSpec`. Do not construct or load the model from training config
+alone; resolve the spec first with `get_system_spec(system_config)`.
 
 **`eqx.partition` / `eqx.combine` pattern for selective fine-tuning**
 Use `trainable, frozen = eqx.partition(model, filter_spec)` and
