@@ -1,313 +1,207 @@
-# Digital Twin Engine - Autoresearch Context
+# Digital Twin Engine — Autoresearch Context
 
-This file is read by `scripts/agent.py` and injected into the LLM prompt.
-It is a compact repo briefing, not the source of truth. The main source-of-truth
-files are `README.md`, `WORKFLOW.md`, `program.md`, `configs/*.yaml`, and the code.
+This file is read by `scripts/agent.py` and injected into the LLM prompt as a compact
+repo briefing. It is not the source of truth — the main sources are `README.md`,
+`WORKFLOW.md`, `AGENTS.md`, `program.md`, `configs/*.yaml`, and the code itself.
+
+---
 
 ## Repo Purpose
 
-Digital Twin Engine is a JAX/Equinox project for learning a fast, physics-aware
-surrogate model of a chemical process system. The current benchmark system is a
-non-isothermal CSTR with a cooling jacket and a first-order irreversible
-reaction `A -> B`.
+Digital Twin Engine is a JAX/Equinox project for learning fast, physics-aware surrogate
+models of industrial process systems. The architecture is fully decoupled from any
+specific process via the `SystemSpec` / `ProcessSimulator` abstraction.
 
-The product goal is not just forecasting. The learned model should be useful for:
-
+The product goal is not just forecasting. The learned model must be useful for:
 - accurate trajectory prediction
 - physically plausible rollouts
 - uncertainty-aware simulation
 - downstream control, especially MPC
 
-The repo and README describe this as an AI-powered digital twin that aims to be
-much faster than first-principles simulation while remaining useful for control.
+---
 
-## Current Physical System
+## Supported Systems
 
-The current modeled plant is the CSTR defined in `configs/cstr_default.yaml`
-and implemented in `dte/simulators/cstr.py`.
+| System | States | Controls | Disturbances | Physics |
+|---|---|---|---|---|
+| `cstr` | 4 (Ca, Cb, T, Tc) | 2 (F_in, Tc_in) | 2 (Ca_in, T_in) | Mass + Energy balance |
+| `heat_exchanger` | 2 (T_hot, T_cold) | 2 (F_hot, F_cold) | 2 (T_hot_in, T_cold_in) | Energy balance |
 
-State vector:
+New systems require only: a simulator class, a physics loss class, a YAML config, and
+one registration entry. No core engine changes are needed.
 
-- `Ca`: concentration of reactant A
-- `Cb`: concentration of product B
-- `T`: reactor temperature
-- `Tc`: coolant jacket temperature
+---
 
-Controls:
+## Current Architecture (Implemented, Not Aspirational)
 
-- `F_in`: inlet volumetric flow rate
-- `Tc_in`: coolant inlet temperature
+### Model pipeline
 
-Disturbances present in the dataset:
+`physical state + controls → Encoder → latent z → LatentSDE → latent trajectory → Decoder → predicted states`
 
-- `Ca_in`: inlet feed concentration
-- `T_in`: inlet feed temperature
+- **Encoder** (`dte/models/encoder.py`): encodes `state + params + control` → `z_mean`, `z_logvar`; normalisation loaded from `SystemSpec`
+- **Decoder** (`dte/models/decoder.py`): decodes `latent + params + control`; output constraints are generic (`softplus`, `sigmoid_range`) driven by `SystemSpec.decoder_constraints`
+- **LatentSDE** (`dte/models/latent_sde.py`): separate drift and diffusion MLPs conditioned on `z + control + disturbance + params`; normalisation loaded from `SystemSpec`
+- **DigitalTwin** (`dte/models/digital_twin.py`): composes all components; `from_config(config, key, system_spec=spec)` is the constructor
 
-Default operating ranges from `configs/cstr_default.yaml`:
+All dimensions and normalisation constants come from `SystemSpec` — there are no hardcoded
+CSTR values in the model code.
 
-- `F_in`: `[10.0, 100.0]`
-- `Tc_in`: `[280.0, 320.0]`
-- `Ca_in`: `[0.5, 2.0]`
-- `T_in`: `[290.0, 350.0]`
+### Training (all features implemented and active by default or via config)
 
-The simulator is the physical reference model. Training data is synthetic and
-comes from that simulator, not from real plant data.
+| Feature | Config key | Status |
+|---|---|---|
+| Deterministic rollout | default (SDE disabled) | Always available |
+| Stochastic SDE training | `sde_training.enabled: true` | Implemented; disabled by default |
+| Curriculum learning | `curriculum.enabled: true` | Implemented; off by default |
+| Teacher-forcing annealing | `teacher_forcing.initial_ratio` | Implemented; off by default |
+| KL annealing | `kl_annealing.*` | Always active |
 
-## Current Implemented Architecture
+The training loop in `dte/training/trainer.py` uses `model.latent_sde.mean_trajectory(...)`
+when `sde_training.enabled` is false (the default). When enabled, it switches to the full
+stochastic `model.latent_sde(...)` call.
 
-The broad conceptual pipeline is:
+---
 
-`physical state -> encoder -> latent state -> latent dynamics -> decoder -> predicted state`
+## Current Training Defaults (`configs/training_default.yaml`)
 
-That is true in the repo, but the exact implementation details matter:
+```yaml
+model:
+  latent_dim: 16
+  hidden_dim: 128
+  encoder_layers: 3
+  decoder_layers: 3
+  drift_layers: 3
+  diffusion_layers: 2
 
-- `dte/models/encoder.py`
-  - encodes `state + params + control`
-  - outputs `z_mean` and `z_logvar`
-  - uses VAE-style reparameterization when sampling
-- `dte/models/decoder.py`
-  - decodes `latent + params + control`
-  - constrains `Ca` and `Cb` with `softplus`
-  - constrains `T` and `Tc` to `200 + 300 * sigmoid(raw)`
-- `dte/models/latent_sde.py`
-  - drift and diffusion are separate MLPs
-  - latent dynamics are conditioned on `z + control + params`
-  - disturbances are not yet part of the learned latent dynamics
-- `dte/models/digital_twin.py`
-  - exposes both stochastic sampling and deterministic rollout APIs
+training:
+  batch_size: 64
+  seq_len: 20           # overridden by curriculum if enabled
+  stride: 10
+  peak_lr: 3.0e-4
+  gradient_clip: 0.5
 
-Important current-truth detail:
+loss_weights:
+  reconstruction: 1.0
+  trajectory: 10.0
+  kl: 0.001
+  one_step: 0.3
+  mass_balance: 0.01    # CSTR only
+  energy_balance: 0.01  # CSTR / heat exchanger
+```
 
-- training currently uses `model.latent_sde.mean_trajectory(...)` in
-  `dte/training/trainer.py`
-- so the optimization path is effectively deterministic during training
-- the model supports stochastic sampling for ensemble prediction, but the main
-  training loop is not currently using stochastic rollout samples
+---
 
-This distinction matters. Do not describe the current training setup as if it
-is fully stochastic end-to-end.
+## Data
 
-## Current Training Setup
+Training data lives in HDF5. The schema is:
+```
+states          (N, T, state_dim)
+controls        (N, T, control_dim)
+disturbances    (N, T, disturbance_dim)
+params          (N, param_dim)
+time            (N, T)              ← key is "time", not "t"
+normalization/  state_mean, state_std, control_mean, control_std, ...
+```
 
-The baseline config lives in `configs/training_default.yaml`.
+Batches from `TrajectoryDataset` are in **physical units**.
+The trainer normalises internally before computing reconstruction / trajectory losses.
+Physics losses are computed in physical units.
 
-Current defaults:
+`sample_batch(key, batch_size, seq_len=None)` supports an optional `seq_len` argument
+for curriculum training (truncates to shorter subsequences when set).
 
-- `latent_dim: 16`
-- `hidden_dim: 128`
-- `n_layers: 3`
-- `drift_layers: 3`
-- `diffusion_layers: 2`
-- `diffusion_hidden_dim: 64`
-- `initial_diffusion_scale: 0.1`
-- `solver: euler_heun`
-- `dt_ratio: 0.5`
-- `batch_size: 64`
-- `seq_len: 20`
-- `stride: 10`
-- `gradient_clip: 0.5`
-- `peak_lr: 3e-4`
+---
 
-Current loss weights:
+## What Is Actually Optimised
 
-- reconstruction: `1.0`
-- trajectory: `10.0`
-- KL: `0.001`
-- mass balance: `0.01`
-- energy balance: `0.01`
+Primary metric for autoresearch: `best_val_loss` — lower is better.
 
-KL annealing is implemented in `dte/training/losses.py`.
+Bounded-run interpretation:
+- `timed_out: true` with finite `best_val_loss` = valid result
+- `best_val_loss: null` = real failure signal
+- early stable progress > ambitious edits that collapse numerically
 
-The trainer now stops early on non-finite train or validation losses and records
-`failure_reason` and `non_finite_detected` in the training summary.
+---
 
-## What Is Actually Optimized
+## Files the Agent Should Rely On
 
-For autoresearch, the primary comparison metric is:
+- `README.md` — architecture, supported systems, API reference
+- `WORKFLOW.md` — operational flow for all phases
+- `AGENTS.md` — coding conventions, safe/unsafe files, common mistakes
+- `program.md` — keep/discard rules and experiment boundaries
+- `configs/training_default.yaml` — baseline hyperparameters
+- `configs/autoresearch_default.yaml` — bounded harness settings
+- `scripts/train.py` — training CLI
+- `dte/training/trainer.py` — training loop
 
-- `best_val_loss`
-- lower is better
-
-This is a bounded-run search. A run does not need to finish all epochs to be
-useful. These interpretations are important:
-
-- `timed_out: true` with finite `best_val_loss` is a valid result
-- `best_val_loss: null` is usually the real failure signal
-- a run that finishes but collapses to `NaN` is worse than a timed-out run that
-  still improves validation
-
-Early useful progress matters more than full convergence inside autoresearch.
-
-## Existing Files The Agent Should Rely On
-
-Use these as the main context sources:
-
-- `README.md`: product purpose, architecture, pipeline, and control use case
-- `WORKFLOW.md`: operational flow for data generation, training, evaluation, and autoresearch
-- `program.md`: autonomous experimentation rules and keep/discard behavior
-- `configs/training_default.yaml`: baseline architecture and optimizer settings
-- `configs/autoresearch_default.yaml`: current bounded experiment setup
-- `scripts/train.py`: CLI training harness and summary generation
-- `dte/training/trainer.py`: training loop and optimizer behavior
-
-This file should summarize those, not contradict them.
-
-## Data Truths The Agent Should Remember
-
-Training data is stored in HDF5 and loaded through `dte/data/dataset.py`.
-The main arrays are:
-
-- `states`: `(N, n_steps, 4)`
-- `controls`: `(N, n_steps, 2)`
-- `disturbances`: `(N, n_steps, 2)`
-- `params`: `(N, n_params)`
-- `time`: `(N, n_steps)`
-
-Normalization statistics are also stored:
-
-- `state_mean`, `state_std`
-- `control_mean`, `control_std`
-- `disturbance_mean`, `disturbance_std`
-- `param_mean`, `param_std`
-
-Important current-truth detail:
-
-- dataset batches are stored in physical units
-- the trainer normalizes predicted and true states internally before computing
-  reconstruction and trajectory losses
-- physics losses are computed in physical units
-
-Do not assume the model is trained directly on pre-normalized HDF5 tensors.
+---
 
 ## Experiment Boundaries
 
-The autoresearch agent should usually modify only files from
-`configs/autoresearch_default.yaml -> agent.modifiable_files`.
-
-Defaults currently include:
+The agent may only modify files listed in
+`configs/autoresearch_default.yaml → agent.modifiable_files`. Defaults:
 
 - `configs/training_default.yaml`
 - `scripts/train.py`
-- `dte/models/encoder.py`
-- `dte/models/decoder.py`
-- `dte/models/latent_sde.py`
-- `dte/models/digital_twin.py`
-- `dte/training/trainer.py`
-- `dte/training/losses.py`
+- `dte/models/encoder.py`, `decoder.py`, `latent_sde.py`, `digital_twin.py`
+- `dte/training/trainer.py`, `losses.py`
 
-Preferred experiment style:
+One file, one idea, minimal patch.
 
-- one file
-- one idea
-- minimal patch
-
-Do not modify the measurement harness during search:
-
+Do **not** modify the measurement harness:
 - `scripts/autoresearch.py`
 - `dte/autoresearch/*`
 - `scripts/agent.py`
 - `program.md`
-- this file, unless the human explicitly asks for agent-context changes
+- this file, unless the human explicitly asks
 
-## Physics And Losses
+---
 
-Physics consistency matters in this repo, but it is a regularizer, not the only
-goal. The practical balance is:
+## Physics and Losses
 
-1. improve predictive validation performance
-2. keep rollouts physically plausible
-3. avoid numerical instability
-4. avoid adding code complexity that is hard to maintain
+Physics consistency is a regulariser, not the sole goal. Priority order:
 
-Mass and energy residuals are implemented in:
+1. Improve predictive validation performance
+2. Keep rollouts physically plausible
+3. Avoid numerical instability
+4. Avoid hard-to-maintain complexity
 
-- `dte/physics/conservation.py`
-- `dte/training/losses.py`
+Mass and energy residuals are in `dte/physics/cstr.py` and `dte/physics/heat_exchanger.py`.
+`LossComputer` delegates to whichever `PhysicsLoss` instance is passed in — it has no
+direct dependency on any specific system.
 
-The most important engineering mistake to avoid is claiming a physics change is
-good when it improves one residual but hurts the main validation objective or
-causes instability.
-
-## What Is In Sync With The Repo
-
-These ideas are aligned with the current repo:
-
-- digital twin for chemical process systems
-- CSTR benchmark with states `[Ca, Cb, T, Tc]`
-- encoder / latent dynamics / decoder structure
-- VAE-style latent encoding
-- constrained decoder outputs
-- physics residual losses for mass and energy balance
-- control-focused downstream motivation, especially MPC
-- JAX + Equinox + Diffrax stack
-
-## What Should Be Framed As Research Guidance, Not Current Fact
-
-These are good ideas, but they are not current repo behavior unless implemented
-explicitly in code:
-
-- curriculum training over sequence lengths
-- teacher forcing schedules
-- two-phase training where encoder/decoder are pretrained separately
-- disturbance-conditioned latent dynamics
-- strong claims about calibrated uncertainty quality
-- multi-unit foundation-model behavior
-- hard target thresholds presented as already achieved
-
-If these appear in planning text, label them as:
-
-- research directions
-- candidate experiments
-- desired future behavior
-
-Do not phrase them as if the current repo already does them.
+---
 
 ## Search Heuristics
 
 Prefer experiments that:
-
 - improve stability early in training
 - improve `best_val_loss` within the bounded budget
-- preserve or improve physically plausible outputs
-- make minimal, single-file changes
-- avoid fragile complexity
+- make minimal single-file changes
+- preserve physically plausible outputs
 
 Be cautious with:
-
-- latent variance changes
+- latent variance changes (can cause numerical explosion)
 - solver and timestep changes
-- decoder output constraints
-- large loss-weight changes
-- anything likely to create NaNs or unrealistic states
+- decoder output constraint weakening
+- large loss-weight increases (common NaN trigger)
 
-## Failure Patterns Already Seen
+---
 
-Observed failure modes in this repo include:
+## Known Failure Patterns
 
-- latent variance instability causing numerical explosion
-- aggressive timestep or solver changes causing collapse
-- decoder edits that weaken physical constraints
-- loss-weight changes that produce `NaN` training
-- proposals that sound reasonable conceptually but do not help bounded runs
+- Latent variance instability → numerical explosion
+- Aggressive timestep / solver changes → training collapse
+- Decoder edits that weaken physical constraints → unphysical predictions
+- Large physics loss weights → NaN training
+- `eqx.field(static=True)` on JAX arrays → silent gradient issues (use plain fields)
+- HDF5 key `"t"` instead of `"time"` → `KeyError` at dataset load time
+- Python list indexing into JAX arrays → deprecation warning (use `jnp.array(idx_list)`)
 
-Stable, modest improvements are better than ambitious unstable ideas.
+---
 
 ## Current Search Context
 
-- The default autoresearch config currently points to `data/cstr/`.
-- The search is based on bounded runs, not full-convergence comparisons.
-- Stable partial training is more valuable than ambitious edits that collapse numerically.
-
-## Practical Output Expectations
-
-- Propose exactly one experiment.
-- Modify only allowed files.
-- Prefer clear, repo-specific descriptions over generic ML wording.
-- Avoid noisy or speculative changes when a smaller, cleaner edit would test the same idea.
-
-## Final Practical Guidance
-
-- Use this file as quick orientation, not as the source of truth.
-- Cross-check assumptions against the config and code before proposing changes.
-- Prefer repo-true language over generic ML wording.
-- When in doubt, optimize for bounded-run validation quality plus stability.
+- Default autoresearch config points to `data/cstr/` (CSTR system)
+- Search is based on bounded runs, not full-convergence comparisons
+- Stable partial training > ambitious edits that collapse numerically

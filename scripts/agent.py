@@ -484,7 +484,7 @@ def _format_component_losses(label: str, losses: dict[str, float] | None) -> str
     if not losses:
         return ""
 
-    keys = ("total", "trajectory", "reconstruction", "kl", "mass_balance", "energy_balance")
+    keys = ("total", "trajectory", "reconstruction", "kl", "physics", "mass_balance", "energy_balance")
     parts = []
     for key in keys:
         if key in losses:
@@ -877,6 +877,8 @@ MODIFIABLE_FILES = [
     "dte/models/digital_twin.py",
     "dte/training/trainer.py",
     "dte/training/losses.py",
+    "dte/simulators/base.py",
+    "dte/physics/base.py",
 ]
 
 KNOWN_GOOD = """
@@ -891,6 +893,9 @@ KNOWN_GOOD = """
 - Adjusting diffusion scale initialisation (e.g., log-scale init at -1 instead of 0)
 - Reducing physics loss weights (0.1 -> 0.01) early in training to avoid gradient dominance
 - Larger batch_size for JAX compiled code (64 -> 128) to improve throughput
+- Curriculum training: start with shorter seq_len and grow it (curriculum_seq_len_start / _end in config)
+- Teacher forcing: high tf_weight early, anneal to 0 for free-rollout robustness (teacher_forcing_weight)
+- Stochastic SDE path (use_stochastic_training: true) vs deterministic mean trajectory
 - Increasing seq_len to expose the model to longer dependencies
 These are NOT guaranteed to work but are worth trying if not yet attempted.
 """
@@ -901,7 +906,12 @@ JAX_PITFALLS = """
 - Do NOT change the tree structure of Equinox modules mid-training (shape errors on load).
 - YAML changes must keep all required keys present; missing keys cause KeyError on load.
 - In configs, numeric values like 3e-4 must stay as floats, not strings.
+- Do NOT use eqx.field(static=True) for JAX arrays — only for non-array metadata.
+- Use jnp.array(indices) not plain Python lists when indexing with Array.at[].set().
+- HDF5 datasets must use key "time" (not "t") for the time axis.
+- LossComputer and Trainer expect a PhysicsLoss instance and state_names list; do NOT hardcode CSTR physics.
 - Do NOT modify scripts/autoresearch.py, dte/autoresearch/workflow.py, or program.md.
+- The system is chosen via --system_config (SystemSpec + ProcessSimulator registry), not hardcoded.
 """
 
 
@@ -1006,7 +1016,7 @@ Look at category summary — avoid exhausted categories. Try a different file or
         recent_runs_section = f"\n{recent_run_context}\n"
 
     return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
-physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
+physics-informed latent Neural SDE (digital twin) trained on process system data (CSTR, heat exchanger, or other registered systems).
 
 ## Constraints
 - You MUST only modify ONE of these files per experiment:
