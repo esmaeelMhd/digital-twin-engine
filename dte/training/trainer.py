@@ -74,7 +74,7 @@ class Trainer:
         # Setup optimizer
         opt_config = config["optimizer"]
         schedule = optax.warmup_cosine_decay_schedule(
-            init_value=1e-4,
+            init_value=0.0,
             peak_value=opt_config["peak_lr"],
             warmup_steps=opt_config["warmup_steps"],
             decay_steps=opt_config["total_steps"],
