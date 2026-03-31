@@ -107,7 +107,7 @@ def main():
         config = yaml.safe_load(f)
     config.setdefault("model", {})["initial_diffusion_scale"] = 0.0001
     config.setdefault("model", {}).setdefault("disturbance_dim", 2)
-    config.setdefault("training", {})["peak_lr"] = 1.0e-3
+    config.setdefault("training", {})["peak_lr"] = 5.0e-4
     config.setdefault("training", {})["gradient_clip"] = 0.5
     config.setdefault("loss_weights", {})
     config["loss_weights"]["kl"] = 0.0
