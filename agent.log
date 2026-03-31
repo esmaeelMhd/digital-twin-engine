@@ -1422,3 +1422,29 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-03-31 17:05:13] Idea: Decrease Huber loss delta to 0.025 to further improve robustness to SDE rollout outliers and stabilize trajectory gradients, continuing the proven trend that smaller deltas perform better.
 [2026-03-31 17:05:13] File: dte/training/losses.py
 [2026-03-31 17:05:13] Committed: 3dceeb8
+[2026-03-31 17:13:51] KEEP: val_loss=0.065900 NEW BEST!
+[2026-03-31 17:13:53] git push: ok
+[2026-03-31 17:13:53] Elapsed: 518s
+[2026-03-31 17:13:59] Exp 74/100: querying Gemini 3.1 Pro...
+[2026-03-31 17:13:59] ERROR Gemini: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'Your project has exceeded its spending cap.', 'status': 'RESOURCE_EXHAUSTED'}}
+[2026-03-31 17:13:59] Malformed LLM response. Attempting JSON repair...
+[2026-03-31 17:13:59] LLM gave unparseable response. Skipping.
+[2026-03-31 17:13:59] RAW: 
+[2026-03-31 17:13:59] Exp 74/100: querying Gemini 3.1 Pro...
+[2026-03-31 17:14:00] ERROR Gemini: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'Your project has exceeded its spending cap.', 'status': 'RESOURCE_EXHAUSTED'}}
+[2026-03-31 17:14:00] Malformed LLM response. Attempting JSON repair...
+[2026-03-31 17:14:00] LLM gave unparseable response. Skipping.
+[2026-03-31 17:14:00] RAW: 
+[2026-03-31 17:14:00] Exp 74/100: querying Gemini 3.1 Pro...
+[2026-03-31 17:14:00] ERROR Gemini: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'Your project has exceeded its spending cap.', 'status': 'RESOURCE_EXHAUSTED'}}
+[2026-03-31 17:14:00] Malformed LLM response. Attempting JSON repair...
+[2026-03-31 17:14:00] LLM gave unparseable response. Skipping.
+[2026-03-31 17:14:00] RAW: 
+[2026-03-31 17:14:00] Too many consecutive malformed LLM responses. Stopping cleanly.
+[2026-03-31 17:32:56] Resumed branch: autoresearch/mar31
+[2026-03-31 17:32:56] Agent started: llm=Gemini 3.1 Pro max_runs=20 branch=autoresearch/mar31 prior=73 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-03-31 17:32:56] Ready. Best val_loss=0.065900 | 73 prior experiments
+[2026-03-31 17:43:40] Resumed branch: autoresearch/mar31
+[2026-03-31 17:43:40] Agent started: llm=Gemini 3.1 Pro max_runs=93 branch=autoresearch/mar31 prior=73 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-03-31 17:43:40] Ready. Best val_loss=0.065900 | 73 prior experiments
+[2026-03-31 17:43:40] Exp 74/93: querying Gemini 3.1 Pro...
