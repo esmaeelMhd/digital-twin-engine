@@ -140,6 +140,11 @@ Bounded-run interpretation:
 - `best_val_loss: null` = real failure signal
 - early stable progress > ambitious edits that collapse numerically
 
+Advisory context available to the agent:
+- recent kept runs may also include lightweight deterministic eval summaries
+- `rmse_per_state` / `nrmse_per_state` help expose state-specific regressions
+- these eval metrics are context only; they do not replace `best_val_loss` as the promotion rule
+
 ---
 
 ## Files the Agent Should Rely On
