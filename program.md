@@ -49,6 +49,8 @@ The harness will:
 - Primary metric: `best_val_loss`
 - Lower is better
 - Validation is forced regularly through the harness so every run produces a comparable summary
+- Lightweight deterministic eval can be run on kept runs, or every N runs, as advisory context only
+- Per-state `rmse_per_state` / `nrmse_per_state` can inform future ideas, but they do not override the keep/discard metric
 
 ## What You Can Modify
 
@@ -57,6 +59,12 @@ The harness will:
 - `dte/models/*.py`
 - `dte/training/*.py`
 - Other model/training code that directly affects the learned digital twin
+
+When modifying `dte/` code during autoresearch:
+- keep the architecture generic across systems
+- in `dte/models` and `dte/training`, do not hardcode config-like constraints, normalization constants, default states, or fixed dimensions
+- ordinary generic numeric algorithmic tweaks are okay
+- prefer config-driven or `SystemSpec`-driven values for numeric bounds/scales
 
 ## What You Should Not Modify During Experiments
 
@@ -93,7 +101,7 @@ displays a Rich TUI dashboard.
 ### Launch commands
 
 ```bash
-# Default: Claude Sonnet 4.6, 100 experiments, Rich dashboard
+# Default: provider from config (`deepseek-reasoner` in the default config)
 python scripts/agent.py
 
 # Resume an existing branch
@@ -112,18 +120,25 @@ python scripts/agent.py --no-dashboard
 python scripts/agent.py --file dte/training/trainer.py
 
 # LLM provider options
+python scripts/agent.py --deepseek              # DeepSeek reasoning model
 python scripts/agent.py --opus                  # Claude Opus 4.6 (32k extended thinking)
 python scripts/agent.py --openai o3             # OpenAI o3
 python scripts/agent.py --openai gpt-5.1        # OpenAI GPT-5.1
 python scripts/agent.py --grok                  # xAI Grok 3
 python scripts/agent.py --local                 # Local LM Studio at 127.0.0.1:1234
+
+# Optional sampling / reasoning controls
+python scripts/agent.py --temperature 0.2
+python scripts/agent.py --thinking-level low
 ```
 
 ### Required environment variables
 
 | Provider | Variable |
 |----------|----------|
-| Claude (default) | `ANTHROPIC_API_KEY` |
+| DeepSeek (default config) | `DEEPSEEK_API_KEY` |
+| Gemini | `GEMINI_API_KEY` |
+| Claude | `ANTHROPIC_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | xAI Grok | `XAI_API_KEY` |
 | Local LM Studio | none (uses localhost:1234) |

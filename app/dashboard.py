@@ -16,9 +16,8 @@ import yaml
 from plotly.subplots import make_subplots
 
 from dte.control.mpc import SamplingMPC
-from dte.control.pid import CSTRPIDController
 from dte.models.digital_twin import DigitalTwin
-from dte.simulators.cstr import CSTRParams, CSTRSimulator
+from dte.simulators.registry import get_system_spec, get_simulator
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +25,7 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 DEFAULT_CSTR_CONFIG = PROJECT_ROOT / "configs" / "cstr_default.yaml"
 DEFAULT_MPC_CONFIG = PROJECT_ROOT / "configs" / "mpc_default.yaml"
 
+import os as _os
 
 st.set_page_config(
     page_title="Digital Twin Engine",
@@ -33,6 +33,42 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+# ---------------------------------------------------------------------------
+# Optional password authentication
+# ---------------------------------------------------------------------------
+
+def _check_auth() -> bool:
+    """Return True when authentication passes or is not required.
+
+    Set the environment variable ``STREAMLIT_AUTH_PASSWORD`` to enable
+    password-gating.  When unset, the dashboard is accessible without
+    authentication.
+    """
+    required_pwd = _os.environ.get("STREAMLIT_AUTH_PASSWORD", "")
+    if not required_pwd:
+        return True  # Auth disabled
+
+    if st.session_state.get("_dte_authenticated"):
+        return True
+
+    st.title("Digital Twin Engine")
+    st.subheader("Login required")
+    with st.form("auth_form"):
+        pwd = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+        if submitted:
+            if pwd == required_pwd:
+                st.session_state["_dte_authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.  Please try again.")
+    return False
+
+
+if not _check_auth():
+    st.stop()
 
 
 def _safe_read_yaml(path: Path) -> dict[str, Any] | None:
@@ -130,7 +166,10 @@ def _discover_runs() -> list[dict[str, Any]]:
         else:
             continue
 
-        cstr_config_path = directory / "cstr_config.yaml"
+        # Support both new system_config.yaml and legacy cstr_config.yaml
+        system_config_path = directory / "system_config.yaml"
+        if not system_config_path.exists():
+            system_config_path = directory / "cstr_config.yaml"
         summary_path = directory / "training_summary.json"
         history_path = directory / "training_history.json"
         summary = _safe_read_json(summary_path)
@@ -149,7 +188,7 @@ def _discover_runs() -> list[dict[str, Any]]:
                 "directory": directory,
                 "model_path": model_path,
                 "config_path": config_path,
-                "cstr_config_path": cstr_config_path if cstr_config_path.exists() else DEFAULT_CSTR_CONFIG,
+                "system_config_path": str(system_config_path) if system_config_path.exists() else str(DEFAULT_CSTR_CONFIG),
                 "summary_path": summary_path,
                 "history_path": history_path,
                 "checkpoint_label": checkpoint_label,
@@ -164,35 +203,37 @@ def _discover_runs() -> list[dict[str, Any]]:
 @st.cache_data(show_spinner=False)
 def load_run_artifacts(
     config_path: str,
-    cstr_config_path: str,
+    system_config_path: str,
     summary_path: str,
     history_path: str,
 ) -> dict[str, Any]:
     return {
         "config": _safe_read_yaml(Path(config_path)) or {},
-        "cstr_config": _safe_read_yaml(Path(cstr_config_path)) or {},
+        "system_config": _safe_read_yaml(Path(system_config_path)) or {},
         "summary": _safe_read_json(Path(summary_path)),
         "history": _safe_read_json(Path(history_path)),
     }
 
 
 @st.cache_resource(show_spinner=False)
-def load_model(model_path: str, config_path: str) -> tuple[DigitalTwin | None, dict[str, Any] | None]:
+def load_model(model_path: str, config_path: str, system_config_path: str) -> tuple[DigitalTwin | None, dict[str, Any] | None]:
     config = _safe_read_yaml(Path(config_path))
     if not config:
         return None, None
-    model = DigitalTwin.load(model_path, config)
+    system_config = _safe_read_yaml(Path(system_config_path)) or {}
+    system_spec = get_system_spec(system_config)
+    model = DigitalTwin.load(model_path, config, system_spec=system_spec)
     return model, config
 
 
 @st.cache_resource(show_spinner=False)
-def load_simulator(cstr_config_path: str) -> tuple[CSTRSimulator | None, dict[str, Any] | None]:
-    config = _safe_read_yaml(Path(cstr_config_path))
-    if not config:
+def load_simulator(system_config_path: str):
+    system_config = _safe_read_yaml(Path(system_config_path))
+    if not system_config:
         return None, None
-    cstr_params_dict = {key: float(value) for key, value in config.get("cstr", {}).items()}
-    params = CSTRParams(**cstr_params_dict)
-    return CSTRSimulator(params), config
+    system_spec = get_system_spec(system_config)
+    simulator = get_simulator(system_spec.name, system_config)
+    return simulator, system_config
 
 
 def _build_training_history_figure(history: dict[str, Any] | None) -> go.Figure | None:
@@ -438,7 +479,7 @@ def _render_simulation(
     *,
     model: DigitalTwin | None,
     model_config: dict[str, Any] | None,
-    simulator: CSTRSimulator | None,
+    simulator,
     cstr_config: dict[str, Any] | None,
     control_mode: str,
     disturbance_scenario: str,
@@ -448,7 +489,7 @@ def _render_simulation(
     run_simulation: bool,
 ) -> None:
     st.subheader("Closed-Loop Simulation")
-    st.caption("Use the selected trained artifact to compare open-loop, PID, and AI-MPC reactor behavior.")
+    st.caption("Use the selected trained artifact to compare open-loop, PID, and AI-MPC process behavior.")
 
     if not run_simulation:
         st.info("Choose a scenario in the sidebar and click `Run Simulation`.")
@@ -458,36 +499,54 @@ def _render_simulation(
         st.error("The selected run could not be loaded.")
         return
     if simulator is None or cstr_config is None:
-        st.error("The CSTR simulator configuration could not be loaded.")
+        st.error("The simulator configuration could not be loaded.")
         return
+
+    system_config_inner = cstr_config  # renamed for clarity inside this function
+    try:
+        system_spec_inner = get_system_spec(system_config_inner)
+    except Exception:
+        st.error("Could not build SystemSpec from configuration.")
+        return
+
+    is_cstr = system_spec_inner.name == "cstr"
 
     with st.spinner("Running simulation..."):
         key = jax.random.PRNGKey(42)
-        dt = cstr_config.get("simulation", {}).get("dt", 0.1)
-        initial_state = jnp.array([0.5, 0.5, 350.0, 300.0])
-        setpoints = jnp.array([ca_setpoint, 0.0, t_setpoint, 300.0])
-        disturbance_index = n_steps // 4
-        nominal_disturbance = jnp.array([1.0, 320.0])
+        dt = system_config_inner.get("simulation", {}).get("dt", 0.1)
 
-        disturbances = jnp.ones((n_steps, 2)) * nominal_disturbance
+        initial_state = system_spec_inner.default_initial_state_array()
+        nominal_disturbance = system_spec_inner.default_nominal_disturbance_array()
+        dist_dim = system_spec_inner.disturbance_dim
+        control_dim = system_spec_inner.control_dim
+
+        if is_cstr:
+            setpoints = jnp.array([ca_setpoint, 0.0, t_setpoint, 300.0])
+        else:
+            setpoints = initial_state
+
+        disturbance_index = n_steps // 4
+        disturbances = jnp.tile(nominal_disturbance[None, :], (n_steps, 1))
         disturbance_step_time: float | None = None
-        if disturbance_scenario == "Step in Ca_in":
+        if disturbance_scenario == "Step in Ca_in" and is_cstr:
             disturbances = disturbances.at[disturbance_index:, 0].set(1.5)
             disturbance_step_time = disturbance_index * dt
-        elif disturbance_scenario == "Step in T_in":
-            disturbances = disturbances.at[disturbance_index:, 1].set(330.0)
+        elif disturbance_scenario == "Step in T_in" and is_cstr:
+            disturbances = disturbances.at[disturbance_index:, 1].set(
+                nominal_disturbance[1].item() + 10.0
+            )
             disturbance_step_time = disturbance_index * dt
         elif disturbance_scenario == "Random":
             key, subkey = jax.random.split(key)
-            disturbances = jax.random.uniform(subkey, (n_steps, 2))
-            disturbances = disturbances * jnp.array([1.0, 30.0]) + jnp.array([0.5, 305.0])
+            disturbances = jax.random.uniform(subkey, (n_steps, dist_dim))
+            disturbances = disturbances * 0.1 + nominal_disturbance[None, :]
         else:
             disturbance_step_time = None
 
         if control_mode == "AI-MPC":
             mpc_config = _safe_read_yaml(DEFAULT_MPC_CONFIG) or {}
             mpc_controller = SamplingMPC(model, {"mpc": mpc_config["mpc"]})
-            params = jnp.ones(model_config["model"].get("param_dim", 6))
+            params = jnp.ones(model_config["model"].get("param_dim", system_spec_inner.param_dim))
             key, subkey = jax.random.split(key)
             result = mpc_controller.run_closed_loop(
                 simulator,
@@ -499,7 +558,8 @@ def _render_simulation(
                 dt,
                 subkey,
             )
-        elif control_mode == "PID":
+        elif control_mode == "PID" and is_cstr:
+            from dte.control.pid import CSTRPIDController
             pid_controller = CSTRPIDController(
                 T_setpoint=t_setpoint,
                 Ca_setpoint=ca_setpoint,
@@ -513,39 +573,72 @@ def _render_simulation(
                 dt,
             )
         else:
-            controls = jnp.tile(jnp.array([50.0, 300.0])[None, :], (n_steps, 1))
+            # Open Loop: use nominal control (midpoint of control ranges)
+            ranges = system_spec_inner.control_ranges
+            if ranges:
+                nominal_control = jnp.array([
+                    (r[0] + r[1]) / 2.0
+                    for r in ranges.values()
+                ])
+            else:
+                ctrl_center = system_spec_inner.normalization.control_center
+                nominal_control = jnp.array(ctrl_center)
+            controls_traj = jnp.tile(nominal_control[None, :], (n_steps, 1))
             result = simulator.simulate(
                 initial_state,
-                controls,
+                controls_traj,
                 disturbances,
                 (0.0, n_steps * dt),
                 dt,
                 n_steps,
             )
-            result["controls"] = controls
+            result["controls"] = controls_traj
 
     times = np.arange(n_steps) * dt
     states = np.array(result["states"])
-    controls = np.array(result["controls"])
-    simulation_figure = _build_simulation_figure(
-        times,
-        states,
-        controls,
-        ca_setpoint=ca_setpoint,
-        t_setpoint=t_setpoint,
-        disturbance_step=disturbance_step_time,
-    )
-    st.plotly_chart(simulation_figure, use_container_width=True)
+    controls_out = np.array(result["controls"])
 
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("Avg T Error", f"{np.abs(states[:, 2] - t_setpoint).mean():.2f} K")
-    metric_cols[1].metric("Avg Ca Error", f"{np.abs(states[:, 0] - ca_setpoint).mean():.3f} mol/L")
-    metric_cols[2].metric("Control Effort", f"{np.sum(np.diff(controls, axis=0) ** 2):.2f}")
-    metric_cols[3].metric("Simulation Horizon", f"{times[-1]:.1f} min")
+    if is_cstr:
+        simulation_figure = _build_simulation_figure(
+            times,
+            states,
+            controls_out,
+            ca_setpoint=ca_setpoint,
+            t_setpoint=t_setpoint,
+            disturbance_step=disturbance_step_time,
+        )
+        st.plotly_chart(simulation_figure, use_container_width=True)
+
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Avg T Error", f"{np.abs(states[:, 2] - t_setpoint).mean():.2f} K")
+        metric_cols[1].metric("Avg Ca Error", f"{np.abs(states[:, 0] - ca_setpoint).mean():.3f} mol/L")
+        metric_cols[2].metric("Control Effort", f"{np.sum(np.diff(controls_out, axis=0) ** 2):.2f}")
+        metric_cols[3].metric("Simulation Horizon", f"{times[-1]:.1f} min")
+    else:
+        # Generic state/control plot via plotly
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots as _make_subplots
+
+        sn = system_spec_inner.state_names
+        cn = system_spec_inner.control_names
+        n_cols = 2
+        n_rows = (len(sn) + len(cn) + n_cols - 1) // n_cols
+        fig = _make_subplots(rows=n_rows, cols=n_cols, subplot_titles=sn + cn)
+        all_series = [(states[:, i], sn[i], "state") for i in range(len(sn))] + \
+                     [(controls_out[:, i], cn[i], "control") for i in range(len(cn))]
+        for idx, (series, name, kind) in enumerate(all_series):
+            color = "#0F766E" if kind == "state" else "#1D4ED8"
+            fig.add_trace(
+                go.Scatter(x=times, y=series, mode="lines", name=name,
+                           line=dict(color=color, width=2)),
+                row=idx // n_cols + 1, col=idx % n_cols + 1,
+            )
+        fig.update_layout(height=300 * n_rows, template="plotly_white",
+                          margin=dict(l=20, r=20, t=50, b=20))
+        st.plotly_chart(fig, use_container_width=True)
 
     st.caption(
-        "Current AI-MPC playback uses a nominal parameter vector for the learned model. "
-        "Parameter-aware simulation controls can be added in the next iteration."
+        "AI-MPC uses a nominal parameter vector. Parameter-aware simulation can be added in a future iteration."
     )
 
 
@@ -562,7 +655,7 @@ def _render_model_details(
     run: dict[str, Any],
     model: DigitalTwin | None,
     model_config: dict[str, Any] | None,
-    cstr_config: dict[str, Any] | None,
+    system_config: dict[str, Any] | None,
     summary: dict[str, Any] | None,
 ) -> None:
     st.subheader("Model Details")
@@ -574,7 +667,7 @@ def _render_model_details(
             st.write(f"Directory: `{run['directory']}`")
             st.write(f"Model: `{run['model_path'].name}`")
             st.write(f"Config: `{run['config_path'].name}`")
-            st.write(f"CSTR config: `{Path(run['cstr_config_path']).name}`")
+            st.write(f"System config: `{Path(run['system_config_path']).name}`")
 
         with st.container(border=True):
             st.markdown("**Training Config**")
@@ -600,12 +693,12 @@ def _render_model_details(
             if summary:
                 st.write(f"Output dir: `{summary.get('output_dir', run['directory'])}`")
                 st.write(f"Timed out: `{summary.get('timed_out', False)}`")
-            if cstr_config:
-                st.json(cstr_config)
+            if system_config:
+                st.json(system_config)
 
 
 st.title("Digital Twin Engine")
-st.markdown("### Presenting trained CSTR digital twins for process-control demos")
+st.markdown("### Trained process digital twins for simulation and control demos")
 
 available_runs = _discover_runs()
 
@@ -614,20 +707,21 @@ if not available_runs:
     st.stop()
 
 run_options = {run["display_name"]: run for run in available_runs}
-selected_run_label = st.sidebar.selectbox("Featured CSTR Run", list(run_options.keys()))
+selected_run_label = st.sidebar.selectbox("Featured Run", list(run_options.keys()))
 selected_run = run_options[selected_run_label]
 
 artifacts = load_run_artifacts(
     str(selected_run["config_path"]),
-    str(selected_run["cstr_config_path"]),
+    str(selected_run["system_config_path"]),
     str(selected_run["summary_path"]),
     str(selected_run["history_path"]),
 )
 model, model_config = load_model(
     str(selected_run["model_path"]),
     str(selected_run["config_path"]),
+    str(selected_run["system_config_path"]),
 )
-simulator, cstr_config = load_simulator(str(selected_run["cstr_config_path"]))
+simulator, system_config_loaded = load_simulator(str(selected_run["system_config_path"]))
 
 with st.sidebar:
     st.caption(
@@ -675,7 +769,7 @@ with simulation_tab:
         model=model,
         model_config=model_config,
         simulator=simulator,
-        cstr_config=cstr_config,
+        cstr_config=system_config_loaded,
         control_mode=control_mode,
         disturbance_scenario=disturbance_scenario,
         n_steps=n_steps,
@@ -712,12 +806,11 @@ with details_tab:
         selected_run,
         model,
         model_config,
-        artifacts["cstr_config"],
+        artifacts["system_config"],
         artifacts["summary"],
     )
 
 st.markdown("---")
 st.caption(
-    "Digital Twin Engine dashboard for model presentation and control demos. "
-    "Current milestone: artifact-aware CSTR showcase."
+    "Digital Twin Engine dashboard for model presentation and control demos."
 )

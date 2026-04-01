@@ -8,7 +8,7 @@ research:
 
 train:
   config: configs/training_default.yaml
-  cstr_config: configs/cstr_default.yaml
+  system_config: configs/cstr_default.yaml
   data_dir: data/cstr/
   n_epochs: 15
   batch_size: null
@@ -16,9 +16,18 @@ train:
   seed: 42
 
 agent:
-  default_llm: gemini-3.1-pro-preview
+  default_llm: deepseek-reasoner
   adaptive_temperature: true
   max_fail_streak_temp: 0.5
+  temperature: null
+  deepseek_temperature: 0.0
+  thinking_level: null
+  eval_on_keep: true
+  eval_every_n_runs: 0
+  eval_n_trajectories: 8
+  eval_predict_mode: deterministic
+  eval_plot_count: 0
+  eval_skip_ensemble: true
   cooldown_between_experiments: 10
   context_file: auto_research.md
   modifiable_files:

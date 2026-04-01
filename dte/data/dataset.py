@@ -116,28 +116,38 @@ class TrajectoryDataset:
         }
 
     def sample_batch(
-        self, key: PRNGKeyArray, batch_size: int
+        self, key: PRNGKeyArray, batch_size: int, seq_len: int = None
     ) -> Dict[str, Array]:
         """Sample a random batch.
-        
+
         Args:
             key: PRNG key
             batch_size: Batch size
-            
+            seq_len: Optional sequence length override for curriculum training.
+                When provided, each sampled subsequence is truncated (or the
+                dataset's native seq_len is used if seq_len is longer).
+
         Returns:
             Dictionary with batched arrays
         """
         indices = np.asarray(
             jax.random.choice(key, self._n_samples, shape=(batch_size,), replace=False)
         )
-        
-        return {
+
+        batch = {
             "states": jnp.asarray(self.subsequences["states"][indices]),
             "controls": jnp.asarray(self.subsequences["controls"][indices]),
             "disturbances": jnp.asarray(self.subsequences["disturbances"][indices]),
             "params": jnp.asarray(self.subsequences["params"][indices]),
             "t": jnp.asarray(self.subsequences["t"][indices]),
         }
+
+        if seq_len is not None:
+            native_len = batch["states"].shape[1]
+            effective_len = min(seq_len, native_len)
+            batch = {k: v[:, :effective_len] if v.ndim >= 2 else v for k, v in batch.items()}
+
+        return batch
 
     def get_normalization_stats(self) -> Dict[str, Array]:
         """Get normalization statistics.

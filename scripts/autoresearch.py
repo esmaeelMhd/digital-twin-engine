@@ -90,10 +90,12 @@ def parse_args() -> argparse.Namespace:
         help="Training config path override",
     )
     parser.add_argument(
-        "--cstr_config",
+        "--system_config",
+        "--cstr_config",  # backward-compatible alias
         type=str,
         default=None,
-        help="CSTR config path override",
+        dest="system_config",
+        help="System config path override (CSTR, heat exchanger, etc.)",
     )
     parser.add_argument(
         "--time_budget_minutes",
@@ -162,7 +164,12 @@ def main() -> int:
     )
     data_dir = resolve_repo_path(args.data_dir or train_cfg["data_dir"])
     train_config = resolve_repo_path(args.train_config or train_cfg["config"])
-    cstr_config = resolve_repo_path(args.cstr_config or train_cfg["cstr_config"])
+    system_config = resolve_repo_path(
+        args.system_config
+        or train_cfg.get("system_config")
+        or train_cfg.get("cstr_config")  # backward-compatible fallback
+        or "configs/cstr_default.yaml"
+    )
 
     time_budget_minutes = args.time_budget_minutes
     if time_budget_minutes is None:
@@ -198,8 +205,8 @@ def main() -> int:
         str(REPO_ROOT / "scripts/train.py"),
         "--config",
         str(train_config),
-        "--cstr_config",
-        str(cstr_config),
+        "--system_config",
+        str(system_config),
         "--data_dir",
         str(data_dir),
         "--output_dir",

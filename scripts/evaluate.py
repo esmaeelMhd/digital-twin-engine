@@ -15,9 +15,9 @@ import numpy as np
 from pathlib import Path
 
 from dte.models.digital_twin import DigitalTwin
+from dte.physics.registry import get_physics_diagnostic_fn, zero_residual
 from dte.data.dataset import TrajectoryDataset
-from dte.physics.conservation import mass_balance_residual, energy_balance_residual
-from dte.simulators.cstr import CSTRParams
+from dte.simulators.registry import get_system_spec
 from dte.utils.plotting import (
     plot_trajectory_comparison,
     plot_conservation_violation,
@@ -25,8 +25,108 @@ from dte.utils.plotting import (
     plot_prediction_error,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
-STATE_NAMES = ("Ca", "Cb", "T", "Tc")
+
+def _resolve_repo_path(path_value: str | None) -> Path | None:
+    """Resolve absolute or repo-relative paths."""
+    if path_value is None:
+        return None
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
+
+def _candidate_run_dir(run_value: str) -> Path:
+    """Resolve a run name like ``cstr_v3`` or a direct run directory path."""
+    candidate = Path(run_value)
+    if candidate.is_absolute() or "/" in run_value or candidate.exists():
+        return _resolve_repo_path(run_value)
+    return REPO_ROOT / "outputs" / run_value
+
+
+def _pick_first_existing(paths: list[Path]) -> Path | None:
+    """Return the first existing path from a list."""
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def _load_yaml(path: Path) -> dict:
+    """Load YAML config from disk."""
+    with path.open("r") as f:
+        return yaml.safe_load(f)
+
+
+def _infer_data_dir_from_system_config(system_config_path: Path) -> Path | None:
+    """Map the saved system config to the conventional dataset directory."""
+    try:
+        system_config = _load_yaml(system_config_path)
+    except Exception:
+        return None
+    system_name = system_config.get("system", {}).get("name")
+    if not system_name:
+        return None
+    return REPO_ROOT / "data" / system_name
+
+
+def _resolve_evaluation_paths(args: argparse.Namespace) -> dict[str, Path]:
+    """Infer evaluation paths from a run name or model path when possible."""
+    run_dir = _candidate_run_dir(args.run) if args.run else None
+
+    model_path = _resolve_repo_path(args.model_path)
+    if model_path is None and run_dir is not None:
+        model_path = _pick_first_existing(
+            [run_dir / "best_model.eqx", run_dir / "final_model.eqx"]
+        )
+    if model_path is None:
+        raise ValueError("Provide either --run or --model_path.")
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    inferred_run_dir = run_dir or model_path.parent
+    config_path = _resolve_repo_path(args.config) or inferred_run_dir / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Config file not found: {config_path}. Pass --config explicitly."
+        )
+
+    system_config_path = _resolve_repo_path(args.system_config)
+    if system_config_path is None:
+        system_config_path = _pick_first_existing(
+            [
+                inferred_run_dir / "system_config.yaml",
+                inferred_run_dir / "cstr_config.yaml",
+            ]
+        )
+    if system_config_path is None or not system_config_path.exists():
+        raise FileNotFoundError(
+            "System config not found next to the model. Pass --system_config explicitly."
+        )
+
+    data_dir = _resolve_repo_path(args.data_dir)
+    if data_dir is None:
+        data_dir = _infer_data_dir_from_system_config(system_config_path)
+    if data_dir is None:
+        raise ValueError(
+            "Could not infer data directory from system config. Pass --data_dir explicitly."
+        )
+
+    output_dir = _resolve_repo_path(args.output_dir)
+    if output_dir is None:
+        suffix = "eval_det" if args.predict_mode == "deterministic" else "eval_stoch"
+        output_dir = inferred_run_dir / suffix
+
+    return {
+        "run_dir": inferred_run_dir,
+        "model_path": model_path,
+        "config_path": config_path,
+        "system_config_path": system_config_path,
+        "data_dir": data_dir,
+        "output_dir": output_dir,
+    }
 
 
 def _init_metric_store():
@@ -95,10 +195,21 @@ def _record_prediction_metrics(metric_store, true_states, pred_states, state_std
     metric_store["nrmse_per_state"].append(np.asarray(nrmse_per_state))
 
 
-def _record_physics_metrics(metric_store, pred_states, controls, disturbances, cstr_params, dt):
-    """Accumulate conservation-law metrics in physical units."""
-    mass_res = mass_balance_residual(pred_states, controls, disturbances, cstr_params, dt)
-    energy_res = energy_balance_residual(pred_states, controls, disturbances, cstr_params, dt)
+def _record_physics_metrics(metric_store, pred_states, controls, disturbances, physics_diagnostic_fn, dt):
+    """Accumulate conservation-law metrics in physical units.
+
+    ``physics_diagnostic_fn`` is a callable with the signature
+    ``(states, controls, disturbances, dt) -> dict[str, residual_array]``
+    or ``None`` when no physics diagnostics are available.
+    """
+    if physics_diagnostic_fn is None:
+        residuals = {}
+    else:
+        residuals = physics_diagnostic_fn(pred_states, controls, disturbances, dt)
+
+    n = pred_states.shape[0] - 1
+    mass_res = residuals.get("mass", zero_residual(n))
+    energy_res = residuals.get("energy", zero_residual(n))
 
     metric_store["mass_violation_mean"].append(float(jnp.mean(mass_res)))
     metric_store["mass_violation_max"].append(float(jnp.max(mass_res)))
@@ -136,7 +247,7 @@ def _plot_priority_score(
     return float(np.sum(normalized_state_range))
 
 
-def _summarize_metric_store(metric_store):
+def _summarize_metric_store(metric_store, state_names):
     """Convert metric lists into mean/std summary values."""
     summary = {}
     scalar_metric_names = (
@@ -161,11 +272,11 @@ def _summarize_metric_store(metric_store):
     nrmse_per_state = np.mean(np.stack(metric_store["nrmse_per_state"]), axis=0)
     summary["rmse_per_state"] = {
         state_name: float(value)
-        for state_name, value in zip(STATE_NAMES, rmse_per_state)
+        for state_name, value in zip(state_names, rmse_per_state)
     }
     summary["nrmse_per_state"] = {
         state_name: float(value)
-        for state_name, value in zip(STATE_NAMES, nrmse_per_state)
+        for state_name, value in zip(state_names, nrmse_per_state)
     }
 
     return summary
@@ -191,11 +302,11 @@ def _print_metric_summary(title: str, summary: dict):
         f"{summary['mse_fullseq']['std']:.6f}"
     )
     print("  Per-state RMSE:")
-    for state_name in STATE_NAMES:
-        print(f"    {state_name}: {summary['rmse_per_state'][state_name]:.6f}")
+    for state_name, value in summary["rmse_per_state"].items():
+        print(f"    {state_name}: {value:.6f}")
     print("  Per-state normalized RMSE:")
-    for state_name in STATE_NAMES:
-        print(f"    {state_name}: {summary['nrmse_per_state'][state_name]:.6f}")
+    for state_name, value in summary["nrmse_per_state"].items():
+        print(f"    {state_name}: {value:.6f}")
     print("  Mass balance violation:")
     print(
         f"    Mean: {summary['mass_violation_mean']['mean']:.6f} ± "
@@ -219,34 +330,55 @@ def _print_metric_summary(title: str, summary: dict):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate Digital Twin model")
     parser.add_argument(
+        "--run",
+        type=str,
+        default=None,
+        help=(
+            "Run name under outputs/ (for example cstr_v3) or a direct run "
+            "directory path. When supplied, model/config/system_config/output_dir "
+            "are inferred automatically."
+        ),
+    )
+    parser.add_argument(
         "--model_path",
         type=str,
-        required=True,
-        help="Path to trained model"
+        default=None,
+        help=(
+            "Path to trained model. If omitted, --run is used to infer "
+            "best_model.eqx/final_model.eqx."
+        )
     )
     parser.add_argument(
         "--config",
         type=str,
-        required=True,
-        help="Path to model config"
+        default=None,
+        help="Path to model config. Defaults to <run_dir>/config.yaml when inferable."
     )
     parser.add_argument(
+        "--system_config",
         "--cstr_config",
         type=str,
-        default="configs/cstr_default.yaml",
-        help="Path to CSTR config"
+        default=None,
+        dest="system_config",
+        help="Path to system config. Defaults to <run_dir>/system_config.yaml when inferable."
     )
     parser.add_argument(
         "--data_dir",
         type=str,
-        default="data/test/",
-        help="Data directory"
+        default=None,
+        help=(
+            "Data directory. Defaults to data/<system_name>/ based on the saved "
+            "system config when inferable."
+        )
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="outputs/evaluation/",
-        help="Output directory for plots"
+        default=None,
+        help=(
+            "Output directory for plots. Defaults to <run_dir>/eval_det or "
+            "<run_dir>/eval_stoch based on predict_mode."
+        )
     )
     parser.add_argument(
         "--n_samples",
@@ -298,6 +430,17 @@ def main():
         help="Skip ensemble uncertainty plots and calibration"
     )
     args = parser.parse_args()
+
+    try:
+        resolved_paths = _resolve_evaluation_paths(args)
+    except (ValueError, FileNotFoundError) as exc:
+        parser.error(str(exc))
+
+    args.model_path = str(resolved_paths["model_path"])
+    args.config = str(resolved_paths["config_path"])
+    args.system_config = str(resolved_paths["system_config_path"])
+    args.data_dir = str(resolved_paths["data_dir"])
+    args.output_dir = str(resolved_paths["output_dir"])
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -307,6 +450,7 @@ def main():
     print("="*60)
     print(f"Model: {args.model_path}")
     print(f"Config: {args.config}")
+    print(f"System config: {args.system_config}")
     print(f"Data: {args.data_dir}")
     print(f"Output: {args.output_dir}")
     print(f"Predict mode: {args.predict_mode}")
@@ -315,16 +459,22 @@ def main():
     # Load configs
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
-    
-    with open(args.cstr_config, "r") as f:
-        cstr_config = yaml.safe_load(f)
-    
+
+    with open(args.system_config, "r") as f:
+        system_config = yaml.safe_load(f)
+
+    system_spec = get_system_spec(system_config)
+    state_names = system_spec.state_names
+    control_names = system_spec.control_names
+
+    physics_diagnostic_fn = get_physics_diagnostic_fn(system_spec.name, system_config)
+
     # Initialize PRNG
     key = jax.random.PRNGKey(args.seed)
-    
+
     # Load model
     print("\nLoading model...")
-    model = DigitalTwin.load(args.model_path, config)
+    model = DigitalTwin.load(args.model_path, config, system_spec=system_spec)
     param_counts = model.get_parameter_count()
     print(f"Model parameters: {param_counts['total']:,}")
     
@@ -342,10 +492,6 @@ def main():
     _, val_dataset = full_dataset.split(val_split)
     
     print(f"Validation samples: {val_dataset.n_samples}")
-    
-    # Create CSTR params for physics evaluation
-    cstr_params_dict = {k: float(v) for k, v in cstr_config["cstr"].items()}
-    cstr_params = CSTRParams(**cstr_params_dict)
     
     model_metrics = _init_metric_store()
     baseline_metrics = _init_metric_store()
@@ -380,10 +526,10 @@ def main():
         # Samples from TrajectoryDataset are already in physical units.
         dt = float(ts[1] - ts[0])
         mass_res, energy_res = _record_physics_metrics(
-            model_metrics, pred_states, controls, disturbances, cstr_params, dt
+            model_metrics, pred_states, controls, disturbances, physics_diagnostic_fn, dt
         )
         _record_physics_metrics(
-            baseline_metrics, baseline_states, controls, disturbances, cstr_params, dt
+            baseline_metrics, baseline_states, controls, disturbances, physics_diagnostic_fn, dt
         )
 
         plot_candidates.append(
@@ -422,7 +568,9 @@ def main():
             candidate["true_states"],
             candidate["pred_states"],
             candidate["ts"],
+            state_names=state_names,
             controls=candidate["controls"],
+            control_names=control_names,
             save_path=os.path.join(args.output_dir, f"trajectory_{file_stub}.png")
         )
         plt.close(fig)
@@ -431,6 +579,7 @@ def main():
             candidate["true_states"],
             candidate["pred_states"],
             candidate["ts"],
+            state_names=state_names,
             save_path=os.path.join(args.output_dir, f"error_{file_stub}.png")
         )
         plt.close(fig)
@@ -443,8 +592,8 @@ def main():
         )
         plt.close(fig)
     
-    model_summary = _summarize_metric_store(model_metrics)
-    baseline_summary = _summarize_metric_store(baseline_metrics)
+    model_summary = _summarize_metric_store(model_metrics, state_names)
+    baseline_summary = _summarize_metric_store(baseline_metrics, state_names)
 
     # Compute summary statistics
     print("\n" + "="*60)
@@ -474,7 +623,9 @@ def main():
             np.array(sample["states"]),
             np.array(ensemble_result["states_samples"]),
             np.array(sample["t"]),
+            state_names=state_names,
             controls=np.array(sample["controls"]),
+            control_names=control_names,
             pred_std=np.array(ensemble_result["states_std"]),
             save_path=os.path.join(args.output_dir, "ensemble_prediction.png")
         )

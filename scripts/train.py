@@ -13,10 +13,11 @@ import jax
 import json
 
 from dte.models.digital_twin import DigitalTwin
+from dte.physics.registry import get_physics_loss
 from dte.training.trainer import Trainer
 from dte.training.losses import LossComputer
 from dte.data.dataset import TrajectoryDataset
-from dte.simulators.cstr import CSTRParams
+from dte.simulators.registry import get_system_spec
 
 
 def _json_safe_float(value):
@@ -42,10 +43,12 @@ def main():
         help="Path to training config"
     )
     parser.add_argument(
-        "--cstr_config",
+        "--system_config",
+        "--cstr_config",  # backwards-compatible alias
         type=str,
         default="configs/cstr_default.yaml",
-        help="Path to CSTR config"
+        dest="system_config",
+        help="Path to system config (CSTR, heat exchanger, etc.)"
     )
     parser.add_argument(
         "--data_dir",
@@ -100,6 +103,30 @@ def main():
         action="store_true",
         help="Use Weights & Biases logging"
     )
+    parser.add_argument(
+        "--finetune",
+        type=str,
+        default=None,
+        metavar="CHECKPOINT_PATH",
+        help=(
+            "Path to a pre-trained model checkpoint.  When supplied, the "
+            "encoder and latent-SDE are frozen and only the decoder is updated "
+            "(few-shot transfer learning mode).  Supports --n_epochs to control "
+            "the number of fine-tuning epochs."
+        ),
+    )
+    parser.add_argument(
+        "--finetune_part",
+        type=str,
+        default="decoder",
+        choices=["decoder", "encoder", "all"],
+        help=(
+            "Which part of the model to fine-tune when --finetune is used. "
+            "'decoder' (default): freeze encoder+SDE, update only decoder. "
+            "'encoder': freeze decoder+SDE, update only encoder. "
+            "'all': update all parameters (standard transfer with warm start)."
+        ),
+    )
     args = parser.parse_args()
     
     # Load configs
@@ -107,13 +134,16 @@ def main():
         config = yaml.safe_load(f)
     config.setdefault("model", {})["initial_diffusion_scale"] = 0.0001
     config.setdefault("model", {}).setdefault("disturbance_dim", 2)
-    config.setdefault("training", {})["peak_lr"] = 5.0e-4
-    config.setdefault("training", {})["gradient_clip"] = 0.5
+    config.setdefault("optimizer", {})["peak_lr"] = 5.0e-4
+    config.setdefault("optimizer", {})["gradient_clip"] = 0.5
     config.setdefault("loss_weights", {})
     config["loss_weights"]["kl"] = 0.0
-    
-    with open(args.cstr_config, "r") as f:
-        cstr_config = yaml.safe_load(f)
+
+    with open(args.system_config, "r") as f:
+        system_config = yaml.safe_load(f)
+
+    # Build generic SystemSpec from config
+    system_spec = get_system_spec(system_config)
     
     # Override config if specified
     if args.n_epochs is not None:
@@ -131,18 +161,21 @@ def main():
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     # Save configs
     with open(os.path.join(args.output_dir, "config.yaml"), "w") as f:
         yaml.dump(config, f)
+    with open(os.path.join(args.output_dir, "system_config.yaml"), "w") as f:
+        yaml.dump(system_config, f)
+    # Write legacy alias so existing evaluation scripts still find the file
     with open(os.path.join(args.output_dir, "cstr_config.yaml"), "w") as f:
-        yaml.dump(cstr_config, f)
-    
+        yaml.dump(system_config, f)
+
     print("\n" + "="*60)
     print("DIGITAL TWIN TRAINING")
     print("="*60)
     print(f"Training config: {args.config}")
-    print(f"CSTR config: {args.cstr_config}")
+    print(f"System config: {args.system_config} (system={system_spec.name})")
     print(f"Data directory: {args.data_dir}")
     print(f"Output directory: {args.output_dir}")
     print(f"Seed: {args.seed}")
@@ -178,23 +211,39 @@ def main():
     print(f"Train samples: {train_dataset.n_samples}")
     print(f"Val samples: {val_dataset.n_samples}")
     
-    # Create CSTR params for physics losses
-    cstr_params_dict = {k: float(v) for k, v in cstr_config["cstr"].items()}
-    cstr_params = CSTRParams(**cstr_params_dict)
-    
+    physics_loss = get_physics_loss(system_spec.name, system_config)
+    if not physics_loss.residual_names():
+        print(
+            f"Note: no physics loss implementation found for system "
+            f"'{system_spec.name}', using null."
+        )
+
     # Create loss computer
     norm_stats = train_dataset.get_normalization_stats()
-    loss_computer = LossComputer(config, norm_stats, cstr_params)
-    
-    # Create model
+    loss_computer = LossComputer(
+        config,
+        norm_stats,
+        physics_loss=physics_loss,
+        state_names=system_spec.state_names,
+    )
+
+    # Create model (from scratch or from pre-trained checkpoint)
     print("\nInitializing model...")
-    model = DigitalTwin.from_config(config, key_model)
-    
+    is_finetune = args.finetune is not None
+    if is_finetune:
+        from dte.training.transfer import apply_finetune_mask
+        print(f"Fine-tune mode: loading checkpoint from {args.finetune}")
+        model = DigitalTwin.load(args.finetune, config, system_spec=system_spec)
+        model = apply_finetune_mask(model, part=args.finetune_part)
+        print(f"Fine-tune part: {args.finetune_part} (other components frozen)")
+    else:
+        model = DigitalTwin.from_config(config, key_model, system_spec=system_spec)
+
     param_counts = model.get_parameter_count()
     print(f"Parameter counts:")
     for k, v in param_counts.items():
         print(f"  {k}: {v:,}")
-    
+
     # Create trainer
     print("\nCreating trainer...")
     trainer = Trainer(

@@ -24,7 +24,7 @@ training:
   val_split: 0.2
 
 optimizer:
-  peak_lr: 1.0e-3
+  peak_lr: 5.0e-4
   warmup_steps: 200
   total_steps: 5000
   end_lr: 1.0e-6
@@ -50,6 +50,22 @@ kl_annealing:
   start_weight: 0.0
   end_weight: 0.0001
   anneal_steps: 5000
+
+sde_training:
+  enabled: false           # set true to enable stochastic SDE training path
+  warmup_steps: 2000       # steps of deterministic warmup before SDE path activates
+  sde_kl_weight: 0.00001  # regularization weight on diffusion magnitudes
+
+curriculum:
+  enabled: false
+  initial_seq_len: 5
+  final_seq_len: 50
+  warmup_epochs: 20
+
+teacher_forcing:
+  initial_ratio: 1.0       # fraction of loss from teacher-forced one-step path
+  final_ratio: 0.0
+  anneal_epochs: 30
 
 checkpointing:
   save_every: 10

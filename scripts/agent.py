@@ -5,8 +5,9 @@ applies it, runs the autoresearch harness (scripts/autoresearch.py),
 keeps improvements, reverts failures, and shows a Rich TUI dashboard.
 
 Usage:
-    python scripts/agent.py                    # Gemini 3.1 Pro (default)
+    python scripts/agent.py                    # Provider from autoresearch config
     python scripts/agent.py --config configs/autoresearch_stage1.yaml
+    python scripts/agent.py --deepseek         # DeepSeek reasoning model
     python scripts/agent.py --claude           # Claude Sonnet 4.6
     python scripts/agent.py --opus             # Claude Opus 4.6 with 32k thinking
     python scripts/agent.py --openai o3        # OpenAI o3
@@ -19,7 +20,8 @@ Usage:
     python scripts/agent.py --file dte/training/trainer.py  # Restrict to one file
 
 Required environment variables (for the chosen provider):
-    GEMINI_API_KEY      -- Google Gemini (default)
+    DEEPSEEK_API_KEY    -- DeepSeek
+    GEMINI_API_KEY      -- Google Gemini
     ANTHROPIC_API_KEY   -- Claude
     OPENAI_API_KEY      -- OpenAI
     XAI_API_KEY         -- xAI Grok
@@ -31,6 +33,7 @@ when present.
 from __future__ import annotations
 
 import ast
+import difflib
 import json
 import os
 import re
@@ -261,10 +264,8 @@ def set_autoresearch_config(path_value: str | Path) -> Path:
 def get_workspace_dir() -> Path:
     """Resolve the active autoresearch workspace from config."""
 
-    try:
-        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle) or {}
-    except Exception:
+    config = load_autoresearch_config()
+    if not config:
         return DEFAULT_WORKSPACE_DIR
 
     workspace_value = config.get("research", {}).get("workspace_dir", "outputs/autoresearch")
@@ -311,6 +312,16 @@ def load_agent_context(config: dict | None = None) -> str:
     if len(text) > 12000:
         text = text[:12000].rstrip() + "\n\n[Context truncated]"
     return text
+
+
+def load_autoresearch_config() -> dict:
+    """Load the active autoresearch config."""
+
+    try:
+        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle) or {}
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +495,7 @@ def _format_component_losses(label: str, losses: dict[str, float] | None) -> str
     if not losses:
         return ""
 
-    keys = ("total", "trajectory", "reconstruction", "kl", "mass_balance", "energy_balance")
+    keys = ("total", "trajectory", "reconstruction", "kl", "physics", "mass_balance", "energy_balance")
     parts = []
     for key in keys:
         if key in losses:
@@ -492,6 +503,47 @@ def _format_component_losses(label: str, losses: dict[str, float] | None) -> str
     if not parts:
         return ""
     return f"{label}: " + ", ".join(parts)
+
+
+def _format_named_metrics(label: str, metrics: dict[str, float] | None) -> str:
+    """Format named metrics like rmse_per_state for prompt context."""
+
+    if not isinstance(metrics, dict) or not metrics:
+        return ""
+
+    parts = []
+    for name, value in metrics.items():
+        try:
+            parts.append(f"{name}={float(value):.4f}")
+        except (TypeError, ValueError):
+            continue
+    if not parts:
+        return ""
+    return f"{label}: " + ", ".join(parts)
+
+
+def _extract_eval_metric_text(eval_summary: dict | None) -> str:
+    """Extract compact per-state eval metrics from evaluation_summary.json."""
+
+    if not isinstance(eval_summary, dict):
+        return ""
+
+    model_metrics = eval_summary.get("model_metrics")
+    if not isinstance(model_metrics, dict):
+        return ""
+
+    rmse_text = _format_named_metrics("eval_rmse", model_metrics.get("rmse_per_state"))
+    nrmse_text = _format_named_metrics("eval_nrmse", model_metrics.get("nrmse_per_state"))
+    sample_count = eval_summary.get("sample_count")
+    detail_bits = []
+    if isinstance(sample_count, int):
+        detail_bits.append(f"samples={sample_count}")
+    if eval_summary.get("predict_mode"):
+        detail_bits.append(f"mode={eval_summary['predict_mode']}")
+    metric_bits = [bit for bit in (rmse_text, nrmse_text) if bit]
+    if detail_bits:
+        metric_bits.append(", ".join(detail_bits))
+    return " | ".join(metric_bits)
 
 
 def _summarize_crash_tail(log_path: Path) -> str:
@@ -540,6 +592,7 @@ def build_recent_run_context(limit: int = 8) -> str:
     for run_dir in run_dirs[-limit:]:
         result = _read_json_if_exists(run_dir / "result.json") or {}
         summary = _read_json_if_exists(run_dir / "summary.json") or {}
+        eval_summary = _read_json_if_exists(run_dir / "eval_det" / "evaluation_summary.json")
         train_log_path = run_dir / "train.log"
 
         status = str(result.get("status", "unknown"))
@@ -578,6 +631,10 @@ def build_recent_run_context(limit: int = 8) -> str:
         if component_bits:
             line += " | " + " ; ".join(component_bits)
 
+        eval_text = _extract_eval_metric_text(eval_summary)
+        if eval_text:
+            line += " | " + eval_text
+
         if not summary and status == "crash":
             line += f" | crash_tail={_summarize_crash_tail(train_log_path)}"
 
@@ -593,6 +650,12 @@ def build_recent_run_context(limit: int = 8) -> str:
                 "## Current promoted baseline\n"
                 f"- {float(baseline_metric):.6f} {str(baseline_desc)[:220]}\n"
             )
+        baseline_eval = _read_json_if_exists(
+            get_workspace_dir() / "baseline" / "eval_det" / "evaluation_summary.json"
+        )
+        baseline_eval_text = _extract_eval_metric_text(baseline_eval)
+        if baseline_eval_text:
+            baseline_block += f"  {baseline_eval_text}\n"
 
     return baseline_block + "## Recent run artifact insights\n" + "\n".join(lines)
 
@@ -684,11 +747,18 @@ class FatalAPIError(Exception):
 # LLM providers
 # ---------------------------------------------------------------------------
 
-_claude_model = "claude-sonnet-4-6"
-_gemini_model = "gemini-3.1-pro-preview"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-reasoner"
+DEFAULT_GROK_MODEL = "grok-3"
 
 
-def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
+def call_gemini(
+    prompt: str,
+    temperature: float | None = None,
+    thinking_level: str | None = None,
+    model: str = DEFAULT_GEMINI_MODEL,
+) -> str | None:
     """Call Google Gemini via the Google Gen AI SDK, with legacy fallback."""
     try:
         api_key = os.environ.get("GEMINI_API_KEY", "")
@@ -706,10 +776,19 @@ def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
             }
             if temperature is not None:
                 config_kwargs["temperature"] = temperature
+            if thinking_level:
+                try:
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(
+                        thinking_level=str(thinking_level).lower()
+                    )
+                except Exception:
+                    log_to_file(
+                        f"WARNING Gemini: could not configure thinking_level={thinking_level}"
+                    )
 
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
-                model=_gemini_model,
+                model=model,
                 contents=prompt,
                 config=types.GenerateContentConfig(**config_kwargs),
             )
@@ -725,7 +804,7 @@ def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
             if temperature is not None:
                 generation_config["temperature"] = temperature
             model = legacy_genai.GenerativeModel(
-                model_name=_gemini_model,
+                model_name=model,
                 generation_config=generation_config,
             )
             response = model.generate_content(prompt)
@@ -743,12 +822,17 @@ def call_gemini(prompt: str, temperature: float | None = None) -> str | None:
         return None
 
 
-def call_claude(prompt: str, temperature: float | None = None) -> str | None:
+def call_claude(
+    prompt: str,
+    temperature: float | None = None,
+    thinking_level: str | None = None,
+    model: str = DEFAULT_CLAUDE_MODEL,
+) -> str | None:
     try:
         import anthropic
         client = anthropic.Anthropic(timeout=180.0)
         kwargs: dict = {
-            "model": _claude_model,
+            "model": model,
             "max_tokens": 4096,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -766,7 +850,11 @@ def call_claude(prompt: str, temperature: float | None = None) -> str | None:
         return None
 
 
-def call_claude_opus(prompt: str, temperature: float | None = None) -> str | None:
+def call_claude_opus(
+    prompt: str,
+    temperature: float | None = None,
+    thinking_level: str | None = None,
+) -> str | None:
     try:
         import anthropic
         client = anthropic.Anthropic(timeout=600.0)
@@ -792,7 +880,12 @@ def call_claude_opus(prompt: str, temperature: float | None = None) -> str | Non
         return None
 
 
-def call_openai(prompt: str, temperature: float | None = None, model: str = "o3") -> str | None:
+def call_openai(
+    prompt: str,
+    temperature: float | None = None,
+    thinking_level: str | None = None,
+    model: str = "o3",
+) -> str | None:
     try:
         from openai import OpenAI
         client = OpenAI(timeout=600.0)
@@ -818,7 +911,52 @@ def call_openai(prompt: str, temperature: float | None = None, model: str = "o3"
         return None
 
 
-def call_grok(prompt: str, temperature: float | None = None) -> str | None:
+def call_deepseek(
+    prompt: str,
+    temperature: float | None = None,
+    thinking_level: str | None = None,
+    model: str = DEFAULT_DEEPSEEK_MODEL,
+) -> str | None:
+    try:
+        from openai import OpenAI
+
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        if not api_key:
+            log_to_file("ERROR DeepSeek: DEEPSEEK_API_KEY not set")
+            return None
+
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com",
+            timeout=600.0,
+        )
+        kwargs: dict = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 8192,
+        }
+        # DeepSeek documents that sampling controls like temperature do not apply
+        # to deepseek-reasoner, so we keep the config value but do not send it.
+        if temperature is not None and model != DEFAULT_DEEPSEEK_MODEL:
+            kwargs["temperature"] = temperature
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content
+    except ImportError:
+        return None
+    except Exception as e:
+        err = str(e)
+        log_to_file(f"ERROR DeepSeek ({model}): {e}")
+        if any(x in err.lower() for x in ("insufficient_balance", "authentication", "billing")):
+            raise FatalAPIError(err)
+        return None
+
+
+def call_grok(
+    prompt: str,
+    temperature: float | None = None,
+    thinking_level: str | None = None,
+    model: str = DEFAULT_GROK_MODEL,
+) -> str | None:
     try:
         from openai import OpenAI
         client = OpenAI(
@@ -827,7 +965,7 @@ def call_grok(prompt: str, temperature: float | None = None) -> str | None:
             timeout=300.0,
         )
         kwargs: dict = {
-            "model": "grok-3",
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 4096,
         }
@@ -845,7 +983,11 @@ def call_grok(prompt: str, temperature: float | None = None) -> str | None:
         return None
 
 
-def call_local(prompt: str, temperature: float | None = None) -> str | None:
+def call_local(
+    prompt: str,
+    temperature: float | None = None,
+    thinking_level: str | None = None,
+) -> str | None:
     try:
         import requests
         resp = requests.post(
@@ -862,6 +1004,49 @@ def call_local(prompt: str, temperature: float | None = None) -> str | None:
     except Exception as e:
         log_to_file(f"ERROR LM Studio: {e}")
         return None
+
+
+def _infer_provider_from_model(model_name: str) -> str:
+    """Infer the provider from a configured default model name."""
+
+    name = (model_name or "").strip().lower()
+    if not name:
+        return "deepseek"
+    if name == "local":
+        return "local"
+    if name.startswith("deepseek"):
+        return "deepseek"
+    if name.startswith("gemini"):
+        return "gemini"
+    if name.startswith("claude-opus"):
+        return "opus"
+    if name.startswith("claude"):
+        return "claude"
+    if name.startswith("grok"):
+        return "grok"
+    if name.startswith(("gpt-", "o")):
+        return "openai"
+    return "gemini"
+
+
+def _provider_supports_temperature(provider: str, model_name: str) -> bool:
+    """Return whether the selected provider/model accepts temperature."""
+
+    if provider == "local":
+        return True
+    if provider == "deepseek" and model_name == DEFAULT_DEEPSEEK_MODEL:
+        return False
+    if provider == "openai" and model_name.startswith("o"):
+        return False
+    if provider == "opus":
+        return False
+    return True
+
+
+def _provider_supports_thinking_level(provider: str) -> bool:
+    """Return whether a provider exposes a configurable thinking level here."""
+
+    return provider == "gemini"
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +1076,9 @@ KNOWN_GOOD = """
 - Adjusting diffusion scale initialisation (e.g., log-scale init at -1 instead of 0)
 - Reducing physics loss weights (0.1 -> 0.01) early in training to avoid gradient dominance
 - Larger batch_size for JAX compiled code (64 -> 128) to improve throughput
+- Curriculum training: start with shorter seq_len and grow it (curriculum_seq_len_start / _end in config)
+- Teacher forcing: high tf_weight early, anneal to 0 for free-rollout robustness (teacher_forcing_weight)
+- Stochastic SDE path (use_stochastic_training: true) vs deterministic mean trajectory
 - Increasing seq_len to expose the model to longer dependencies
 These are NOT guaranteed to work but are worth trying if not yet attempted.
 """
@@ -901,8 +1089,110 @@ JAX_PITFALLS = """
 - Do NOT change the tree structure of Equinox modules mid-training (shape errors on load).
 - YAML changes must keep all required keys present; missing keys cause KeyError on load.
 - In configs, numeric values like 3e-4 must stay as floats, not strings.
+- Do NOT use eqx.field(static=True) for JAX arrays — only for non-array metadata.
+- Use jnp.array(indices) not plain Python lists when indexing with Array.at[].set().
+- HDF5 datasets must use key "time" (not "t") for the time axis.
+- LossComputer and Trainer expect a PhysicsLoss instance and state_names list; do NOT hardcode CSTR physics.
 - Do NOT modify scripts/autoresearch.py, dte/autoresearch/workflow.py, or program.md.
+- The system is chosen via --system_config (SystemSpec + ProcessSimulator registry), not hardcoded.
 """
+
+ARCHITECTURE_GUARDRAILS = """
+## Architecture guardrails:
+- Preserve the generic SystemSpec / ProcessSimulator / PhysicsLoss architecture.
+- In dte/models and dte/training, keep changes system-agnostic: no branches or string literals for specific systems.
+- Do NOT hardcode config-like numeric values in the generic core: decoder bounds, normalization constants, default physical states, or fixed dimensions.
+- If a numeric bound, scale, or constraint matters, put it in configs or thread it through SystemSpec/config instead.
+- Generic algorithmic changes that apply across systems are encouraged, including ordinary numeric tuning that is not a baked-in system constraint.
+"""
+
+_GENERIC_CORE_PREFIXES = (
+    "dte/models/",
+    "dte/training/",
+)
+_CONFIG_LIKE_NAMES = (
+    "state_center",
+    "state_scale",
+    "control_center",
+    "control_scale",
+    "disturbance_center",
+    "disturbance_scale",
+    "decoder_constraints",
+    "default_initial_state",
+    "default_nominal_disturbance",
+    "nominal_disturbance",
+)
+_DIMENSION_NAMES = (
+    "state_dim",
+    "control_dim",
+    "disturbance_dim",
+    "param_dim",
+)
+_SYSTEM_NAME_LITERAL_RE = re.compile(r"""["'](?:cstr|heat_exchanger)["']""")
+_NUMERIC_LITERAL_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?:e[+-]?\d+)?(?![\w.])", re.IGNORECASE)
+_ALLOWED_GENERIC_LITERALS = {"0", "1", "0.0", "1.0"}
+_CONFIG_LIKE_ASSIGNMENT_RE = re.compile(
+    rf"""\b(?:{"|".join(_CONFIG_LIKE_NAMES)})\s*=\s*(?:jnp\.)?(?:array\s*\(|zeros\s*\(|ones\s*\(|full\s*\(|\[)"""
+)
+_DIMENSION_ASSIGNMENT_RE = re.compile(
+    rf"""\b(?:{"|".join(_DIMENSION_NAMES)})\s*=\s*\d+"""
+)
+_DECODER_CONSTRAINT_LITERAL_RE = re.compile(
+    r"""(?:"type"\s*:\s*"softplus"|"""
+    r""""type"\s*:\s*"sigmoid_range"|"""
+    r"""\b(?:low|high|bias)\s*=\s*[-+]?\d|"""
+    r""""(?:low|high|bias)"\s*:\s*[-+]?\d)"""
+)
+
+
+def _iter_added_lines(original_source: str, modified_source: str):
+    """Yield added lines from a proposed patch."""
+
+    for line in difflib.ndiff(original_source.splitlines(), modified_source.splitlines()):
+        if line.startswith("+ "):
+            yield line[2:]
+
+
+def validate_architecture_guardrails(
+    filepath: str,
+    original_source: str,
+    modified_source: str,
+) -> str | None:
+    """Reject proposals that reintroduce hardcoded system assumptions into dte/."""
+
+    if not filepath.startswith(_GENERIC_CORE_PREFIXES):
+        return None
+
+    for line in _iter_added_lines(original_source, modified_source):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        if _SYSTEM_NAME_LITERAL_RE.search(line):
+            return (
+                "Architecture guardrail: keep dte/ system-agnostic; "
+                "do not introduce system-specific names or branches."
+            )
+
+        if (
+            _CONFIG_LIKE_ASSIGNMENT_RE.search(line)
+            or _DIMENSION_ASSIGNMENT_RE.search(line)
+            or _DECODER_CONSTRAINT_LITERAL_RE.search(line)
+        ):
+            literals = [
+                match.group(0)
+                for match in _NUMERIC_LITERAL_RE.finditer(line)
+                if match.group(0).lower() not in _ALLOWED_GENERIC_LITERALS
+            ]
+            if literals:
+                return (
+                    "Architecture guardrail: avoid hardcoded config-like numeric "
+                    "constraints in dte/models or dte/training; move bounds, "
+                    "normalization values, defaults, and fixed dims to "
+                    "config/SystemSpec instead."
+                )
+
+    return None
 
 
 def _categorize(desc: str) -> str:
@@ -1006,15 +1296,16 @@ Look at category summary — avoid exhausted categories. Try a different file or
         recent_runs_section = f"\n{recent_run_context}\n"
 
     return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
-physics-informed latent Neural SDE (digital twin) trained on CSTR reactor data.
+physics-informed latent Neural SDE (digital twin) trained on process system data (CSTR, heat exchanger, or other registered systems).
 
 ## Constraints
 - You MUST only modify ONE of these files per experiment:
 {files_list}
 - Do NOT modify the experiment harness: scripts/autoresearch.py, dte/autoresearch/*, program.md
 - One idea per experiment. Keep changes minimal and surgical.
+- Preserve the generic architecture. In dte/models and dte/training, do not add system-specific branches or bake config-like numbers into code; generic numeric algorithmic tweaks are fine, but bounds/scales/defaults/dims should live in config/SystemSpec.
 - Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
-{JAX_PITFALLS}
+{JAX_PITFALLS}{ARCHITECTURE_GUARDRAILS}
 ## Current best_val_loss: {best_loss:.6f}
 {streak_str}{history_section}{KNOWN_GOOD}{context_section}{recent_runs_section}
 ## Currently showing: {file_path}
@@ -1197,7 +1488,7 @@ def apply_changes(source: str, changes: list[dict]) -> str | None:
     return modified
 
 
-def validate_file(filepath: str, source: str) -> str | None:
+def validate_file(filepath: str, source: str, original_source: str | None = None) -> str | None:
     """Return error string or None if valid."""
     if filepath.endswith(".py"):
         try:
@@ -1209,7 +1500,180 @@ def validate_file(filepath: str, source: str) -> str | None:
             yaml.safe_load(source)
         except yaml.YAMLError as e:
             return f"YAMLError: {e}"
+    if original_source is not None:
+        guardrail_error = validate_architecture_guardrails(filepath, original_source, source)
+        if guardrail_error:
+            return guardrail_error
     return None
+
+
+def get_eval_settings(config: dict | None = None) -> dict:
+    """Resolve lightweight evaluation settings from autoresearch config."""
+
+    agent_cfg = (config or {}).get("agent", {})
+    return {
+        "eval_on_keep": bool(agent_cfg.get("eval_on_keep", True)),
+        "eval_every_n_runs": max(0, int(agent_cfg.get("eval_every_n_runs", 0) or 0)),
+        "n_trajectories": max(1, int(agent_cfg.get("eval_n_trajectories", 8) or 8)),
+        "predict_mode": str(agent_cfg.get("eval_predict_mode", "deterministic")),
+        "plot_count": max(0, int(agent_cfg.get("eval_plot_count", 0) or 0)),
+        "skip_ensemble": bool(agent_cfg.get("eval_skip_ensemble", True)),
+        "timeout_seconds": max(60, int(agent_cfg.get("eval_timeout_seconds", 900) or 900)),
+    }
+
+
+def should_run_lightweight_eval(result: dict | None, run_number: int, eval_settings: dict) -> bool:
+    """Return True when a sidecar evaluation should be run for a completed experiment."""
+
+    if not result or result.get("status") not in ("keep", "discard"):
+        return False
+
+    if eval_settings.get("eval_on_keep", True) and result.get("status") == "keep":
+        return True
+
+    every_n = int(eval_settings.get("eval_every_n_runs", 0) or 0)
+    return every_n > 0 and run_number % every_n == 0
+
+
+def _resolve_run_dir_from_result(result: dict) -> Path | None:
+    """Resolve the run directory from a result payload."""
+
+    summary_path = result.get("summary_path")
+    if summary_path:
+        return Path(summary_path).resolve().parent
+
+    artifacts_dir = result.get("artifacts_dir")
+    if artifacts_dir:
+        return Path(artifacts_dir).resolve().parent
+
+    run_id = result.get("run_id")
+    if run_id:
+        return get_runs_dir() / str(run_id)
+
+    return None
+
+
+def _resolve_eval_model_path(run_dir: Path, result: dict) -> Path | None:
+    """Pick the most useful checkpoint to evaluate from a run directory."""
+
+    candidates: list[Path] = []
+    artifacts_dir = result.get("artifacts_dir")
+    if artifacts_dir:
+        artifacts_path = Path(str(artifacts_dir)).resolve()
+        candidates.extend(
+            [
+                artifacts_path / "best_model.eqx",
+                artifacts_path / "final_model.eqx",
+            ]
+        )
+    candidates.extend(
+        [
+            run_dir / "artifacts" / "best_model.eqx",
+            run_dir / "artifacts" / "final_model.eqx",
+            run_dir / "best_model.eqx",
+            run_dir / "final_model.eqx",
+        ]
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def maybe_run_lightweight_eval(
+    result: dict | None,
+    run_number: int,
+    train_cfg: dict,
+    eval_settings: dict,
+    on_line: callable | None = None,
+) -> Path | None:
+    """Run a compact evaluation pass when configured to do so."""
+
+    if not should_run_lightweight_eval(result, run_number, eval_settings):
+        return None
+
+    run_dir = _resolve_run_dir_from_result(result or {})
+    if run_dir is None:
+        log_to_file("EVAL SKIP: could not resolve run directory")
+        return None
+
+    model_path = _resolve_eval_model_path(run_dir, result or {})
+    if model_path is None:
+        log_to_file(f"EVAL SKIP: no checkpoint found in {run_dir}")
+        return None
+
+    predict_mode = str(eval_settings.get("predict_mode", "deterministic"))
+    output_dir = run_dir / ("eval_det" if predict_mode == "deterministic" else "eval_stoch")
+    summary_path = output_dir / "evaluation_summary.json"
+
+    command = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "evaluate.py"),
+        "--model_path",
+        str(model_path),
+        "--predict_mode",
+        predict_mode,
+        "--n_trajectories",
+        str(eval_settings.get("n_trajectories", 8)),
+        "--plot_count",
+        str(eval_settings.get("plot_count", 0)),
+        "--output_dir",
+        str(output_dir),
+        "--summary_path",
+        str(summary_path),
+    ]
+    if eval_settings.get("skip_ensemble", True):
+        command.append("--skip_ensemble")
+
+    data_dir = train_cfg.get("data_dir")
+    if data_dir:
+        command.extend(["--data_dir", str(resolve_repo_path(str(data_dir)))])
+
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=int(eval_settings.get("timeout_seconds", 900)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        log_to_file(f"EVAL TIMEOUT: run={run_dir.name}")
+        if on_line:
+            on_line("Lightweight eval timed out.")
+        return None
+    except Exception as exc:
+        log_to_file(f"EVAL ERROR: run={run_dir.name} ({exc})")
+        if on_line:
+            on_line(f"Lightweight eval failed: {str(exc)[:100]}")
+        return None
+
+    output_lines = [
+        line.strip()
+        for line in (completed.stdout or "").splitlines()
+        if line.strip()
+    ]
+    if completed.returncode != 0:
+        tail = " | ".join(output_lines[-3:]) if output_lines else (completed.stderr or "").strip()
+        log_to_file(f"EVAL FAIL: run={run_dir.name} rc={completed.returncode} {tail[:300]}")
+        if on_line:
+            on_line(f"Lightweight eval failed: {tail[:100] or 'unknown error'}")
+        return None
+
+    if on_line:
+        on_line(
+            "Lightweight eval saved "
+            f"{summary_path.relative_to(PROJECT_ROOT)}"
+        )
+
+    if result and result.get("baseline_promoted") and output_dir.exists():
+        baseline_eval_dir = get_workspace_dir() / "baseline" / output_dir.name
+        if baseline_eval_dir.exists():
+            shutil.rmtree(baseline_eval_dir)
+        shutil.copytree(output_dir, baseline_eval_dir)
+
+    return summary_path if summary_path.exists() else None
 
 
 # ---------------------------------------------------------------------------
@@ -1358,6 +1822,7 @@ SPARK_CHARS = list(" .:-=+*#@")
 PHASE_STYLES = {
     "THINKING":  ("THINKING",  "bold magenta"),
     "TRAINING":  ("TRAINING",  "bold yellow"),
+    "EVALUATING": ("EVALUATING", "bold cyan"),
     "APPLYING":  ("APPLYING",  "bold blue"),
     "BASELINE":  ("BASELINE",  "bold yellow"),
     "KEEP":      ("IMPROVED",  "bold green"),
@@ -1470,6 +1935,8 @@ def build_dashboard(state: dict) -> Layout:
             t.append(f" Latest loss: {loss_history[-1]:.6f}\n")
         else:
             t.append(f" Training in progress...\n", style="yellow")
+    elif phase == "EVALUATING":
+        t.append(" Running lightweight deterministic eval...\n", style="cyan")
     elif phase == "APPLYING":
         t.append(f" Applying patch and committing...\n", style="bright_blue")
     elif phase == "KEEP":
@@ -1483,6 +1950,7 @@ def build_dashboard(state: dict) -> Layout:
     border_color = {
         "TRAINING": "bright_green", "BASELINE": "bright_yellow", "THINKING": "bright_magenta",
         "KEEP": "green", "DISCARD": "yellow", "CRASH": "red", "COOLING": "cyan",
+        "EVALUATING": "cyan",
     }.get(phase, "dim")
     layout["training"].update(Panel(t, title=f"[bold]{training_title}[/]", border_style=border_color))
 
@@ -1612,6 +2080,8 @@ def _run_text_mode(
     call_llm,
     modifiable_files: list[str],
     max_runs: int,
+    train_cfg: dict,
+    eval_settings: dict,
     agent_context: str,
     recent_run_context: str,
 ) -> None:
@@ -1622,6 +2092,7 @@ def _run_text_mode(
     for i in range(max_runs - prior_count):
         exp_num = prior_count + i + 1
         print(f"\n[Exp {exp_num}/{max_runs}] Asking {args.llm_name}...")
+        recent_run_context = build_recent_run_context()
 
         target_file = _choose_file(history, modifiable_files, args.file)
         try:
@@ -1704,7 +2175,7 @@ def _run_text_mode(
             history = get_results_history()
             continue
 
-        err = validate_file(proposed_file, modified)
+        err = validate_file(proposed_file, modified, original_source=original)
         if err:
             print(f"  Validation failed: {err}. Skipping.")
             git_revert_file(proposed_file)
@@ -1721,6 +2192,15 @@ def _run_text_mode(
 
         if result and result.get("status") in ("keep", "discard"):
             val_loss = float(result.get("metric_value", 999.0) or 999.0)
+            if should_run_lightweight_eval(result, exp_num, eval_settings):
+                print("  Running lightweight eval...")
+                maybe_run_lightweight_eval(
+                    result,
+                    exp_num,
+                    train_cfg,
+                    eval_settings,
+                    on_line=lambda line: print(f"  {line}"),
+                )
             if result.get("status") == "keep":
                 best_loss = val_loss
                 print(f"  KEEP: val_loss={val_loss:.6f} (NEW BEST)")
@@ -1745,6 +2225,7 @@ def _run_text_mode(
         valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
         if valid:
             best_loss = min(valid)
+        recent_run_context = build_recent_run_context()
 
 
 # ---------------------------------------------------------------------------
@@ -1766,9 +2247,11 @@ def main() -> None:
     parser.add_argument("--tag",         type=str,  default=None, help="Branch tag (default: date)")
     parser.add_argument("--no-dashboard", action="store_true", help="Text-only output")
     parser.add_argument("--file",        type=str,  default=None, help="Restrict to one modifiable file")
-    # LLM provider flags (default: Gemini 2.5 Pro)
-    parser.add_argument("--gemini",  type=str, nargs="?", const="gemini-3.1-pro-preview", default=None,
-                        help="Use Google Gemini model (default: gemini-3.1-pro-preview)")
+    # LLM provider flags (default comes from autoresearch config)
+    parser.add_argument("--gemini",  type=str, nargs="?", const=DEFAULT_GEMINI_MODEL, default=None,
+                        help=f"Use Google Gemini model (default: {DEFAULT_GEMINI_MODEL})")
+    parser.add_argument("--deepseek", type=str, nargs="?", const=DEFAULT_DEEPSEEK_MODEL, default=None,
+                        help=f"Use DeepSeek model (default: {DEFAULT_DEEPSEEK_MODEL})")
     parser.add_argument("--claude",  action="store_true", help="Use Claude Sonnet 4.6")
     parser.add_argument("--opus",    action="store_true", help="Use Claude Opus 4.6 (32k thinking)")
     parser.add_argument("--sonnet4", action="store_true", help="Use Claude Sonnet 4 (legacy)")
@@ -1776,74 +2259,187 @@ def main() -> None:
                         help="Use OpenAI model (default: o3). Options: gpt-4.1, gpt-5.1, o3")
     parser.add_argument("--grok",    action="store_true", help="Use xAI Grok 3")
     parser.add_argument("--local",   action="store_true", help="Use local LM Studio")
+    parser.add_argument("--temperature", type=float, default=None,
+                        help="Override sampling temperature when the selected model supports it")
+    parser.add_argument("--thinking-level", type=str, default=None,
+                        help="Provider-specific thinking level (currently used for Gemini when set)")
     args = parser.parse_args()
     active_config_path = set_autoresearch_config(args.config)
 
-    # Select LLM — default is Gemini 2.5 Pro
+    ar_cfg = load_autoresearch_config()
+    agent_cfg = ar_cfg.get("agent", {})
+    modifiable_files = agent_cfg.get("modifiable_files", MODIFIABLE_FILES)
+    research_cfg = ar_cfg.get("research", {})
+    train_cfg = ar_cfg.get("train", {})
+    eval_settings = get_eval_settings(ar_cfg)
+    agent_context = load_agent_context(ar_cfg)
+    recent_run_context = build_recent_run_context()
+
+    default_model = str(agent_cfg.get("default_llm", DEFAULT_DEEPSEEK_MODEL))
+    provider_name = ""
+    provider_model = ""
+
     if args.local:
+        provider_name = "local"
+        provider_model = "local"
         _call_llm_fn = call_local
         llm_name = "LM Studio (local)"
-        _no_temperature = True
     elif args.opus:
+        provider_name = "opus"
+        provider_model = "claude-opus-4-6"
         _call_llm_fn = call_claude_opus
         llm_name = "Claude Opus 4.6"
-        _no_temperature = True
     elif args.sonnet4:
-        global _claude_model
-        _claude_model = "claude-sonnet-4-20250514"
-        _call_llm_fn = call_claude
+        provider_name = "claude"
+        provider_model = "claude-sonnet-4-20250514"
+        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_claude(
+            prompt,
+            temperature=temperature,
+            thinking_level=thinking_level,
+            model=provider_model,
+        )
         llm_name = "Claude Sonnet 4"
-        _no_temperature = False
     elif args.claude:
-        _call_llm_fn = call_claude
+        provider_name = "claude"
+        provider_model = DEFAULT_CLAUDE_MODEL
+        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_claude(
+            prompt,
+            temperature=temperature,
+            thinking_level=thinking_level,
+            model=provider_model,
+        )
         llm_name = "Claude Sonnet 4.6"
-        _no_temperature = False
     elif args.openai:
-        _model = args.openai
-        _call_llm_fn = lambda prompt, temperature=None: call_openai(prompt, temperature, model=_model)
-        llm_name = f"OpenAI {args.openai}"
-        _no_temperature = args.openai.startswith("o")
+        provider_name = "openai"
+        provider_model = args.openai
+        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_openai(
+            prompt,
+            temperature=temperature,
+            thinking_level=thinking_level,
+            model=provider_model,
+        )
+        llm_name = f"OpenAI {provider_model}"
     elif args.grok:
-        _call_llm_fn = call_grok
+        provider_name = "grok"
+        provider_model = DEFAULT_GROK_MODEL
+        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_grok(
+            prompt,
+            temperature=temperature,
+            thinking_level=thinking_level,
+            model=provider_model,
+        )
         llm_name = "xAI Grok 3"
-        _no_temperature = False
     elif args.gemini:
-        global _gemini_model
-        _gemini_model = args.gemini
-        _call_llm_fn = call_gemini
-        llm_name = f"Gemini {args.gemini}"
-        _no_temperature = False
+        provider_name = "gemini"
+        provider_model = args.gemini
+        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_gemini(
+            prompt,
+            temperature=temperature,
+            thinking_level=thinking_level,
+            model=provider_model,
+        )
+        llm_name = f"Gemini {provider_model}"
+    elif args.deepseek:
+        provider_name = "deepseek"
+        provider_model = args.deepseek
+        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_deepseek(
+            prompt,
+            temperature=temperature,
+            thinking_level=thinking_level,
+            model=provider_model,
+        )
+        llm_name = f"DeepSeek {provider_model}"
     else:
-        # Default: Gemini 3.1 Pro
-        _call_llm_fn = call_gemini
-        llm_name = "Gemini 3.1 Pro"
-        _no_temperature = False
+        provider_name = _infer_provider_from_model(default_model)
+        provider_model = default_model
+        if provider_name == "local":
+            _call_llm_fn = call_local
+            llm_name = "LM Studio (local)"
+        elif provider_name == "deepseek":
+            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_deepseek(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=provider_model,
+            )
+            llm_name = f"DeepSeek {provider_model}"
+        elif provider_name == "claude":
+            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_claude(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=provider_model or DEFAULT_CLAUDE_MODEL,
+            )
+            llm_name = f"Claude {provider_model}"
+        elif provider_name == "opus":
+            _call_llm_fn = call_claude_opus
+            llm_name = "Claude Opus 4.6"
+        elif provider_name == "openai":
+            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_openai(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=provider_model,
+            )
+            llm_name = f"OpenAI {provider_model}"
+        elif provider_name == "grok":
+            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_grok(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=provider_model or DEFAULT_GROK_MODEL,
+            )
+            llm_name = f"xAI {provider_model}"
+        else:
+            provider_name = "gemini"
+            provider_model = provider_model or DEFAULT_GEMINI_MODEL
+            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_gemini(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=provider_model,
+            )
+            llm_name = f"Gemini {provider_model}"
 
     args.llm_name = llm_name
 
-    def call_llm(prompt: str, fail_streak: int = 0) -> str | None:
-        """Adaptive temperature: increase after consecutive failures."""
-        if _no_temperature:
-            return _call_llm_fn(prompt)
-        temp = None
-        if fail_streak >= 10:
-            temp = 0.5
-        elif fail_streak >= 5:
-            temp = 0.3
-        return _call_llm_fn(prompt, temperature=temp)
+    adaptive_temperature_enabled = bool(agent_cfg.get("adaptive_temperature", True))
+    adaptive_temperature_cap = float(agent_cfg.get("max_fail_streak_temp", 0.5))
+    configured_temperature = args.temperature
+    if configured_temperature is None and "temperature" in agent_cfg:
+        configured_temperature = agent_cfg.get("temperature")
+    if configured_temperature is not None:
+        configured_temperature = float(configured_temperature)
 
-    # Load modifiable files from config
-    try:
-        with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as f:
-            ar_cfg = yaml.safe_load(f) or {}
-        modifiable_files = ar_cfg.get("agent", {}).get("modifiable_files", MODIFIABLE_FILES)
-    except Exception:
-        ar_cfg = {}
-        modifiable_files = MODIFIABLE_FILES
-    research_cfg = ar_cfg.get("research", {})
-    train_cfg = ar_cfg.get("train", {})
-    agent_context = load_agent_context(ar_cfg)
-    recent_run_context = build_recent_run_context()
+    deepseek_temperature = args.temperature
+    if deepseek_temperature is None:
+        deepseek_temperature = agent_cfg.get("deepseek_temperature", 0.0)
+    if deepseek_temperature is not None:
+        deepseek_temperature = float(deepseek_temperature)
+
+    configured_thinking_level = args.thinking_level or agent_cfg.get("thinking_level")
+    if configured_thinking_level is not None:
+        configured_thinking_level = str(configured_thinking_level)
+
+    supports_temperature = _provider_supports_temperature(provider_name, provider_model)
+    supports_thinking_level = _provider_supports_thinking_level(provider_name)
+
+    def call_llm(prompt: str, fail_streak: int = 0) -> str | None:
+        """Invoke the selected model with config-aware temperature/thinking settings."""
+
+        temperature = configured_temperature
+        if temperature is None and provider_name == "deepseek" and provider_model == DEFAULT_DEEPSEEK_MODEL:
+            temperature = deepseek_temperature
+        if temperature is None and adaptive_temperature_enabled and supports_temperature:
+            if fail_streak >= 10:
+                temperature = adaptive_temperature_cap
+            elif fail_streak >= 5:
+                temperature = min(0.3, adaptive_temperature_cap)
+
+        thinking_level = configured_thinking_level if supports_thinking_level else None
+        if supports_temperature:
+            return _call_llm_fn(prompt, temperature=temperature, thinking_level=thinking_level)
+        return _call_llm_fn(prompt, thinking_level=thinking_level)
 
     if args.file:
         if args.file not in modifiable_files:
@@ -1885,12 +2481,22 @@ def main() -> None:
             result = run_experiment("baseline")
             if result and result.get("status") in ("keep", "discard"):
                 val_loss = float(result.get("metric_value", 999.0) or 999.0)
+                if should_run_lightweight_eval(result, prior_count + 1, eval_settings):
+                    print("Running lightweight eval for baseline...")
+                    maybe_run_lightweight_eval(
+                        result,
+                        prior_count + 1,
+                        train_cfg,
+                        eval_settings,
+                        on_line=lambda line: print(f"  {line}"),
+                    )
                 best_loss = val_loss
                 print(f"Baseline: val_loss={val_loss:.6f}")
             elif result and result.get("status") == "crash":
                 print("Baseline failed inside autoresearch harness.")
                 return
             history = get_results_history()
+            recent_run_context = build_recent_run_context()
 
         _run_text_mode(
             args,
@@ -1899,6 +2505,8 @@ def main() -> None:
             call_llm,
             modifiable_files_active,
             args.max_runs,
+            train_cfg,
+            eval_settings,
             agent_context,
             recent_run_context,
         )
@@ -2006,6 +2614,17 @@ def main() -> None:
 
             if result and result.get("status") in ("keep", "discard"):
                 val_loss = float(result.get("metric_value", 999.0) or 999.0)
+                if should_run_lightweight_eval(result, prior_count + 1, eval_settings):
+                    set_phase("EVALUATING")
+                    add_log("Running lightweight eval for baseline...")
+                    refresh()
+                    maybe_run_lightweight_eval(
+                        result,
+                        prior_count + 1,
+                        train_cfg,
+                        eval_settings,
+                        on_line=add_log,
+                    )
                 best_loss = val_loss
                 state["best_loss"] = best_loss
                 add_log(f"Baseline: val_loss={val_loss:.6f}")
@@ -2030,6 +2649,7 @@ def main() -> None:
 
             history = get_results_history()
             state["history"] = history
+            recent_run_context = build_recent_run_context()
             refresh()
 
         best_loss_valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
@@ -2063,6 +2683,7 @@ def main() -> None:
                     continue
 
                 fail_streak = _count_recent_failures(history)
+                recent_run_context = build_recent_run_context()
                 if fail_streak >= 5:
                     add_log(f"Streak {fail_streak} failures — strategy change needed")
                 elif fail_streak >= 3:
@@ -2143,7 +2764,7 @@ def main() -> None:
                 add_log(f"Idea: {description}")
                 add_log(f"File: {proposed_file}")
 
-                if proposed_file not in modifiable_files:
+                if proposed_file not in modifiable_files_active:
                     add_log(f"Disallowed file: {proposed_file}. Skipping.")
                     history = get_results_history()
                     state["history"] = history
@@ -2168,7 +2789,7 @@ def main() -> None:
                     refresh()
                     continue
 
-                validate_err = validate_file(proposed_file, modified)
+                validate_err = validate_file(proposed_file, modified, original_source=original)
                 if validate_err:
                     add_log(f"Validation failed: {validate_err}")
                     log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{validate_err}]")
@@ -2210,6 +2831,17 @@ def main() -> None:
                 if result and result.get("status") in ("keep", "discard"):
                     val_loss = float(result.get("metric_value", 999.0) or 999.0)
                     improved = result.get("status") == "keep"
+                    if should_run_lightweight_eval(result, exp_num, eval_settings):
+                        set_phase("EVALUATING")
+                        add_log("Running lightweight eval...")
+                        refresh()
+                        maybe_run_lightweight_eval(
+                            result,
+                            exp_num,
+                            train_cfg,
+                            eval_settings,
+                            on_line=add_log,
+                        )
 
                     if improved:
                         best_loss = val_loss
