@@ -25,6 +25,109 @@ from dte.utils.plotting import (
     plot_prediction_error,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _resolve_repo_path(path_value: str | None) -> Path | None:
+    """Resolve absolute or repo-relative paths."""
+    if path_value is None:
+        return None
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
+
+def _candidate_run_dir(run_value: str) -> Path:
+    """Resolve a run name like ``cstr_v3`` or a direct run directory path."""
+    candidate = Path(run_value)
+    if candidate.is_absolute() or "/" in run_value or candidate.exists():
+        return _resolve_repo_path(run_value)
+    return REPO_ROOT / "outputs" / run_value
+
+
+def _pick_first_existing(paths: list[Path]) -> Path | None:
+    """Return the first existing path from a list."""
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def _load_yaml(path: Path) -> dict:
+    """Load YAML config from disk."""
+    with path.open("r") as f:
+        return yaml.safe_load(f)
+
+
+def _infer_data_dir_from_system_config(system_config_path: Path) -> Path | None:
+    """Map the saved system config to the conventional dataset directory."""
+    try:
+        system_config = _load_yaml(system_config_path)
+    except Exception:
+        return None
+    system_name = system_config.get("system", {}).get("name")
+    if not system_name:
+        return None
+    return REPO_ROOT / "data" / system_name
+
+
+def _resolve_evaluation_paths(args: argparse.Namespace) -> dict[str, Path]:
+    """Infer evaluation paths from a run name or model path when possible."""
+    run_dir = _candidate_run_dir(args.run) if args.run else None
+
+    model_path = _resolve_repo_path(args.model_path)
+    if model_path is None and run_dir is not None:
+        model_path = _pick_first_existing(
+            [run_dir / "best_model.eqx", run_dir / "final_model.eqx"]
+        )
+    if model_path is None:
+        raise ValueError("Provide either --run or --model_path.")
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    inferred_run_dir = run_dir or model_path.parent
+    config_path = _resolve_repo_path(args.config) or inferred_run_dir / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Config file not found: {config_path}. Pass --config explicitly."
+        )
+
+    system_config_path = _resolve_repo_path(args.system_config)
+    if system_config_path is None:
+        system_config_path = _pick_first_existing(
+            [
+                inferred_run_dir / "system_config.yaml",
+                inferred_run_dir / "cstr_config.yaml",
+            ]
+        )
+    if system_config_path is None or not system_config_path.exists():
+        raise FileNotFoundError(
+            "System config not found next to the model. Pass --system_config explicitly."
+        )
+
+    data_dir = _resolve_repo_path(args.data_dir)
+    if data_dir is None:
+        data_dir = _infer_data_dir_from_system_config(system_config_path)
+    if data_dir is None:
+        raise ValueError(
+            "Could not infer data directory from system config. Pass --data_dir explicitly."
+        )
+
+    output_dir = _resolve_repo_path(args.output_dir)
+    if output_dir is None:
+        suffix = "eval_det" if args.predict_mode == "deterministic" else "eval_stoch"
+        output_dir = inferred_run_dir / suffix
+
+    return {
+        "run_dir": inferred_run_dir,
+        "model_path": model_path,
+        "config_path": config_path,
+        "system_config_path": system_config_path,
+        "data_dir": data_dir,
+        "output_dir": output_dir,
+    }
+
 
 def _init_metric_store():
     """Create a metric accumulator for scalar and per-state metrics."""
@@ -227,36 +330,55 @@ def _print_metric_summary(title: str, summary: dict):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate Digital Twin model")
     parser.add_argument(
+        "--run",
+        type=str,
+        default=None,
+        help=(
+            "Run name under outputs/ (for example cstr_v3) or a direct run "
+            "directory path. When supplied, model/config/system_config/output_dir "
+            "are inferred automatically."
+        ),
+    )
+    parser.add_argument(
         "--model_path",
         type=str,
-        required=True,
-        help="Path to trained model"
+        default=None,
+        help=(
+            "Path to trained model. If omitted, --run is used to infer "
+            "best_model.eqx/final_model.eqx."
+        )
     )
     parser.add_argument(
         "--config",
         type=str,
-        required=True,
-        help="Path to model config"
+        default=None,
+        help="Path to model config. Defaults to <run_dir>/config.yaml when inferable."
     )
     parser.add_argument(
         "--system_config",
         "--cstr_config",
         type=str,
-        default="configs/cstr_default.yaml",
+        default=None,
         dest="system_config",
-        help="Path to system config"
+        help="Path to system config. Defaults to <run_dir>/system_config.yaml when inferable."
     )
     parser.add_argument(
         "--data_dir",
         type=str,
-        default="data/test/",
-        help="Data directory"
+        default=None,
+        help=(
+            "Data directory. Defaults to data/<system_name>/ based on the saved "
+            "system config when inferable."
+        )
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="outputs/evaluation/",
-        help="Output directory for plots"
+        default=None,
+        help=(
+            "Output directory for plots. Defaults to <run_dir>/eval_det or "
+            "<run_dir>/eval_stoch based on predict_mode."
+        )
     )
     parser.add_argument(
         "--n_samples",
@@ -308,6 +430,17 @@ def main():
         help="Skip ensemble uncertainty plots and calibration"
     )
     args = parser.parse_args()
+
+    try:
+        resolved_paths = _resolve_evaluation_paths(args)
+    except (ValueError, FileNotFoundError) as exc:
+        parser.error(str(exc))
+
+    args.model_path = str(resolved_paths["model_path"])
+    args.config = str(resolved_paths["config_path"])
+    args.system_config = str(resolved_paths["system_config_path"])
+    args.data_dir = str(resolved_paths["data_dir"])
+    args.output_dir = str(resolved_paths["output_dir"])
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -317,6 +450,7 @@ def main():
     print("="*60)
     print(f"Model: {args.model_path}")
     print(f"Config: {args.config}")
+    print(f"System config: {args.system_config}")
     print(f"Data: {args.data_dir}")
     print(f"Output: {args.output_dir}")
     print(f"Predict mode: {args.predict_mode}")
