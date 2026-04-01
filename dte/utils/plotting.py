@@ -37,25 +37,41 @@ def plot_trajectory_comparison(
     
     # Handle ensemble predictions
     if len(pred_states.shape) == 3:
-        # (n_samples, n_steps, state_dim) -> compute mean and std
+        # (n_samples, n_steps, state_dim) -> compute mean and optional std
         pred_mean = np.mean(pred_states, axis=0)
-        pred_std = np.std(pred_states, axis=0)
+        if pred_std is None:
+            pred_std = np.std(pred_states, axis=0)
         pred_states = pred_mean
     
     state_dim = true_states.shape[1]
+    control_dim = controls.shape[1] if controls is not None else 0
     
-    # Create figure
-    if controls is not None:
-        fig, axes = plt.subplots(state_dim + 1, 2, figsize=(14, 3 * (state_dim + 1)))
+    # Create figure with separate state/control columns so the layout stays compact
+    if control_dim > 0:
+        max_rows = max(state_dim, control_dim)
+        fig = plt.figure(figsize=(14, 3.0 * max_rows + 1.2), constrained_layout=True)
+        outer = fig.add_gridspec(1, 2, width_ratios=[1.8, 1.0], wspace=0.22)
+        state_grid = outer[0].subgridspec(state_dim, 1, hspace=0.18)
+        control_grid = outer[1].subgridspec(control_dim, 1, hspace=0.18)
+
+        state_axes = [fig.add_subplot(state_grid[i, 0]) for i in range(state_dim)]
+        control_axes = [fig.add_subplot(control_grid[i, 0]) for i in range(control_dim)]
     else:
-        fig, axes = plt.subplots(state_dim, 1, figsize=(10, 3 * state_dim))
-        axes = axes.reshape(-1, 1)
+        fig, state_axes = plt.subplots(
+            state_dim,
+            1,
+            figsize=(11, 3.0 * state_dim + 1.0),
+            sharex=True,
+            constrained_layout=True,
+        )
+        state_axes = np.atleast_1d(state_axes).tolist()
+        control_axes = []
     
     # Plot states
     for i in range(state_dim):
-        ax = axes[i, 0] if controls is not None else axes[i, 0]
-        ax.plot(times, true_states[:, i], 'b-', linewidth=2, label='True', alpha=0.8)
-        ax.plot(times, pred_states[:, i], 'r--', linewidth=2, label='Predicted', alpha=0.8)
+        ax = state_axes[i]
+        ax.plot(times, true_states[:, i], 'b-', linewidth=2, label='True', alpha=0.85)
+        ax.plot(times, pred_states[:, i], 'r--', linewidth=2, label='Predicted', alpha=0.85)
         
         # Add uncertainty band if available
         if pred_std is not None:
@@ -68,28 +84,29 @@ def plot_trajectory_comparison(
                 label='±2σ'
             )
         
-        ax.set_xlabel('Time', fontsize=12)
         ax.set_ylabel(state_names[i], fontsize=12)
-        ax.legend(fontsize=10)
+        ax.set_title(state_names[i], fontsize=12, fontweight='bold', loc='left')
+        if i == state_dim - 1:
+            ax.set_xlabel('Time', fontsize=12)
+        else:
+            ax.tick_params(axis='x', labelbottom=False)
+        ax.legend(fontsize=9, loc='best')
         ax.grid(True, alpha=0.3)
     
     # Plot controls
-    if controls is not None:
-        control_dim = controls.shape[1]
+    if control_dim > 0:
         for i in range(control_dim):
-            ax = axes[i, 1]
+            ax = control_axes[i]
             ax.plot(times, controls[:, i], 'g-', linewidth=2)
-            ax.set_xlabel('Time', fontsize=12)
             ax.set_ylabel(control_names[i], fontsize=12)
+            ax.set_title(control_names[i], fontsize=12, fontweight='bold', loc='left')
+            if i == control_dim - 1:
+                ax.set_xlabel('Time', fontsize=12)
+            else:
+                ax.tick_params(axis='x', labelbottom=False)
             ax.grid(True, alpha=0.3)
-        
-        # Fill remaining subplots if needed
-        for i in range(control_dim, state_dim + 1):
-            if i < len(axes):
-                axes[i, 1].axis('off')
     
-    plt.suptitle('Trajectory Comparison: True vs Predicted', fontsize=14, fontweight='bold')
-    plt.tight_layout()
+    fig.suptitle('Trajectory Comparison: True vs Predicted', fontsize=14, fontweight='bold')
     
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')

@@ -465,6 +465,7 @@ def main():
 
     system_spec = get_system_spec(system_config)
     state_names = system_spec.state_names
+    control_names = system_spec.control_names
 
     physics_diagnostic_fn = get_physics_diagnostic_fn(system_spec.name, system_config)
 
@@ -567,7 +568,9 @@ def main():
             candidate["true_states"],
             candidate["pred_states"],
             candidate["ts"],
+            state_names=state_names,
             controls=candidate["controls"],
+            control_names=control_names,
             save_path=os.path.join(args.output_dir, f"trajectory_{file_stub}.png")
         )
         plt.close(fig)
@@ -576,6 +579,7 @@ def main():
             candidate["true_states"],
             candidate["pred_states"],
             candidate["ts"],
+            state_names=state_names,
             save_path=os.path.join(args.output_dir, f"error_{file_stub}.png")
         )
         plt.close(fig)
@@ -619,7 +623,9 @@ def main():
             np.array(sample["states"]),
             np.array(ensemble_result["states_samples"]),
             np.array(sample["t"]),
+            state_names=state_names,
             controls=np.array(sample["controls"]),
+            control_names=control_names,
             pred_std=np.array(ensemble_result["states_std"]),
             save_path=os.path.join(args.output_dir, "ensemble_prediction.png")
         )
