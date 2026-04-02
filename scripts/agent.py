@@ -2840,7 +2840,7 @@ def main() -> None:
     agent_context = load_agent_context(ar_cfg)
     recent_run_context = build_recent_run_context()
 
-    default_model = str(agent_cfg.get("default_llm", DEFAULT_DEEPSEEK_MODEL))
+    default_model = str(agent_cfg.get("default_llm", DEFAULT_GEMINI_MODEL))
     if args.local:
         provider_name = "local"
         provider_model = "local"

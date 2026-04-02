@@ -1624,3 +1624,9 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-04-02 13:19:43] Committed: 3351049
 [2026-04-02 13:25:37] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
 [2026-04-02 13:42:11] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
+[2026-04-02 13:48:02] Created branch: autoresearch/apr02
+[2026-04-02 13:48:02] Ignoring stale agent_state.json from an earlier run
+[2026-04-02 13:48:02] Agent started: llm=DeepSeek deepseek-reasoner apply_llm=DeepSeek deepseek-reasoner cache=off max_runs=180 branch=autoresearch/apr02 prior=159 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-04-02 13:48:02] Ready. Best val_loss=0.029986 | 159 prior experiments
+[2026-04-02 13:48:02] Exp 160/180: querying DeepSeek deepseek-reasoner...
+[2026-04-02 13:48:02] Streak 10 failures — strategy change needed

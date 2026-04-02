@@ -16,17 +16,17 @@ train:
   seed: 42
 
 agent:
-  default_llm: deepseek-reasoner
+  default_llm: gemini-3.1-pro-preview-customtools
   adaptive_temperature: true
   max_fail_streak_temp: 0.5
-  temperature: null
+  temperature: 0.1
   deepseek_temperature: 0.0
   deepseek_max_tokens: 64000
-  thinking_level: null
-  apply_llm: null
-  apply_temperature: null
-  apply_thinking_level: null
-  gemini_context_cache: false
+  thinking_level: medium
+  apply_llm: gemini-3.1-flash-lite-preview
+  apply_temperature: 0.0
+  apply_thinking_level: low
+  gemini_context_cache: true
   gemini_context_cache_ttl: 3600s
   gemini_context_cache_min_tokens: 2048
   eval_on_keep: true
