@@ -28,7 +28,7 @@ RECOMMENDED_ORDER = [
 ]
 
 DEFAULT_STAGE1_RUNS = {
-    "latent": 8,
+    "latent": 16,
     "trainer": 8,
     "losses": 6,
     "encoder": 6,
