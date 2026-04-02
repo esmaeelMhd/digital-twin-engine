@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+import yaml
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AGENT_SCRIPT = PROJECT_ROOT / "scripts" / "agent.py"
@@ -43,6 +45,10 @@ DEFAULT_STAGE2_RUNS = {
     "encoder": 3,
     "decoder": 3,
     "digital_twin": 3,
+}
+
+STAGE1_CONTINUATION_INCREMENT = {
+    "latent": 8,
 }
 
 
@@ -144,6 +150,55 @@ def branch_divergence(local_ref: str, remote_ref: str) -> tuple[int, int]:
         return 0, 0
 
 
+def load_yaml(path: Path) -> dict:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle) or {}
+    except Exception as exc:
+        raise RunnerError(f"failed to load config {path}: {exc}") from exc
+
+
+def resolve_workspace_dir(config_path: str) -> Path:
+    cfg = load_yaml(PROJECT_ROOT / config_path)
+    workspace_value = cfg.get("research", {}).get("workspace_dir", "outputs/autoresearch")
+    workspace_dir = Path(workspace_value)
+    if not workspace_dir.is_absolute():
+        workspace_dir = PROJECT_ROOT / workspace_dir
+    return workspace_dir
+
+
+def existing_run_count(config_path: str) -> int:
+    results_path = resolve_workspace_dir(config_path) / "results.tsv"
+    if not results_path.exists():
+        return 0
+    try:
+        with results_path.open("r", encoding="utf-8") as handle:
+            return max(sum(1 for _ in handle) - 1, 0)
+    except Exception as exc:
+        raise RunnerError(f"failed to count existing runs in {results_path}: {exc}") from exc
+
+
+def resolve_campaign_max_runs(
+    *,
+    campaign_name: str,
+    stage: str,
+    config_path: str,
+    configured_runs: int,
+    override_runs: int | None,
+) -> int:
+    if override_runs is not None:
+        return override_runs
+    if stage != "stage1":
+        return configured_runs
+
+    increment = STAGE1_CONTINUATION_INCREMENT.get(campaign_name, 0)
+    if increment <= 0:
+        return configured_runs
+
+    prior_runs = existing_run_count(config_path)
+    return max(configured_runs, prior_runs + increment)
+
+
 def create_and_publish_branch(branch: str) -> None:
     checkout_main_and_sync()
     if branch_exists(branch):
@@ -204,12 +259,19 @@ def build_campaign_plan(
     for name in campaigns:
         config_path = f"configs/autoresearch_{name}_{stage}.yaml"
         branch_tag = f"{session_tag}-{name}-{stage}"
+        configured_runs = runs_by_name[name]
         plans.append(
             CampaignPlan(
                 name=name,
                 stage=stage,
                 config_path=config_path,
-                max_runs=max_runs_override if max_runs_override is not None else runs_by_name[name],
+                max_runs=resolve_campaign_max_runs(
+                    campaign_name=name,
+                    stage=stage,
+                    config_path=config_path,
+                    configured_runs=configured_runs,
+                    override_runs=max_runs_override,
+                ),
                 tag=branch_tag,
                 branch=f"autoresearch/{branch_tag}",
             )
