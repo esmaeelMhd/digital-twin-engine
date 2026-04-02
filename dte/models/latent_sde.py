@@ -84,7 +84,7 @@ class LatentDrift(eqx.Module):
 
         for i, layer in enumerate(self.layers):
             h = layer(x)
-            h = jax.nn.silu(h)
+            h = jax.nn.gelu(h)
             x = x + h if i > 0 else h
 
         return self.output_layer(x)
@@ -166,8 +166,10 @@ class LatentDiffusion(eqx.Module):
 
         x = jnp.concatenate(parts)
 
-        for layer in self.layers:
-            x = jax.nn.silu(layer(x))
+        for i, layer in enumerate(self.layers):
+            h = layer(x)
+            h = jax.nn.gelu(h)
+            x = x + h if i > 0 else h
 
         return self.scale * jax.nn.sigmoid(self.output_layer(x))
 
