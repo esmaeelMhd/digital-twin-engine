@@ -46,7 +46,7 @@ class LatentDrift(eqx.Module):
             in_dim = input_dim if i == 0 else hidden_dim
             self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[i]))
 
-        self.output_layer = eqx.nn.Linear(hidden_dim, latent_dim, key=keys[-1])
+        self.output_layer = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys[-1])
 
         self.control_center = jnp.array(
             control_center if control_center is not None else [0.0] * control_dim
@@ -81,13 +81,14 @@ class LatentDrift(eqx.Module):
         parts.append(c_norm)
 
         x = jnp.concatenate(parts)
+        x_in = x
 
         for i, layer in enumerate(self.layers):
             h = layer(x)
             h = jax.nn.gelu(h)
             x = x + h if i > 0 else h
 
-        return self.output_layer(x)
+        return self.output_layer(jnp.concatenate([x, x_in]))
 
 
 class LatentDiffusion(eqx.Module):
@@ -129,7 +130,7 @@ class LatentDiffusion(eqx.Module):
             in_dim = input_dim if i == 0 else hidden_dim
             self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[i]))
 
-        self.output_layer = eqx.nn.Linear(hidden_dim, latent_dim, key=keys[-1])
+        self.output_layer = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys[-1])
         self.scale = jnp.array(initial_scale)
 
         self.control_center = jnp.array(
@@ -165,13 +166,14 @@ class LatentDiffusion(eqx.Module):
         parts.append(c_norm)
 
         x = jnp.concatenate(parts)
+        x_in = x
 
         for i, layer in enumerate(self.layers):
             h = layer(x)
             h = jax.nn.gelu(h)
             x = x + h if i > 0 else h
 
-        return self.scale * jax.nn.sigmoid(self.output_layer(x))
+        return self.scale * jax.nn.sigmoid(self.output_layer(jnp.concatenate([x, x_in])))
 
 
 class LatentSDE(eqx.Module):
