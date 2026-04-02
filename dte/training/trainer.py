@@ -227,7 +227,7 @@ class Trainer:
         true_states_norm = (states - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8)
         
         # Compute losses in normalized space
-        loss_recon = self.loss_computer.reconstruction_loss(pred_states_norm[:, 0], true_states_norm[:, 0])
+        loss_recon = self.loss_computer.reconstruction_loss(pred_states_norm, true_states_norm)
         loss_one_step = self.loss_computer.one_step_loss(
             (pred_next_states_batch - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
             (states[:, 1:] - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
