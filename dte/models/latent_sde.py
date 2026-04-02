@@ -173,7 +173,8 @@ class LatentDiffusion(eqx.Module):
             h = jax.nn.gelu(h)
             x = x + h if i > 0 else h
 
-        return self.scale * jax.nn.sigmoid(self.output_layer(jnp.concatenate([x, x_in])))
+        # Reparameterise diffusion with a floor to prevent uncertainty collapse
+        return self.scale * (0.01 + 0.99 * jax.nn.sigmoid(self.output_layer(jnp.concatenate([x, x_in]))))
 
 
 class LatentSDE(eqx.Module):
