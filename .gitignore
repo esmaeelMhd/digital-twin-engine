@@ -42,6 +42,7 @@ data/*.h5
 outputs/
 wandb/
 agent.log
+agent_state.json
 
 # Jupyter
 .ipynb_checkpoints/
