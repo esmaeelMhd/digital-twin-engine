@@ -16,9 +16,17 @@ train:
   seed: 42
 
 agent:
-  default_llm: gemini-3.1-pro-preview
+  default_llm: gemini-3.1-pro-preview-customtools
   adaptive_temperature: true
   max_fail_streak_temp: 0.5
+  temperature: 0.1
+  thinking_level: medium
+  apply_llm: gemini-3.1-flash-lite-preview
+  apply_temperature: 0.0
+  apply_thinking_level: low
+  gemini_context_cache: true
+  gemini_context_cache_ttl: 3600s
+  gemini_context_cache_min_tokens: 2048
   cooldown_between_experiments: 10
   context_file: auto_research.md
   modifiable_files:

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -43,7 +44,7 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -438,6 +439,148 @@ def _read_json_if_exists(path: Path) -> dict | None:
         return None
 
 
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=True)
+
+
+def _first_attr(obj, *names, default=None):
+    for name in names:
+        if hasattr(obj, name):
+            value = getattr(obj, name)
+            if value is not None:
+                return value
+    return default
+
+
+def _parse_datetime_value(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _safe_model_slug(model_name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9._-]+", "_", (model_name or "").strip()) or "gemini"
+
+
+def get_gemini_cache_metadata_path(model_name: str) -> Path:
+    return get_workspace_dir() / ".gemini_cache" / f"{_safe_model_slug(model_name)}.json"
+
+
+def ensure_gemini_context_cache(
+    static_context: str,
+    model: str,
+    ttl: str = "3600s",
+    min_tokens: int = 2048,
+) -> str | None:
+    """Create or reuse a Gemini explicit cache for repeated static prompt context."""
+
+    if not static_context.strip():
+        return None
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        log_to_file("WARNING Gemini cache disabled: google-genai not installed")
+        return None
+
+    client = genai.Client(api_key=api_key)
+    meta_path = get_gemini_cache_metadata_path(model)
+    content_hash = hashlib.sha256(static_context.encode("utf-8")).hexdigest()
+    cached_meta = _read_json_if_exists(meta_path) or {}
+    now = datetime.now(timezone.utc)
+
+    if (
+        cached_meta.get("model") == model
+        and cached_meta.get("content_hash") == content_hash
+        and cached_meta.get("cache_name")
+    ):
+        expire_time = _parse_datetime_value(cached_meta.get("expire_time"))
+        if expire_time is None or expire_time > now:
+            try:
+                cache = client.caches.get(name=str(cached_meta["cache_name"]))
+                cache_name = str(_first_attr(cache, "name", default="") or "")
+                cache_expire_time = _parse_datetime_value(
+                    _first_attr(cache, "expire_time", "expireTime")
+                )
+                if cache_name:
+                    _write_json(
+                        meta_path,
+                        {
+                            "cache_name": cache_name,
+                            "model": model,
+                            "content_hash": content_hash,
+                            "expire_time": cache_expire_time.isoformat() if cache_expire_time else None,
+                            "updated_at": now.isoformat(),
+                            "token_count": cached_meta.get("token_count"),
+                        },
+                    )
+                    log_to_file(f"Gemini cache: reusing {cache_name}")
+                    return cache_name
+            except Exception as exc:
+                log_to_file(f"WARNING Gemini cache reuse failed: {exc}")
+
+    token_count = None
+    try:
+        token_response = client.models.count_tokens(model=model, contents=static_context)
+        token_count = int(_first_attr(token_response, "total_tokens", "totalTokens", default=0) or 0)
+        if token_count and token_count < min_tokens:
+            log_to_file(
+                f"Gemini cache skipped: static context too small "
+                f"({token_count} tokens < {min_tokens})"
+            )
+            return None
+    except Exception as exc:
+        log_to_file(f"WARNING Gemini cache token count failed: {exc}")
+
+    try:
+        cache = client.caches.create(
+            model=model,
+            config=types.CreateCachedContentConfig(
+                display_name=f"dte-agent-{_safe_model_slug(model)}",
+                contents=static_context,
+                ttl=ttl,
+            ),
+        )
+    except Exception as exc:
+        log_to_file(f"WARNING Gemini cache create failed: {exc}")
+        return None
+
+    cache_name = str(_first_attr(cache, "name", default="") or "")
+    if not cache_name:
+        return None
+
+    cache_expire_time = _parse_datetime_value(_first_attr(cache, "expire_time", "expireTime"))
+    _write_json(
+        meta_path,
+        {
+            "cache_name": cache_name,
+            "model": model,
+            "content_hash": content_hash,
+            "expire_time": cache_expire_time.isoformat() if cache_expire_time else None,
+            "updated_at": now.isoformat(),
+            "token_count": token_count,
+        },
+    )
+    log_to_file(
+        f"Gemini cache: created {cache_name}"
+        + (f" ({token_count} tokens)" if token_count else "")
+    )
+    return cache_name
+
+
 def _tail_log_lines(path: Path, limit: int = 25) -> list[str]:
     if not path.exists():
         return []
@@ -684,16 +827,26 @@ def git_short_sha() -> str:
     return out.strip() or "unknown"
 
 
+def git_head_sha() -> str:
+    out, _ = git("rev-parse", "HEAD")
+    return out.strip()
+
+
 def git_commit(message: str, files: list[str]) -> str:
+    head_before = git_head_sha()
     for f in files:
         git("add", f)
-    subprocess.run(
-        ["git", "commit", "-m", message],
+    result = subprocess.run(
+        ["git", "commit", "-m", message, "--"] + list(files),
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
     )
-    return git_short_sha()
+    head_after = git_head_sha()
+    if result.returncode != 0 or head_after == head_before:
+        detail = (result.stderr or result.stdout or "unknown git commit failure").strip()
+        raise RuntimeError(detail)
+    return head_after[:7]
 
 
 def git_revert_file(filepath: str) -> None:
@@ -711,6 +864,32 @@ def git_discard_last_experiment(filepath: str) -> None:
 
     git_reset_last_commit()
     git_revert_file(filepath)
+
+
+def git_file_is_dirty(filepath: str) -> bool:
+    out, _ = git("status", "--porcelain", "--", filepath)
+    return bool(out.strip())
+
+
+def write_repo_file(filepath: str, source: str) -> None:
+    (PROJECT_ROOT / filepath).write_text(source, encoding="utf-8")
+
+
+def rollback_experiment_change(
+    filepath: str | None,
+    original_source: str | None,
+    *,
+    committed: bool,
+) -> None:
+    """Restore the touched file to its pre-experiment contents."""
+
+    if not filepath or original_source is None:
+        return
+
+    if committed:
+        git_reset_last_commit()
+    write_repo_file(filepath, original_source)
+    git("restore", "--staged", "--", filepath)
 
 
 def git_push() -> None:
@@ -751,6 +930,83 @@ DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-reasoner"
 DEFAULT_GROK_MODEL = "grok-3"
+DEFAULT_DEEPSEEK_MAX_TOKENS = 64000
+GEMINI_CACHE_MIN_TOKENS = 2048
+PATCH_RESPONSE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "file": {
+            "type": "string",
+            "description": "Repo-relative path to the single file to modify.",
+        },
+        "description": {
+            "type": "string",
+            "description": "Short one-line description of the proposed change.",
+        },
+        "changes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "old": {
+                        "type": "string",
+                        "description": (
+                            "Exact multi-line SEARCH block copied verbatim from the current file. "
+                            "Include enough unchanged surrounding context so it matches exactly once."
+                        ),
+                    },
+                    "new": {
+                        "type": "string",
+                        "description": (
+                            "REPLACE block for that exact SEARCH block. Keep indentation and "
+                            "unchanged code intact outside the edited region."
+                        ),
+                    },
+                },
+                "required": ["old", "new"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["file", "description", "changes"],
+    "additionalProperties": False,
+}
+
+
+def _normalize_gemini_thinking_level(model: str, thinking_level: str | None) -> str | None:
+    if thinking_level is None:
+        return None
+
+    normalized = str(thinking_level).strip().lower()
+    if not normalized:
+        return None
+
+    model_name = (model or "").lower()
+    if "pro" in model_name:
+        if normalized in {"low", "medium", "high"}:
+            return normalized
+        fallback = "low" if normalized == "minimal" else None
+        if fallback:
+            log_to_file(
+                f"WARNING Gemini: thinking_level={normalized} is not supported for {model}; "
+                f"using {fallback} instead"
+            )
+        else:
+            log_to_file(
+                f"WARNING Gemini: unsupported thinking_level={normalized} for {model}; omitting it"
+            )
+        return fallback
+
+    if "flash" in model_name:
+        if normalized in {"minimal", "low", "medium", "high"}:
+            return normalized
+        log_to_file(
+            f"WARNING Gemini: unsupported thinking_level={normalized} for {model}; omitting it"
+        )
+        return None
+
+    return normalized
 
 
 def call_gemini(
@@ -758,6 +1014,8 @@ def call_gemini(
     temperature: float | None = None,
     thinking_level: str | None = None,
     model: str = DEFAULT_GEMINI_MODEL,
+    response_schema: dict | None = None,
+    cached_content: str | None = None,
 ) -> str | None:
     """Call Google Gemini via the Google Gen AI SDK, with legacy fallback."""
     try:
@@ -776,16 +1034,21 @@ def call_gemini(
             }
             if temperature is not None:
                 config_kwargs["temperature"] = temperature
+            if response_schema:
+                config_kwargs["response_json_schema"] = response_schema
+            if cached_content:
+                config_kwargs["cached_content"] = cached_content
             if thinking_level:
                 try:
-                    config_kwargs["thinking_config"] = types.ThinkingConfig(
-                        thinking_level=str(thinking_level).lower()
-                    )
+                    normalized_level = _normalize_gemini_thinking_level(model, thinking_level)
+                    if normalized_level:
+                        config_kwargs["thinking_config"] = types.ThinkingConfig(
+                            thinking_level=normalized_level
+                        )
                 except Exception:
                     log_to_file(
                         f"WARNING Gemini: could not configure thinking_level={thinking_level}"
                     )
-
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
                 model=model,
@@ -803,6 +1066,21 @@ def call_gemini(
             }
             if temperature is not None:
                 generation_config["temperature"] = temperature
+            if response_schema:
+                generation_config["response_schema"] = response_schema
+            if cached_content:
+                log_to_file("WARNING Gemini: cached_content is not supported by legacy SDK fallback")
+            if thinking_level:
+                try:
+                    normalized_level = _normalize_gemini_thinking_level(model, thinking_level)
+                    if normalized_level:
+                        generation_config["thinking_config"] = {
+                            "thinking_level": normalized_level,
+                        }
+                except Exception:
+                    log_to_file(
+                        f"WARNING Gemini: could not configure thinking_level={thinking_level}"
+                    )
             model = legacy_genai.GenerativeModel(
                 model_name=model,
                 generation_config=generation_config,
@@ -916,6 +1194,7 @@ def call_deepseek(
     temperature: float | None = None,
     thinking_level: str | None = None,
     model: str = DEFAULT_DEEPSEEK_MODEL,
+    max_tokens: int | None = None,
 ) -> str | None:
     try:
         from openai import OpenAI
@@ -933,7 +1212,9 @@ def call_deepseek(
         kwargs: dict = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 8192,
+            # DeepSeek documents a 64K max_tokens ceiling for reasoning mode,
+            # and this budget includes the reasoning content.
+            "max_tokens": int(max_tokens or DEFAULT_DEEPSEEK_MAX_TOKENS),
         }
         # DeepSeek documents that sampling controls like temperature do not apply
         # to deepseek-reasoner, so we keep the config value but do not send it.
@@ -1006,6 +1287,73 @@ def call_local(
         return None
 
 
+def _build_llm_backend(provider_name: str, provider_model: str):
+    """Build a normalized invoker and display name for a provider/model pair."""
+
+    if provider_name == "local":
+        return call_local, "LM Studio (local)"
+    if provider_name == "opus":
+        return call_claude_opus, "Claude Opus 4.6"
+    if provider_name == "claude":
+        model_name = provider_model or DEFAULT_CLAUDE_MODEL
+        return (
+            lambda prompt, temperature=None, thinking_level=None: call_claude(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=model_name,
+            ),
+            f"Claude {model_name}",
+        )
+    if provider_name == "openai":
+        model_name = provider_model or "o3"
+        return (
+            lambda prompt, temperature=None, thinking_level=None: call_openai(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=model_name,
+            ),
+            f"OpenAI {model_name}",
+        )
+    if provider_name == "grok":
+        model_name = provider_model or DEFAULT_GROK_MODEL
+        return (
+            lambda prompt, temperature=None, thinking_level=None: call_grok(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=model_name,
+            ),
+            f"xAI {model_name}",
+        )
+    if provider_name == "deepseek":
+        model_name = provider_model or DEFAULT_DEEPSEEK_MODEL
+        return (
+            lambda prompt, temperature=None, thinking_level=None, max_tokens=None: call_deepseek(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=model_name,
+                max_tokens=max_tokens,
+            ),
+            f"DeepSeek {model_name}",
+        )
+
+    model_name = provider_model or DEFAULT_GEMINI_MODEL
+    return (
+        lambda prompt, temperature=None, thinking_level=None, response_schema=None, cached_content=None: call_gemini(
+            prompt,
+            temperature=temperature,
+            thinking_level=thinking_level,
+            model=model_name,
+            response_schema=response_schema,
+            cached_content=cached_content,
+        ),
+        f"Gemini {model_name}",
+    )
+
+
 def _infer_provider_from_model(model_name: str) -> str:
     """Infer the provider from a configured default model name."""
 
@@ -1027,6 +1375,24 @@ def _infer_provider_from_model(model_name: str) -> str:
     if name.startswith(("gpt-", "o")):
         return "openai"
     return "gemini"
+
+
+def _default_model_for_provider(provider_name: str, configured_model: str | None = None) -> str:
+    if configured_model:
+        return configured_model
+    if provider_name == "local":
+        return "local"
+    if provider_name == "deepseek":
+        return DEFAULT_DEEPSEEK_MODEL
+    if provider_name == "claude":
+        return DEFAULT_CLAUDE_MODEL
+    if provider_name == "opus":
+        return "claude-opus-4-6"
+    if provider_name == "grok":
+        return DEFAULT_GROK_MODEL
+    if provider_name == "openai":
+        return "o3"
+    return DEFAULT_GEMINI_MODEL
 
 
 def _provider_supports_temperature(provider: str, model_name: str) -> bool:
@@ -1223,13 +1589,41 @@ def _count_recent_failures(history: list[dict]) -> int:
     return min(count, 10)
 
 
-def build_prompt(
+def build_static_prompt_context(
+    modifiable_files: list[str],
+    agent_context: str = "",
+) -> str:
+    files_list = "\n".join(f"  - {f}" for f in modifiable_files)
+    context_section = ""
+    if agent_context:
+        context_section = f"\n## Repo context\n{agent_context}\n"
+
+    return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
+physics-informed latent Neural SDE (digital twin) trained on process system data (CSTR, heat exchanger, or other registered systems).
+
+## Constraints
+- You MUST only modify ONE of these files per experiment:
+{files_list}
+- Do NOT modify the experiment harness: scripts/autoresearch.py, dte/autoresearch/*, program.md
+- One idea per experiment. Keep changes minimal and surgical.
+- Preserve the generic architecture. In dte/models and dte/training, do not add system-specific branches or bake config-like numbers into code; generic numeric algorithmic tweaks are fine, but bounds/scales/defaults/dims should live in config/SystemSpec.
+- Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
+{JAX_PITFALLS}{ARCHITECTURE_GUARDRAILS}{KNOWN_GOOD}{context_section}
+## Output contract
+- Respond with ONLY one JSON object.
+- Treat each entry in `changes` as an exact SEARCH/REPLACE block:
+  - `old` is the SEARCH block copied verbatim from the current file.
+  - `new` is the REPLACE block.
+- Use multi-line `old` blocks with enough unchanged surrounding context to match exactly once.
+- Preserve indentation and unchanged code outside the edited region.
+"""
+
+
+def build_dynamic_prompt(
     file_path: str,
     file_source: str,
     history: list[dict],
     best_loss: float,
-    modifiable_files: list[str],
-    agent_context: str = "",
     recent_run_context: str = "",
 ) -> str:
     history_section = ""
@@ -1269,7 +1663,7 @@ def build_prompt(
 
         if near_misses:
             near_misses.sort(key=lambda x: x[0])
-            near_misses_str = "\n## Near misses (within 5% of best — consider combining or tweaking):\n"
+            near_misses_str = "\n## Near misses (within 5% of best - consider combining or tweaking):\n"
             for gap, fpath, desc in near_misses[:5]:
                 near_misses_str += f"  +{gap:.4f}  [{fpath}] {desc}\n"
 
@@ -1282,32 +1676,17 @@ def build_prompt(
     if fail_streak >= 5:
         streak_str = f"""
 ## WARNING: {fail_streak} consecutive failures. Change strategy completely.
-Look at category summary — avoid exhausted categories. Try a different file or approach.
+Look at category summary - avoid exhausted categories. Try a different file or approach.
 """
     elif fail_streak >= 3:
         streak_str = f"\n## CAUTION: {fail_streak} consecutive failures. Try simpler change.\n"
 
-    files_list = "\n".join(f"  - {f}" for f in modifiable_files)
-    context_section = ""
-    if agent_context:
-        context_section = f"\n## Repo context\n{agent_context}\n"
     recent_runs_section = ""
     if recent_run_context:
         recent_runs_section = f"\n{recent_run_context}\n"
 
-    return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
-physics-informed latent Neural SDE (digital twin) trained on process system data (CSTR, heat exchanger, or other registered systems).
-
-## Constraints
-- You MUST only modify ONE of these files per experiment:
-{files_list}
-- Do NOT modify the experiment harness: scripts/autoresearch.py, dte/autoresearch/*, program.md
-- One idea per experiment. Keep changes minimal and surgical.
-- Preserve the generic architecture. In dte/models and dte/training, do not add system-specific branches or bake config-like numbers into code; generic numeric algorithmic tweaks are fine, but bounds/scales/defaults/dims should live in config/SystemSpec.
-- Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
-{JAX_PITFALLS}{ARCHITECTURE_GUARDRAILS}
-## Current best_val_loss: {best_loss:.6f}
-{streak_str}{history_section}{KNOWN_GOOD}{context_section}{recent_runs_section}
+    return f"""## Current best_val_loss: {best_loss:.6f}
+{streak_str}{history_section}{recent_runs_section}
 ## Currently showing: {file_path}
 ```
 {file_source}
@@ -1323,14 +1702,35 @@ Respond with ONLY a JSON object (no markdown fences, no explanation):
   "description": "short description of the change (no tabs)",
   "changes": [
     {{
-      "old": "exact string to find in that file",
-      "new": "replacement string"
+      "old": "exact SEARCH block copied from the current file",
+      "new": "replacement REPLACE block"
     }}
   ]
 }}
 
 Each change is a find-and-replace. "old" MUST appear exactly once in the file.
 Keep changes minimal. One idea at a time."""
+
+
+def build_prompt(
+    file_path: str,
+    file_source: str,
+    history: list[dict],
+    best_loss: float,
+    modifiable_files: list[str],
+    agent_context: str = "",
+    recent_run_context: str = "",
+) -> str:
+    return build_static_prompt_context(
+        modifiable_files,
+        agent_context=agent_context,
+    ) + build_dynamic_prompt(
+        file_path,
+        file_source,
+        history,
+        best_loss,
+        recent_run_context=recent_run_context,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1420,13 +1820,14 @@ Return ONLY one valid JSON object with this schema:
   "description": "short description",
   "changes": [
     {{
-      "old": "exact string to find",
-      "new": "replacement string"
+      "old": "exact SEARCH block copied from the current file",
+      "new": "replacement REPLACE block"
     }}
   ]
 }}
 
 Do not add markdown fences or commentary.
+Use multi-line SEARCH blocks with enough unchanged surrounding context to match exactly once.
 
 Malformed response:
 {text}
@@ -1435,6 +1836,8 @@ Malformed response:
         call_llm,
         repair_prompt,
         fail_streak=max(fail_streak, 1),
+        phase="apply",
+        response_schema=PATCH_RESPONSE_JSON_SCHEMA,
     )
     return parse_response(repaired), repaired, timed_out
 
@@ -1461,8 +1864,8 @@ Return ONLY one valid JSON object with this schema:
   "description": "short description",
   "changes": [
     {{
-      "old": "exact string to find",
-      "new": "replacement string"
+      "old": "exact SEARCH block copied from the current file",
+      "new": "replacement REPLACE block"
     }}
   ]
 }}
@@ -1471,6 +1874,7 @@ Requirements:
 - Keep "file" exactly "{filepath}".
 - Preserve the same intent if possible, but prioritize a patch that applies cleanly.
 - Every "old" string MUST appear exactly once in the current file text below.
+- Use multi-line SEARCH blocks with enough unchanged surrounding context to match exactly once.
 - Keep the patch minimal.
 - Do not add markdown fences or commentary.
 
@@ -1484,6 +1888,8 @@ Previous failed proposal:
         call_llm,
         repair_prompt,
         fail_streak=max(fail_streak, 1),
+        phase="apply",
+        response_schema=PATCH_RESPONSE_JSON_SCHEMA,
     )
     return parse_response(repaired), repaired, timed_out
 
@@ -1494,6 +1900,9 @@ def invoke_llm_with_timeout(
     *,
     fail_streak: int = 0,
     timeout_seconds: int = LLM_REQUEST_TIMEOUT_SECONDS,
+    phase: str = "reason",
+    response_schema: dict | None = None,
+    cached_content: str | None = None,
 ) -> tuple[str | None, bool]:
     """Run an LLM call in a daemon thread and enforce a hard timeout."""
 
@@ -1502,7 +1911,13 @@ def invoke_llm_with_timeout(
 
     def _llm_thread() -> None:
         try:
-            llm_result[0] = call_llm(prompt, fail_streak=fail_streak)
+            llm_result[0] = call_llm(
+                prompt,
+                fail_streak=fail_streak,
+                phase=phase,
+                response_schema=response_schema,
+                cached_content=cached_content,
+            )
         except FatalAPIError as e:
             llm_fatal[0] = e
 
@@ -1904,20 +2319,20 @@ def build_dashboard(state: dict) -> Layout:
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=3),
-        Layout(name="body",   ratio=3),
-        Layout(name="footer", ratio=2),
+        Layout(name="body", ratio=1, minimum_size=16),
+        Layout(name="footer", size=5),
     )
     layout["body"].split_row(
-        Layout(name="left",  ratio=3),
-        Layout(name="right", ratio=2),
+        Layout(name="left", ratio=3, minimum_size=50),
+        Layout(name="right", ratio=2, minimum_size=36),
     )
     layout["left"].split_column(
-        Layout(name="training",    ratio=2),
-        Layout(name="experiments", ratio=3),
+        Layout(name="training", size=7, minimum_size=7),
+        Layout(name="experiments", ratio=1, minimum_size=9),
     )
     layout["right"].split_column(
-        Layout(name="gpu",      ratio=2),
-        Layout(name="activity", ratio=3),
+        Layout(name="gpu", size=8, minimum_size=8),
+        Layout(name="activity", ratio=1, minimum_size=8),
     )
 
     phase = state.get("phase", "STARTING")
@@ -1996,6 +2411,8 @@ def build_dashboard(state: dict) -> Layout:
         t.append(f" No improvement — reverted.\n", style="bold yellow")
     elif phase == "CRASH":
         t.append(f" Experiment crashed — reverted.\n", style="bold red")
+    if not t.plain.strip():
+        t.append(" Waiting for the next state update...\n", style="dim")
 
     training_title = "Training" if phase in ("TRAINING", "BASELINE") else phase.title()
     border_color = {
@@ -2061,6 +2478,8 @@ def build_dashboard(state: dict) -> Layout:
 
     g.append(f" Load  {util:3d}%  {bar(util, 15)}\n", style="bright_blue")
     g.append(f"\n Runs {len(history):3d}  Kept {len(kept):3d}  Fail {len([r for r in history if r['status']=='crash']):3d}\n")
+    if not g.plain.strip():
+        g.append(" Hardware stats unavailable\n", style="dim")
 
     layout["gpu"].update(Panel(g, title="[bold]Hardware[/]", border_style="bright_blue"))
 
@@ -2111,8 +2530,10 @@ def _choose_file(history: list[dict], modifiable_files: list[str], forced_file: 
     """Pick the file to show in the prompt. Rotates through modifiable files."""
     if forced_file:
         return forced_file
+    clean_files = [f for f in modifiable_files if not git_file_is_dirty(f)]
+    candidates = clean_files or modifiable_files
     # Prefer least-recently-tried files
-    file_counts: dict[str, int] = {f: 0 for f in modifiable_files}
+    file_counts: dict[str, int] = {f: 0 for f in candidates}
     for r in history:
         fpath = r.get("file", "")
         if fpath in file_counts:
@@ -2135,199 +2556,229 @@ def _run_text_mode(
     eval_settings: dict,
     agent_context: str,
     recent_run_context: str,
+    static_prompt: str,
+    reason_cached_content: str | None,
 ) -> None:
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
     consecutive_parse_failures = 0
 
     for i in range(max_runs - prior_count):
+        proposed_file = ""
+        original: str | None = None
+        experiment_committed = False
         exp_num = prior_count + i + 1
-        print(f"\n[Exp {exp_num}/{max_runs}] Asking {args.llm_name}...")
-        recent_run_context = build_recent_run_context()
-
-        target_file = _choose_file(history, modifiable_files, args.file)
-        try:
-            file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
-        except FileNotFoundError:
-            print(f"  File not found: {target_file}")
-            continue
-
-        fail_streak = _count_recent_failures(history)
-        prompt = build_prompt(
-            target_file,
-            file_source,
-            history,
-            best_loss,
-            modifiable_files,
-            agent_context=agent_context,
-            recent_run_context=recent_run_context,
-        )
 
         try:
-            response, timed_out = invoke_llm_with_timeout(
-                call_llm,
-                prompt,
-                fail_streak=fail_streak,
+            print(f"\n[Exp {exp_num}/{max_runs}] Asking {args.llm_name}...")
+            recent_run_context = build_recent_run_context()
+
+            target_file = _choose_file(history, modifiable_files, args.file)
+            try:
+                file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                print(f"  File not found: {target_file}")
+                continue
+
+            fail_streak = _count_recent_failures(history)
+            dynamic_prompt = build_dynamic_prompt(
+                target_file,
+                file_source,
+                history,
+                best_loss,
+                recent_run_context=recent_run_context,
             )
-        except FatalAPIError as e:
-            print(f"Fatal API error: {e}")
-            break
-        if timed_out:
-            print(f"  LLM request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
-            history = get_results_history()
-            continue
+            prompt = dynamic_prompt if reason_cached_content else static_prompt + dynamic_prompt
 
-        proposal = parse_response(response)
-        if not proposal:
             try:
-                proposal, repaired, repair_timed_out = repair_response(
-                    response,
+                response, timed_out = invoke_llm_with_timeout(
                     call_llm,
+                    prompt,
                     fail_streak=fail_streak,
+                    phase="reason",
+                    response_schema=PATCH_RESPONSE_JSON_SCHEMA,
+                    cached_content=reason_cached_content,
                 )
             except FatalAPIError as e:
                 print(f"Fatal API error: {e}")
                 break
-            if repair_timed_out:
-                print(f"  JSON repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
-                history = get_results_history()
-                continue
-            if proposal:
-                print("  Repaired malformed LLM response.")
-
-        if not proposal or "changes" not in proposal:
-            print("  LLM gave unparseable response. Skipping.")
-            consecutive_parse_failures += 1
-            if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
-                print("  Too many consecutive malformed LLM responses. Stopping cleanly.")
-                break
-            continue
-        consecutive_parse_failures = 0
-
-        proposed_file = proposal.get("file", target_file)
-        if proposed_file not in modifiable_files:
-            print(f"  LLM chose disallowed file {proposed_file}. Skipping.")
-            continue
-
-        description = proposal.get("description", "unknown")
-        print(f"  Idea: {description}")
-        print(f"  File: {proposed_file}")
-
-        try:
-            original = (PROJECT_ROOT / proposed_file).read_text(encoding="utf-8")
-        except FileNotFoundError:
-            print(f"  File not found: {proposed_file}")
-            continue
-
-        modified, apply_error = apply_changes(original, proposal["changes"])
-        if modified is None:
-            print("  Could not apply patch. Trying one repair...")
-            try:
-                repaired_proposal, repaired_text, repair_timed_out = repair_apply_failure(
-                    proposal,
-                    proposed_file,
-                    original,
-                    apply_error or "unknown apply failure",
-                    call_llm,
-                    fail_streak=fail_streak,
-                )
-            except FatalAPIError as e:
-                print(f"Fatal API error: {e}")
-                break
-
-            if repair_timed_out:
-                print(f"  Patch repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
-                log_result(
-                    "-------",
-                    0.0,
-                    "crash",
-                    proposed_file,
-                    f"APPLY FAIL: {description} [repair timeout]",
-                )
+            if timed_out:
+                print(f"  LLM request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
                 history = get_results_history()
                 continue
 
-            if repaired_proposal and "changes" in repaired_proposal:
-                repaired_file = repaired_proposal.get("file", proposed_file)
-                if repaired_file == proposed_file:
-                    repaired_modified, repaired_error = apply_changes(
-                        original,
-                        repaired_proposal["changes"],
+            proposal = parse_response(response)
+            if not proposal:
+                try:
+                    proposal, repaired, repair_timed_out = repair_response(
+                        response,
+                        call_llm,
+                        fail_streak=fail_streak,
                     )
-                    if repaired_modified is not None:
-                        proposal = repaired_proposal
-                        description = proposal.get("description", description)
-                        modified = repaired_modified
-                        print("  Recovered apply-fail with repair prompt.")
-                    else:
-                        apply_error = repaired_error or apply_error
-                else:
-                    apply_error = f"repair changed target file to {repaired_file}"
+                except FatalAPIError as e:
+                    print(f"Fatal API error: {e}")
+                    break
+                if repair_timed_out:
+                    print(f"  JSON repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                    history = get_results_history()
+                    continue
+                if proposal:
+                    print("  Repaired malformed LLM response.")
 
+            if not proposal or "changes" not in proposal:
+                print("  LLM gave unparseable response. Skipping.")
+                consecutive_parse_failures += 1
+                if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                    print("  Too many consecutive malformed LLM responses. Stopping cleanly.")
+                    break
+                continue
+            consecutive_parse_failures = 0
+
+            proposed_file = proposal.get("file", target_file)
+            if proposed_file not in modifiable_files:
+                print(f"  LLM chose disallowed file {proposed_file}. Skipping.")
+                continue
+            if git_file_is_dirty(proposed_file):
+                print(f"  Skipping dirty file {proposed_file} to avoid clobbering existing changes.")
+                continue
+
+            description = proposal.get("description", "unknown")
+            print(f"  Idea: {description}")
+            print(f"  File: {proposed_file}")
+
+            try:
+                original = (PROJECT_ROOT / proposed_file).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                print(f"  File not found: {proposed_file}")
+                continue
+
+            modified, apply_error = apply_changes(original, proposal["changes"])
             if modified is None:
-                print("  Could not apply patch after repair. Skipping.")
-                failure_detail = apply_error or "repair failed"
-                log_result(
-                    "-------",
-                    0.0,
-                    "crash",
-                    proposed_file,
-                    f"APPLY FAIL: {description} [{failure_detail}]",
-                )
+                print("  Could not apply patch. Trying one repair...")
+                try:
+                    repaired_proposal, repaired_text, repair_timed_out = repair_apply_failure(
+                        proposal,
+                        proposed_file,
+                        original,
+                        apply_error or "unknown apply failure",
+                        call_llm,
+                        fail_streak=fail_streak,
+                    )
+                except FatalAPIError as e:
+                    print(f"Fatal API error: {e}")
+                    break
+
+                if repair_timed_out:
+                    print(f"  Patch repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                    log_result(
+                        "-------",
+                        0.0,
+                        "crash",
+                        proposed_file,
+                        f"APPLY FAIL: {description} [repair timeout]",
+                    )
+                    history = get_results_history()
+                    continue
+
+                if repaired_proposal and "changes" in repaired_proposal:
+                    repaired_file = repaired_proposal.get("file", proposed_file)
+                    if repaired_file == proposed_file:
+                        repaired_modified, repaired_error = apply_changes(
+                            original,
+                            repaired_proposal["changes"],
+                        )
+                        if repaired_modified is not None:
+                            proposal = repaired_proposal
+                            description = proposal.get("description", description)
+                            modified = repaired_modified
+                            print("  Recovered apply-fail with repair prompt.")
+                        else:
+                            apply_error = repaired_error or apply_error
+                    else:
+                        apply_error = f"repair changed target file to {repaired_file}"
+
+                if modified is None:
+                    print("  Could not apply patch after repair. Skipping.")
+                    failure_detail = apply_error or "repair failed"
+                    log_result(
+                        "-------",
+                        0.0,
+                        "crash",
+                        proposed_file,
+                        f"APPLY FAIL: {description} [{failure_detail}]",
+                    )
+                    history = get_results_history()
+                    continue
+
+            err = validate_file(proposed_file, modified, original_source=original)
+            if err:
+                print(f"  Validation failed: {err}. Skipping.")
+                log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{err}]")
                 history = get_results_history()
                 continue
 
-        err = validate_file(proposed_file, modified, original_source=original)
-        if err:
-            print(f"  Validation failed: {err}. Skipping.")
-            git_revert_file(proposed_file)
-            log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{err}]")
-            history = get_results_history()
-            continue
+            write_repo_file(proposed_file, modified)
+            try:
+                sha = git_commit(description, [proposed_file])
+                experiment_committed = True
+            except RuntimeError as commit_err:
+                rollback_experiment_change(proposed_file, original, committed=False)
+                err_msg = str(commit_err)[:120]
+                print(f"  COMMIT FAIL: {err_msg}")
+                log_result("-------", 0.0, "crash", proposed_file, f"COMMIT FAIL: {description} [{err_msg}]")
+                history = get_results_history()
+                continue
 
-        (PROJECT_ROOT / proposed_file).write_text(modified, encoding="utf-8")
-        sha = git_commit(description, [proposed_file])
-        print(f"  Committed: {sha}")
+            print(f"  Committed: {sha}")
 
-        print(f"  Running experiment...")
-        result = run_experiment(f"[{proposed_file}] {description}")
+            print(f"  Running experiment...")
+            result = run_experiment(f"[{proposed_file}] {description}")
 
-        if result and result.get("status") in ("keep", "discard"):
-            val_loss = float(result.get("metric_value", 999.0) or 999.0)
-            if should_run_lightweight_eval(result, exp_num, eval_settings):
-                print("  Running lightweight eval...")
-                maybe_run_lightweight_eval(
-                    result,
-                    exp_num,
-                    train_cfg,
-                    eval_settings,
-                    on_line=lambda line: print(f"  {line}"),
-                )
-            if result.get("status") == "keep":
-                best_loss = val_loss
-                print(f"  KEEP: val_loss={val_loss:.6f} (NEW BEST)")
-                git_push()
+            if result and result.get("status") in ("keep", "discard"):
+                val_loss = float(result.get("metric_value", 999.0) or 999.0)
+                if should_run_lightweight_eval(result, exp_num, eval_settings):
+                    print("  Running lightweight eval...")
+                    maybe_run_lightweight_eval(
+                        result,
+                        exp_num,
+                        train_cfg,
+                        eval_settings,
+                        on_line=lambda line: print(f"  {line}"),
+                    )
+                if result.get("status") == "keep":
+                    best_loss = val_loss
+                    print(f"  KEEP: val_loss={val_loss:.6f} (NEW BEST)")
+                    git_push()
+                else:
+                    print(f"  DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
+                    rollback_experiment_change(proposed_file, original, committed=experiment_committed)
+            elif result and result.get("status") == "crash":
+                print("  CRASH: experiment failed")
+                rollback_experiment_change(proposed_file, original, committed=experiment_committed)
+            elif result and "error" in result:
+                err_msg = str(result["error"])[:80]
+                print(f"  CRASH: {err_msg}")
+                log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
+                rollback_experiment_change(proposed_file, original, committed=experiment_committed)
             else:
-                print(f"  DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
-                git_discard_last_experiment(proposed_file)
-        elif result and result.get("status") == "crash":
-            print("  CRASH: experiment failed")
-            git_discard_last_experiment(proposed_file)
-        elif result and "error" in result:
-            err_msg = str(result["error"])[:80]
-            print(f"  CRASH: {err_msg}")
-            log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
-            git_discard_last_experiment(proposed_file)
-        else:
-            print("  CRASH: no result")
-            log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
-            git_discard_last_experiment(proposed_file)
+                print("  CRASH: no result")
+                log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
+                rollback_experiment_change(proposed_file, original, committed=experiment_committed)
 
-        history = get_results_history()
-        valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
-        if valid:
-            best_loss = min(valid)
-        recent_run_context = build_recent_run_context()
+            history = get_results_history()
+            valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
+            if valid:
+                best_loss = min(valid)
+            recent_run_context = build_recent_run_context()
+
+        except Exception as loop_err:
+            print(f"  Exception: {str(loop_err)[:120]}")
+            log_to_file(f"TEXT LOOP EXCEPTION: {loop_err}")
+            try:
+                rollback_experiment_change(proposed_file, original, committed=experiment_committed)
+            except Exception:
+                pass
+            history = get_results_history()
 
 
 # ---------------------------------------------------------------------------
@@ -2365,6 +2816,18 @@ def main() -> None:
                         help="Override sampling temperature when the selected model supports it")
     parser.add_argument("--thinking-level", type=str, default=None,
                         help="Provider-specific thinking level (currently used for Gemini when set)")
+    parser.add_argument("--apply-llm", type=str, default=None,
+                        help="Separate model for JSON repair / patch repair calls (defaults to primary model)")
+    parser.add_argument("--apply-temperature", type=float, default=None,
+                        help="Override sampling temperature for repair/apply LLM calls")
+    parser.add_argument("--apply-thinking-level", type=str, default=None,
+                        help="Provider-specific thinking level for repair/apply calls")
+    parser.add_argument(
+        "--deepseek-max-tokens",
+        type=int,
+        default=None,
+        help=f"Override DeepSeek max_tokens (default config: {DEFAULT_DEEPSEEK_MAX_TOKENS})",
+    )
     args = parser.parse_args()
     active_config_path = set_autoresearch_config(args.config)
 
@@ -2378,132 +2841,50 @@ def main() -> None:
     recent_run_context = build_recent_run_context()
 
     default_model = str(agent_cfg.get("default_llm", DEFAULT_DEEPSEEK_MODEL))
-    provider_name = ""
-    provider_model = ""
-
     if args.local:
         provider_name = "local"
         provider_model = "local"
-        _call_llm_fn = call_local
-        llm_name = "LM Studio (local)"
     elif args.opus:
         provider_name = "opus"
         provider_model = "claude-opus-4-6"
-        _call_llm_fn = call_claude_opus
-        llm_name = "Claude Opus 4.6"
     elif args.sonnet4:
         provider_name = "claude"
         provider_model = "claude-sonnet-4-20250514"
-        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_claude(
-            prompt,
-            temperature=temperature,
-            thinking_level=thinking_level,
-            model=provider_model,
-        )
-        llm_name = "Claude Sonnet 4"
     elif args.claude:
         provider_name = "claude"
         provider_model = DEFAULT_CLAUDE_MODEL
-        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_claude(
-            prompt,
-            temperature=temperature,
-            thinking_level=thinking_level,
-            model=provider_model,
-        )
-        llm_name = "Claude Sonnet 4.6"
     elif args.openai:
         provider_name = "openai"
         provider_model = args.openai
-        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_openai(
-            prompt,
-            temperature=temperature,
-            thinking_level=thinking_level,
-            model=provider_model,
-        )
-        llm_name = f"OpenAI {provider_model}"
     elif args.grok:
         provider_name = "grok"
         provider_model = DEFAULT_GROK_MODEL
-        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_grok(
-            prompt,
-            temperature=temperature,
-            thinking_level=thinking_level,
-            model=provider_model,
-        )
-        llm_name = "xAI Grok 3"
     elif args.gemini:
         provider_name = "gemini"
         provider_model = args.gemini
-        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_gemini(
-            prompt,
-            temperature=temperature,
-            thinking_level=thinking_level,
-            model=provider_model,
-        )
-        llm_name = f"Gemini {provider_model}"
     elif args.deepseek:
         provider_name = "deepseek"
         provider_model = args.deepseek
-        _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_deepseek(
-            prompt,
-            temperature=temperature,
-            thinking_level=thinking_level,
-            model=provider_model,
-        )
-        llm_name = f"DeepSeek {provider_model}"
     else:
         provider_name = _infer_provider_from_model(default_model)
         provider_model = default_model
-        if provider_name == "local":
-            _call_llm_fn = call_local
-            llm_name = "LM Studio (local)"
-        elif provider_name == "deepseek":
-            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_deepseek(
-                prompt,
-                temperature=temperature,
-                thinking_level=thinking_level,
-                model=provider_model,
-            )
-            llm_name = f"DeepSeek {provider_model}"
-        elif provider_name == "claude":
-            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_claude(
-                prompt,
-                temperature=temperature,
-                thinking_level=thinking_level,
-                model=provider_model or DEFAULT_CLAUDE_MODEL,
-            )
-            llm_name = f"Claude {provider_model}"
-        elif provider_name == "opus":
-            _call_llm_fn = call_claude_opus
-            llm_name = "Claude Opus 4.6"
-        elif provider_name == "openai":
-            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_openai(
-                prompt,
-                temperature=temperature,
-                thinking_level=thinking_level,
-                model=provider_model,
-            )
-            llm_name = f"OpenAI {provider_model}"
-        elif provider_name == "grok":
-            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_grok(
-                prompt,
-                temperature=temperature,
-                thinking_level=thinking_level,
-                model=provider_model or DEFAULT_GROK_MODEL,
-            )
-            llm_name = f"xAI {provider_model}"
-        else:
-            provider_name = "gemini"
-            provider_model = provider_model or DEFAULT_GEMINI_MODEL
-            _call_llm_fn = lambda prompt, temperature=None, thinking_level=None: call_gemini(
-                prompt,
-                temperature=temperature,
-                thinking_level=thinking_level,
-                model=provider_model,
-            )
-            llm_name = f"Gemini {provider_model}"
 
-    args.llm_name = llm_name
+    provider_model = _default_model_for_provider(provider_name, provider_model)
+    _call_llm_fn, llm_name = _build_llm_backend(provider_name, provider_model)
+
+    apply_model_raw = args.apply_llm or agent_cfg.get("apply_llm") or provider_model
+    apply_provider_name = _infer_provider_from_model(str(apply_model_raw))
+    apply_provider_model = _default_model_for_provider(apply_provider_name, str(apply_model_raw))
+    if apply_provider_name == provider_name and apply_provider_model == provider_model:
+        _apply_llm_fn = _call_llm_fn
+        apply_llm_name = llm_name
+    else:
+        _apply_llm_fn, apply_llm_name = _build_llm_backend(
+            apply_provider_name,
+            apply_provider_model,
+        )
+
+    args.llm_name = llm_name if apply_llm_name == llm_name else f"{llm_name} | repair {apply_llm_name}"
 
     adaptive_temperature_enabled = bool(agent_cfg.get("adaptive_temperature", True))
     adaptive_temperature_cap = float(agent_cfg.get("max_fail_streak_temp", 0.5))
@@ -2513,35 +2894,112 @@ def main() -> None:
     if configured_temperature is not None:
         configured_temperature = float(configured_temperature)
 
+    configured_apply_temperature = args.apply_temperature
+    if configured_apply_temperature is None and "apply_temperature" in agent_cfg:
+        configured_apply_temperature = agent_cfg.get("apply_temperature")
+    if configured_apply_temperature is not None:
+        configured_apply_temperature = float(configured_apply_temperature)
+
     deepseek_temperature = args.temperature
     if deepseek_temperature is None:
         deepseek_temperature = agent_cfg.get("deepseek_temperature", 0.0)
     if deepseek_temperature is not None:
         deepseek_temperature = float(deepseek_temperature)
 
+    deepseek_max_tokens = args.deepseek_max_tokens
+    if deepseek_max_tokens is None:
+        deepseek_max_tokens = agent_cfg.get("deepseek_max_tokens", DEFAULT_DEEPSEEK_MAX_TOKENS)
+    deepseek_max_tokens = max(1, min(int(deepseek_max_tokens), DEFAULT_DEEPSEEK_MAX_TOKENS))
+
     configured_thinking_level = args.thinking_level or agent_cfg.get("thinking_level")
     if configured_thinking_level is not None:
         configured_thinking_level = str(configured_thinking_level)
 
+    configured_apply_thinking_level = args.apply_thinking_level or agent_cfg.get("apply_thinking_level")
+    if configured_apply_thinking_level is None and apply_provider_name == "gemini":
+        configured_apply_thinking_level = "low"
+    if configured_apply_thinking_level is not None:
+        configured_apply_thinking_level = str(configured_apply_thinking_level)
+
     supports_temperature = _provider_supports_temperature(provider_name, provider_model)
     supports_thinking_level = _provider_supports_thinking_level(provider_name)
+    apply_supports_temperature = _provider_supports_temperature(
+        apply_provider_name,
+        apply_provider_model,
+    )
+    apply_supports_thinking_level = _provider_supports_thinking_level(apply_provider_name)
 
-    def call_llm(prompt: str, fail_streak: int = 0) -> str | None:
-        """Invoke the selected model with config-aware temperature/thinking settings."""
+    def call_llm(
+        prompt: str,
+        fail_streak: int = 0,
+        phase: str = "reason",
+        response_schema: dict | None = None,
+        cached_content: str | None = None,
+    ) -> str | None:
+        """Invoke the selected model with phase-aware routing and sampling controls."""
 
-        temperature = configured_temperature
-        if temperature is None and provider_name == "deepseek" and provider_model == DEFAULT_DEEPSEEK_MODEL:
-            temperature = deepseek_temperature
-        if temperature is None and adaptive_temperature_enabled and supports_temperature:
-            if fail_streak >= 10:
-                temperature = adaptive_temperature_cap
-            elif fail_streak >= 5:
-                temperature = min(0.3, adaptive_temperature_cap)
+        is_apply_phase = phase == "apply"
+        active_provider_name = apply_provider_name if is_apply_phase else provider_name
+        active_provider_model = apply_provider_model if is_apply_phase else provider_model
+        active_call_fn = _apply_llm_fn if is_apply_phase else _call_llm_fn
+        active_supports_temperature = (
+            apply_supports_temperature if is_apply_phase else supports_temperature
+        )
+        active_supports_thinking_level = (
+            apply_supports_thinking_level if is_apply_phase else supports_thinking_level
+        )
 
-        thinking_level = configured_thinking_level if supports_thinking_level else None
-        if supports_temperature:
-            return _call_llm_fn(prompt, temperature=temperature, thinking_level=thinking_level)
-        return _call_llm_fn(prompt, thinking_level=thinking_level)
+        if is_apply_phase:
+            temperature = configured_apply_temperature
+            if temperature is None and active_supports_temperature:
+                temperature = 0.0
+            thinking_level = (
+                configured_apply_thinking_level if active_supports_thinking_level else None
+            )
+        else:
+            temperature = configured_temperature
+            if (
+                temperature is None
+                and active_provider_name == "deepseek"
+                and active_provider_model == DEFAULT_DEEPSEEK_MODEL
+            ):
+                temperature = deepseek_temperature
+            if temperature is None and adaptive_temperature_enabled and active_supports_temperature:
+                if fail_streak >= 10:
+                    temperature = adaptive_temperature_cap
+                elif fail_streak >= 5:
+                    temperature = min(0.3, adaptive_temperature_cap)
+            thinking_level = configured_thinking_level if active_supports_thinking_level else None
+
+        if active_provider_name == "deepseek":
+            if active_supports_temperature:
+                return active_call_fn(
+                    prompt,
+                    temperature=temperature,
+                    thinking_level=thinking_level,
+                    max_tokens=deepseek_max_tokens,
+                )
+            return active_call_fn(
+                prompt,
+                thinking_level=thinking_level,
+                max_tokens=deepseek_max_tokens,
+            )
+
+        if active_provider_name == "gemini":
+            kwargs: dict = {}
+            if active_supports_temperature and temperature is not None:
+                kwargs["temperature"] = temperature
+            if thinking_level is not None:
+                kwargs["thinking_level"] = thinking_level
+            if response_schema is not None:
+                kwargs["response_schema"] = response_schema
+            if cached_content:
+                kwargs["cached_content"] = cached_content
+            return active_call_fn(prompt, **kwargs)
+
+        if active_supports_temperature:
+            return active_call_fn(prompt, temperature=temperature, thinking_level=thinking_level)
+        return active_call_fn(prompt, thinking_level=thinking_level)
 
     if args.file:
         if args.file not in modifiable_files:
@@ -2549,6 +3007,25 @@ def main() -> None:
         modifiable_files_active = [args.file]
     else:
         modifiable_files_active = modifiable_files
+
+    static_prompt = build_static_prompt_context(
+        modifiable_files_active,
+        agent_context=agent_context,
+    )
+    gemini_context_cache_enabled = bool(agent_cfg.get("gemini_context_cache", False))
+    gemini_context_cache_ttl = str(agent_cfg.get("gemini_context_cache_ttl", "3600s"))
+    gemini_context_cache_min_tokens = max(
+        0,
+        int(agent_cfg.get("gemini_context_cache_min_tokens", GEMINI_CACHE_MIN_TOKENS) or 0),
+    )
+    reason_cached_content = None
+    if gemini_context_cache_enabled and provider_name == "gemini":
+        reason_cached_content = ensure_gemini_context_cache(
+            static_prompt,
+            provider_model,
+            ttl=gemini_context_cache_ttl,
+            min_tokens=gemini_context_cache_min_tokens,
+        )
 
     # Git branch
     tag = args.tag or datetime.now().strftime("%b%d").lower()
@@ -2573,7 +3050,8 @@ def main() -> None:
     best_loss = min(valid_losses) if valid_losses else 999.0
 
     log_to_file(
-        f"Agent started: llm={llm_name} max_runs={args.max_runs} "
+        f"Agent started: llm={llm_name} apply_llm={apply_llm_name} "
+        f"cache={'on' if reason_cached_content else 'off'} max_runs={args.max_runs} "
         f"branch={branch} prior={prior_count} config={active_config_path}"
     )
 
@@ -2611,6 +3089,8 @@ def main() -> None:
             eval_settings,
             agent_context,
             recent_run_context,
+            static_prompt,
+            reason_cached_content,
         )
         return
 
@@ -2623,7 +3103,7 @@ def main() -> None:
         "experiment_num": prior_count,
         "max_runs": args.max_runs,
         "best_loss": best_loss,
-        "llm_name": llm_name,
+        "llm_name": args.llm_name,
         "branch": branch,
         "current_idea": "",
         "history": history,
@@ -2765,6 +3245,9 @@ def main() -> None:
         consecutive_parse_failures = 0
 
         for i in range(remaining):
+            proposed_file = ""
+            original: str | None = None
+            experiment_committed = False
             try:
                 exp_num = len(history) + 1
                 state["experiment_num"] = exp_num
@@ -2791,15 +3274,14 @@ def main() -> None:
                 elif fail_streak >= 3:
                     add_log(f"Streak {fail_streak} failures — trying simpler approach")
 
-                prompt = build_prompt(
+                dynamic_prompt = build_dynamic_prompt(
                     target_file,
                     file_source,
                     history,
                     best_loss,
-                    modifiable_files_active,
-                    agent_context=agent_context,
                     recent_run_context=recent_run_context,
                 )
+                prompt = dynamic_prompt if reason_cached_content else static_prompt + dynamic_prompt
 
                 # Cool GPU while LLM thinks
                 if not wait_for_cool_gpu():
@@ -2811,6 +3293,9 @@ def main() -> None:
                         call_llm,
                         prompt,
                         fail_streak=fail_streak,
+                        phase="reason",
+                        response_schema=PATCH_RESPONSE_JSON_SCHEMA,
+                        cached_content=reason_cached_content,
                     )
                 except FatalAPIError as e:
                     add_log(f"Fatal API error: {e}")
@@ -2870,6 +3355,12 @@ def main() -> None:
                     add_log(f"Disallowed file: {proposed_file}. Skipping.")
                     history = get_results_history()
                     state["history"] = history
+                    continue
+                if git_file_is_dirty(proposed_file):
+                    add_log(f"Skipping dirty file {proposed_file} to avoid clobbering existing changes.")
+                    history = get_results_history()
+                    state["history"] = history
+                    refresh()
                     continue
 
                 # ---- APPLY ----
@@ -2954,8 +3445,27 @@ def main() -> None:
                     refresh()
                     continue
 
-                (PROJECT_ROOT / proposed_file).write_text(modified, encoding="utf-8")
-                sha = git_commit(description, [proposed_file])
+                write_repo_file(proposed_file, modified)
+                try:
+                    sha = git_commit(description, [proposed_file])
+                    experiment_committed = True
+                except RuntimeError as commit_err:
+                    rollback_experiment_change(proposed_file, original, committed=False)
+                    err_msg = str(commit_err)[:120]
+                    log_result(
+                        "-------",
+                        0.0,
+                        "crash",
+                        proposed_file,
+                        f"COMMIT FAIL: {description} [{err_msg}]",
+                    )
+                    set_phase("CRASH")
+                    add_log(f"COMMIT FAIL: {err_msg}")
+                    history = get_results_history()
+                    state["history"] = history
+                    clear_state()
+                    refresh()
+                    continue
                 add_log(f"Committed: {sha}")
 
                 # ---- TRAIN ----
@@ -3008,23 +3518,39 @@ def main() -> None:
                     else:
                         set_phase("DISCARD")
                         add_log(f"DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
-                        git_discard_last_experiment(proposed_file)
+                        rollback_experiment_change(
+                            proposed_file,
+                            original,
+                            committed=experiment_committed,
+                        )
 
                 elif result and result.get("status") == "crash":
                     set_phase("CRASH")
                     add_log("CRASH: experiment failed inside autoresearch harness")
-                    git_discard_last_experiment(proposed_file)
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=experiment_committed,
+                    )
                 elif result and "error" in result:
                     err_msg = str(result["error"])[:80]
                     log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
                     set_phase("CRASH")
                     add_log(f"CRASH: {err_msg}")
-                    git_discard_last_experiment(proposed_file)
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=experiment_committed,
+                    )
                 else:
                     log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
                     set_phase("CRASH")
                     add_log("CRASH: no output from experiment")
-                    git_discard_last_experiment(proposed_file)
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=experiment_committed,
+                    )
 
                 history = get_results_history()
                 state["history"] = history
@@ -3043,7 +3569,11 @@ def main() -> None:
                 log_to_file(f"LOOP EXCEPTION: {loop_err}")
                 add_log(f"Exception: {str(loop_err)[:80]}")
                 try:
-                    git_discard_last_experiment(proposed_file)
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=experiment_committed,
+                    )
                 except Exception:
                     pass
                 try:
