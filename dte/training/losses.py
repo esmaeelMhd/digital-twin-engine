@@ -42,6 +42,9 @@ class LossComputer:
         self.w_kl = lw.get("kl", 0.0001)
         self.w_traj = lw["trajectory"]
         self.w_one_step = lw.get("one_step", 0.0)
+        
+        # Trajectory weighting configuration
+        self.trajectory_weighting = config.get("trajectory_weighting", "linear_decrease")
 
         # Physics weights are keyed by the residual names returned by the
         # physics loss object.  Fall back to zero for unknown residuals.
@@ -143,7 +146,22 @@ class LossComputer:
     ) -> Float[Array, ""]:
         """Weighted trajectory MSE -- earlier steps weighted higher."""
         seq_len = predicted_trajectory.shape[1]
-        weights = jnp.linspace(1.0, 0.1, seq_len)
+        
+        if self.trajectory_weighting == "linear_decrease":
+            # Linearly decreasing from 1.0 to 0.1
+            weights = jnp.linspace(1.0, 0.1, seq_len)
+        elif self.trajectory_weighting == "linear_increase":
+            # Linearly increasing from 0.1 to 1.0
+            weights = jnp.linspace(0.1, 1.0, seq_len)
+        elif self.trajectory_weighting == "exponential_increase":
+            # Exponentially increasing weights with base 1.1
+            base = 1.1
+            t_range = jnp.arange(seq_len)
+            weights = jnp.power(base, t_range)
+        else:
+            # Uniform weighting
+            weights = jnp.ones(seq_len)
+        
         weights = weights / jnp.mean(weights)
 
         diff = predicted_trajectory - true_trajectory
