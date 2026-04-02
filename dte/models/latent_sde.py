@@ -44,7 +44,7 @@ class LatentDrift(eqx.Module):
         self.layers = []
         for i in range(n_layers):
             in_dim = input_dim if i == 0 else hidden_dim
-            self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[i]))
+            self.layers.append(eqx.nn.Linear(in_dim, hidden_dim * 2, key=keys[i]))
 
         self.output_layer = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys[-1])
 
@@ -85,7 +85,8 @@ class LatentDrift(eqx.Module):
 
         for i, layer in enumerate(self.layers):
             h = layer(x)
-            h = jax.nn.gelu(h)
+            gate, feat = jnp.split(h, 2, axis=-1)
+            h = jax.nn.sigmoid(gate) * jax.nn.gelu(feat)
             x = x + h if i > 0 else h
 
         return self.output_layer(jnp.concatenate([x, x_in]))
@@ -128,7 +129,7 @@ class LatentDiffusion(eqx.Module):
         self.layers = []
         for i in range(n_layers):
             in_dim = input_dim if i == 0 else hidden_dim
-            self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[i]))
+            self.layers.append(eqx.nn.Linear(in_dim, hidden_dim * 2, key=keys[i]))
 
         self.output_layer = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys[-1])
         self.scale = jnp.array(initial_scale)
@@ -170,7 +171,8 @@ class LatentDiffusion(eqx.Module):
 
         for i, layer in enumerate(self.layers):
             h = layer(x)
-            h = jax.nn.gelu(h)
+            gate, feat = jnp.split(h, 2, axis=-1)
+            h = jax.nn.sigmoid(gate) * jax.nn.gelu(feat)
             x = x + h if i > 0 else h
 
         return self.scale * jax.nn.sigmoid(self.output_layer(jnp.concatenate([x, x_in])))
