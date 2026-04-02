@@ -114,7 +114,7 @@ class Decoder(eqx.Module):
         x = jnp.concatenate([z, log_params, scaled_control])
 
         for layer in self.layers:
-            x_out = jax.nn.silu(layer(x))
+            x_out = jax.nn.leaky_relu(layer(x), negative_slope=0.01)
             x = x + x_out if x.shape == x_out.shape else x_out
 
         state_raw = 10.0 * jax.nn.tanh(self.output_layer(x) / 10.0)

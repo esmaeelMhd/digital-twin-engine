@@ -21,6 +21,7 @@ agent:
   max_fail_streak_temp: 0.5
   temperature: null
   deepseek_temperature: 0.0
+  deepseek_max_tokens: 64000
   thinking_level: null
   eval_on_keep: true
   eval_every_n_runs: 0

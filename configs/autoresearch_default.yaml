@@ -21,7 +21,14 @@ agent:
   max_fail_streak_temp: 0.5
   temperature: null
   deepseek_temperature: 0.0
+  deepseek_max_tokens: 64000
   thinking_level: null
+  apply_llm: null
+  apply_temperature: null
+  apply_thinking_level: null
+  gemini_context_cache: false
+  gemini_context_cache_ttl: 3600s
+  gemini_context_cache_min_tokens: 2048
   eval_on_keep: true
   eval_every_n_runs: 0
   eval_n_trajectories: 8
