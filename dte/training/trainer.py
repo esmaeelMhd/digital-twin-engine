@@ -188,20 +188,21 @@ class Trainer:
                     None,
                 )
                 step_dt = t_tp1 - t_t
-                drift_start = model.latent_sde.drift(
-                    z_mean_t,
-                    control_t,
-                    disturbance_t,
-                    params_batch[idx],
+                k1 = model.latent_sde.drift(
+                    z_mean_t, control_t, disturbance_t, params_batch[idx]
                 )
-                z_euler = z_mean_t + step_dt * drift_start
-                drift_end = model.latent_sde.drift(
-                    z_euler,
-                    control_tp1,
-                    disturbance_tp1,
-                    params_batch[idx],
+                control_mid = 0.5 * (control_t + control_tp1)
+                dist_mid = 0.5 * (disturbance_t + disturbance_tp1)
+                k2 = model.latent_sde.drift(
+                    z_mean_t + 0.5 * step_dt * k1, control_mid, dist_mid, params_batch[idx]
                 )
-                z_next = z_mean_t + 0.5 * step_dt * (drift_start + drift_end)
+                k3 = model.latent_sde.drift(
+                    z_mean_t + 0.5 * step_dt * k2, control_mid, dist_mid, params_batch[idx]
+                )
+                k4 = model.latent_sde.drift(
+                    z_mean_t + step_dt * k3, control_tp1, disturbance_tp1, params_batch[idx]
+                )
+                z_next = z_mean_t + (step_dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
                 return model.decode(z_next, params_batch[idx], control_tp1)
 
             pred_next_states = jax.vmap(teacher_forced_one_step)(
