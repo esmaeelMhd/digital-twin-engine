@@ -1630,3 +1630,44 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-04-02 13:48:02] Ready. Best val_loss=0.029986 | 159 prior experiments
 [2026-04-02 13:48:02] Exp 160/180: querying DeepSeek deepseek-reasoner...
 [2026-04-02 13:48:02] Streak 10 failures — strategy change needed
+[2026-04-02 13:55:20] Gemini cache: created cachedContents/g914dprbje7uxkgtm1x8m7eg598gl12z4rjihv14 (3420 tokens)
+[2026-04-02 13:55:20] Resumed branch: autoresearch/apr02
+[2026-04-02 13:55:20] Ignoring stale agent_state.json from an earlier run
+[2026-04-02 13:55:20] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=on max_runs=180 branch=autoresearch/apr02 prior=159 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-04-02 13:55:20] Ready. Best val_loss=0.029986 | 159 prior experiments
+[2026-04-02 13:55:20] Exp 160/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 13:55:20] Streak 10 failures — strategy change needed
+[2026-04-02 13:55:33] Idea: Reduce peak learning rate from 5.0e-4 to 3.0e-4 to further stabilize optimization and find a deeper validation minimum.
+[2026-04-02 13:55:33] File: scripts/train.py
+[2026-04-02 13:55:33] Committed: 5bc22ca
+[2026-04-02 14:03:33] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
+[2026-04-02 14:07:20] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
+[2026-04-02 14:08:12] DISCARD: val_loss=2.657831 (best=0.029986)
+[2026-04-02 14:08:12] Elapsed: 759s
+[2026-04-02 14:08:18] Exp 161/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 14:08:18] Streak 10 failures — strategy change needed
+[2026-04-02 14:08:31] Idea: Cap maximum latent variance at 1.0 (logvar <= 0.0) by shifting the z_logvar bias from -2.0 to -3.0, perfectly aligning the maximum posterior uncertainty with the N(0,1) prior to prevent variance explosion.
+[2026-04-02 14:08:31] File: dte/models/encoder.py
+[2026-04-02 14:08:31] Committed: 609e8d2
+[2026-04-02 14:28:35] Gemini cache: created cachedContents/1kgsao9mzanblaroj2pv3x1asj38r5cf5m97raj3 (3515 tokens)
+[2026-04-02 14:28:35] Resumed branch: autoresearch/apr02
+[2026-04-02 14:28:35] Ignoring stale agent_state.json from an earlier run
+[2026-04-02 14:28:35] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=on max_runs=180 branch=autoresearch/apr02 prior=0 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-04-02 14:28:35] Running baseline experiment...
+[2026-04-02 14:39:55] Running lightweight eval for baseline...
+[2026-04-02 14:40:24] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-142835-baseline/eval_det/evaluation_summary.json
+[2026-04-02 14:40:24] Baseline: val_loss=0.198721
+[2026-04-02 14:40:24] Ready. Best val_loss=0.198721 | 1 prior experiments
+[2026-04-02 14:40:24] Exp 2/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 14:40:34] Idea: Replace leaky_relu with gelu in decoder hidden layers for better gradient flow and expressivity.
+[2026-04-02 14:40:34] File: dte/models/decoder.py
+[2026-04-02 14:40:35] Committed: 2a9051f
+[2026-04-02 14:52:17] Running lightweight eval...
+[2026-04-02 14:52:47] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-144035-dte-models-decoder-py-replace-leaky-relu-with-gelu-in-decoder-hidden-layers-for-better-gradient/eval_det/evaluation_summary.json
+[2026-04-02 14:52:47] KEEP: val_loss=0.195748 NEW BEST!
+[2026-04-02 14:52:48] git push: ok
+[2026-04-02 14:52:48] Elapsed: 702s
+[2026-04-02 14:52:54] Exp 3/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 14:53:09] Idea: Remove artificial 0.1 scaling on latent sampling to align sampled variance with KL divergence penalty.
+[2026-04-02 14:53:09] File: dte/models/digital_twin.py
+[2026-04-02 14:53:09] Committed: d68d0d5

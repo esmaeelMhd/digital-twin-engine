@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-04-02T13:48:02.508427",
-  "experiment_num": 160,
-  "description": "querying LLM",
-  "phase": "THINKING"
+  "timestamp": "2026-04-02T14:53:09.714388",
+  "experiment_num": 3,
+  "description": "Remove artificial 0.1 scaling on latent sampling to align sampled variance with KL divergence penalty.",
+  "phase": "TRAINING"
 }

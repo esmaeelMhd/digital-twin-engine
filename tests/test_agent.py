@@ -28,6 +28,8 @@ def test_build_static_prompt_context_mentions_search_replace_contract():
     assert "foo.py" in prompt
     assert "repo ctx" in prompt
     assert "SEARCH/REPLACE" in prompt
+    assert "Do NOT focus on routine hyperparameter optimization" in prompt
+    assert "Small hyperparameter changes are allowed only when they support a larger" in prompt
 
 
 def test_build_prompt_is_static_plus_dynamic_sections():
@@ -63,6 +65,14 @@ def test_choose_file_prefers_clean_candidates(monkeypatch):
     chosen = _choose_file([], ["dirty.py", "clean.py"], None)
 
     assert chosen == "clean.py"
+
+
+def test_choose_file_prefers_code_over_config_when_counts_tie(monkeypatch):
+    monkeypatch.setattr(agent_module, "git_file_is_dirty", lambda path: False)
+
+    chosen = _choose_file([], ["configs/training_default.yaml", "dte/training/trainer.py"], None)
+
+    assert chosen == "dte/training/trainer.py"
 
 
 def test_rollback_experiment_change_restores_original_content(tmp_path, monkeypatch):
