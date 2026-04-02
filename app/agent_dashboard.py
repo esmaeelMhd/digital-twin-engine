@@ -281,6 +281,34 @@ def _metric_points(results: list[dict]) -> list[dict]:
     return points
 
 
+def _quantile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = max(0.0, min(1.0, q)) * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+def _high_outlier_cutoff(values: list[float]) -> float | None:
+    """Return a robust display cutoff for unusually large validation losses."""
+
+    if len(values) < 5:
+        return None
+    q1 = _quantile(values, 0.25)
+    q3 = _quantile(values, 0.75)
+    if q1 is None or q3 is None or q3 < q1:
+        return None
+    iqr = q3 - q1
+    if iqr <= 0.0:
+        return None
+    return q3 + 3.0 * iqr
+
+
 def _short_label(text: str, limit: int = 28) -> str:
     clean = " ".join((text or "").split())
     if len(clean) <= limit:
@@ -294,14 +322,31 @@ def _render_validation_trend(results: list[dict]) -> None:
         st.info("No validation-loss points logged yet.")
         return
 
-    x_vals = [point["x"] for point in points]
-    val_losses = [point["val_loss"] for point in points]
-    best_losses = [point["best_so_far"] for point in points]
-    keep_points = [point for point in points if point["status"] == "keep"]
+    keep_only_points = [point for point in points if point["status"] == "keep"]
+    showing_keep_only = bool(keep_only_points)
+    visible_points = keep_only_points if showing_keep_only else points
+    hidden_points: list[dict] = []
+    cutoff = None
+    if not showing_keep_only:
+        cutoff = _high_outlier_cutoff([point["val_loss"] for point in visible_points])
+    if cutoff is not None:
+        visible_points = [point for point in points if point["val_loss"] <= cutoff]
+        hidden_points = [point for point in points if point["val_loss"] > cutoff]
+        if not visible_points:
+            visible_points = keep_only_points if showing_keep_only else points
+            hidden_points = []
+            cutoff = None
+
+    x_vals = [point["x"] for point in visible_points]
+    val_losses = [point["val_loss"] for point in visible_points]
+    best_losses = [point["best_so_far"] for point in visible_points]
+    keep_points = [point for point in visible_points if point["status"] == "keep"]
 
     fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(x_vals, val_losses, color="#4C78A8", marker="o", linewidth=1.8, markersize=4, label="val_loss")
-    ax.plot(x_vals, best_losses, color="#54A24B", linewidth=2.0, linestyle="--", label="best_so_far")
+    line_label = "kept val_loss" if showing_keep_only else "val_loss"
+    ax.plot(x_vals, val_losses, color="#4C78A8", marker="o", linewidth=1.8, markersize=4, label=line_label)
+    if not showing_keep_only:
+        ax.plot(x_vals, best_losses, color="#54A24B", linewidth=2.0, linestyle="--", label="best_so_far")
 
     if keep_points:
         keep_x = [point["x"] for point in keep_points]
@@ -329,7 +374,15 @@ def _render_validation_trend(results: list[dict]) -> None:
                 arrowprops={"arrowstyle": "-", "color": "#D9C98E", "lw": 0.8},
             )
 
-    ax.set_title("Validation Trend")
+    title = "Validation Trend"
+    if showing_keep_only:
+        title += " (kept changes only)"
+    if hidden_points:
+        title += f" ({len(hidden_points)} high outlier"
+        if len(hidden_points) != 1:
+            title += "s"
+        title += " hidden)"
+    ax.set_title(title)
     ax.set_xlabel("Experiment")
     ax.set_ylabel("best_val_loss")
     ax.grid(True, linestyle=":", linewidth=0.7, alpha=0.5)
@@ -338,8 +391,15 @@ def _render_validation_trend(results: list[dict]) -> None:
     st.pyplot(fig, width="stretch")
     plt.close(fig)
 
+    caption_bits: list[str] = []
+    if showing_keep_only:
+        caption_bits.append("Showing baseline plus kept improvements only.")
     if keep_points:
-        st.caption("Kept points are annotated with short diagonal labels.")
+        caption_bits.append("Kept points use short diagonal labels.")
+    if hidden_points and cutoff is not None:
+        caption_bits.append(f"High outliers above {cutoff:.3f} are hidden from the plot only.")
+    if caption_bits:
+        st.caption(" ".join(caption_bits))
 
 
 st.set_page_config(
