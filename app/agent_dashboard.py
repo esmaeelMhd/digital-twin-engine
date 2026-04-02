@@ -276,13 +276,12 @@ def _metric_points(results: list[dict]) -> list[dict]:
                 "best_so_far": running_best,
                 "status": row["status"],
                 "description": row["description"],
-                "commit": row["commit"][:7] if row["commit"] else "—",
             }
         )
     return points
 
 
-def _short_label(text: str, limit: int = 60) -> str:
+def _short_label(text: str, limit: int = 28) -> str:
     clean = " ".join((text or "").split())
     if len(clean) <= limit:
         return clean
@@ -310,17 +309,24 @@ def _render_validation_trend(results: list[dict]) -> None:
         ax.scatter(keep_x, keep_y, color="#E45756", s=50, zorder=3, label="kept improvement")
 
         for idx, point in enumerate(keep_points):
-            y_offset = 14 if idx % 2 == 0 else -18
-            label = f"{point['commit']}: {_short_label(point['description'])}"
+            upward = idx % 2 == 0
+            y_offset = 12 if upward else -12
+            rotation = 45 if upward else -45
+            valign = "bottom" if upward else "top"
+            label = _short_label(point["description"])
             ax.annotate(
                 label,
                 xy=(point["x"], point["val_loss"]),
-                xytext=(6, y_offset),
+                xytext=(4, y_offset),
                 textcoords="offset points",
-                fontsize=8,
+                fontsize=6.5,
+                rotation=rotation,
+                rotation_mode="anchor",
+                va=valign,
+                ha="left",
                 color="#222222",
-                bbox={"boxstyle": "round,pad=0.25", "fc": "#FFF7D6", "ec": "#D9C98E", "alpha": 0.95},
-                arrowprops={"arrowstyle": "-", "color": "#D9C98E", "lw": 1.0},
+                bbox={"boxstyle": "round,pad=0.12", "fc": "#FFF7D6", "ec": "#D9C98E", "alpha": 0.9},
+                arrowprops={"arrowstyle": "-", "color": "#D9C98E", "lw": 0.8},
             )
 
     ax.set_title("Validation Trend")
@@ -333,7 +339,7 @@ def _render_validation_trend(results: list[dict]) -> None:
     plt.close(fig)
 
     if keep_points:
-        st.caption("Kept points are annotated with commit and truncated description.")
+        st.caption("Kept points are annotated with short diagonal labels.")
 
 
 st.set_page_config(

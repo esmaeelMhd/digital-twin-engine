@@ -1,8 +1,11 @@
 import scripts.agent as agent_module
 
 from scripts.agent import (
+    _call_gemini_with_cache_retry,
     _choose_file,
+    _is_gemini_cache_miss_error,
     _normalize_gemini_thinking_level,
+    FatalAPIError,
     build_dynamic_prompt,
     build_prompt,
     build_static_prompt_context,
@@ -20,6 +23,61 @@ def test_normalize_gemini_thinking_level_keeps_medium_on_flash():
 
 def test_normalize_gemini_thinking_level_downgrades_minimal_on_pro():
     assert _normalize_gemini_thinking_level("gemini-3.1-pro-preview", "minimal") == "low"
+
+
+def test_is_gemini_cache_miss_error_detects_missing_cached_content():
+    assert _is_gemini_cache_miss_error(
+        "403 PERMISSION_DENIED. CachedContent not found (or permission denied)"
+    )
+
+
+def test_call_gemini_with_cache_retry_refreshes_and_retries(monkeypatch):
+    calls = []
+
+    def fake_call(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        if len(calls) == 1:
+            raise FatalAPIError("403 PERMISSION_DENIED. CachedContent not found (or permission denied)")
+        return '{"ok": true}'
+
+    refresh_calls = []
+
+    monkeypatch.setattr(agent_module, "log_to_file", lambda msg: None)
+
+    result = _call_gemini_with_cache_retry(
+        fake_call,
+        "hello",
+        kwargs={"cached_content": "cachedContents/old", "temperature": 0.1},
+        refresh_cache=lambda: refresh_calls.append("refresh") or "cachedContents/new",
+    )
+
+    assert result == '{"ok": true}'
+    assert refresh_calls == ["refresh"]
+    assert calls[0]["cached_content"] == "cachedContents/old"
+    assert calls[1]["cached_content"] == "cachedContents/new"
+
+
+def test_call_gemini_with_cache_retry_falls_back_to_uncached_prompt(monkeypatch):
+    calls = []
+
+    def fake_call(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        if len(calls) == 1:
+            raise FatalAPIError("403 PERMISSION_DENIED. CachedContent not found (or permission denied)")
+        return '{"ok": true}'
+
+    monkeypatch.setattr(agent_module, "log_to_file", lambda msg: None)
+
+    result = _call_gemini_with_cache_retry(
+        fake_call,
+        "hello",
+        kwargs={"cached_content": "cachedContents/old", "temperature": 0.1},
+        refresh_cache=lambda: None,
+    )
+
+    assert result == '{"ok": true}'
+    assert calls[0]["cached_content"] == "cachedContents/old"
+    assert "cached_content" not in calls[1]
 
 
 def test_build_static_prompt_context_mentions_search_replace_contract():

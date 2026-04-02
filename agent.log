@@ -1671,3 +1671,30 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-04-02 14:53:09] Idea: Remove artificial 0.1 scaling on latent sampling to align sampled variance with KL divergence penalty.
 [2026-04-02 14:53:09] File: dte/models/digital_twin.py
 [2026-04-02 14:53:09] Committed: d68d0d5
+[2026-04-02 15:04:34] Running lightweight eval...
+[2026-04-02 15:05:04] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-145309-dte-models-digital-twin-py-remove-artificial-0-1-scaling-on-latent-sampling-to-align-sampled-var/eval_det/evaluation_summary.json
+[2026-04-02 15:05:04] KEEP: val_loss=0.195747 NEW BEST!
+[2026-04-02 15:05:05] git push: ok
+[2026-04-02 15:05:05] Elapsed: 685s
+[2026-04-02 15:05:11] Exp 4/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 15:05:24] Idea: Add residual connections and use GELU activations in the encoder hidden layers to improve gradient flow.
+[2026-04-02 15:05:24] File: dte/models/encoder.py
+[2026-04-02 15:05:24] Committed: c405f89
+[2026-04-02 15:16:55] Running lightweight eval...
+[2026-04-02 15:17:24] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-150524-dte-models-encoder-py-add-residual-connections-and-use-gelu-activations-in-the-encoder-hidden-la/eval_det/evaluation_summary.json
+[2026-04-02 15:17:24] KEEP: val_loss=0.191988 NEW BEST!
+[2026-04-02 15:17:26] git push: ok
+[2026-04-02 15:17:26] Elapsed: 690s
+[2026-04-02 15:17:32] Exp 5/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 15:17:42] Idea: Use GELU activations and add residual connections in LatentDiffusion to match LatentDrift and improve gradient flow.
+[2026-04-02 15:17:42] File: dte/models/latent_sde.py
+[2026-04-02 15:17:42] Committed: ac5322b
+[2026-04-02 15:28:59] Running lightweight eval...
+[2026-04-02 15:29:30] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-151743-dte-models-latent-sde-py-use-gelu-activations-and-add-residual-connections-in-latentdiffusion-to/eval_det/evaluation_summary.json
+[2026-04-02 15:29:30] KEEP: val_loss=0.189335 NEW BEST!
+[2026-04-02 15:29:31] git push: ok
+[2026-04-02 15:29:32] Elapsed: 677s
+[2026-04-02 15:29:38] Exp 6/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 15:29:38] ERROR Gemini: 403 PERMISSION_DENIED. {'error': {'code': 403, 'message': 'CachedContent not found (or permission denied)', 'status': 'PERMISSION_DENIED'}}
+[2026-04-02 15:29:38] Fatal API error: 403 PERMISSION_DENIED. {'error': {'code': 403, 'message': 'CachedContent not found (or permission denied)', 'status': 'PERMISSION_DENIED'}}
+[2026-04-02 15:42:01] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead

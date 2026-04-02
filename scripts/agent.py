@@ -581,6 +581,47 @@ def ensure_gemini_context_cache(
     return cache_name
 
 
+def _is_gemini_cache_miss_error(error: Exception | str) -> bool:
+    """Return True when Gemini failed because the cached content ID is invalid."""
+
+    text = str(error).strip().lower()
+    if not text:
+        return False
+    return (
+        "cachedcontent not found" in text
+        or "cached_content not found" in text
+        or "cached content not found" in text
+    )
+
+
+def _call_gemini_with_cache_retry(
+    call_fn,
+    prompt: str,
+    *,
+    kwargs: dict,
+    refresh_cache,
+) -> str | None:
+    """Retry once when Gemini rejects an expired or missing cached-content ID."""
+
+    try:
+        return call_fn(prompt, **kwargs)
+    except FatalAPIError as exc:
+        cached_content = kwargs.get("cached_content")
+        if not cached_content or not _is_gemini_cache_miss_error(exc):
+            raise
+
+        log_to_file(f"Gemini cache miss for {cached_content}; refreshing and retrying once")
+        refreshed_cache = refresh_cache()
+        retry_kwargs = dict(kwargs)
+        if refreshed_cache:
+            retry_kwargs["cached_content"] = refreshed_cache
+        else:
+            retry_kwargs.pop("cached_content", None)
+            log_to_file("WARNING Gemini cache refresh failed; retrying without cached_content")
+
+        return call_fn(prompt, **retry_kwargs)
+
+
 def _tail_log_lines(path: Path, limit: int = 25) -> list[str]:
     if not path.exists():
         return []
@@ -3007,7 +3048,25 @@ def main() -> None:
                 kwargs["response_schema"] = response_schema
             if cached_content:
                 kwargs["cached_content"] = cached_content
-            return active_call_fn(prompt, **kwargs)
+
+            def refresh_cache() -> str | None:
+                nonlocal reason_cached_content
+                if not gemini_context_cache_enabled or active_provider_model != provider_model:
+                    return None
+                reason_cached_content = ensure_gemini_context_cache(
+                    static_prompt,
+                    provider_model,
+                    ttl=gemini_context_cache_ttl,
+                    min_tokens=gemini_context_cache_min_tokens,
+                )
+                return reason_cached_content
+
+            return _call_gemini_with_cache_retry(
+                active_call_fn,
+                prompt,
+                kwargs=kwargs,
+                refresh_cache=refresh_cache,
+            )
 
         if active_supports_temperature:
             return active_call_fn(prompt, temperature=temperature, thinking_level=thinking_level)
