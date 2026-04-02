@@ -363,7 +363,7 @@ class LatentSDE(eqx.Module):
             return self.drift(z, u, d, params)
 
         term = diffrax.ODETerm(drift_fn)
-        solver = diffrax.Heun()
+        solver = diffrax.Tsit5()
 
         dt0 = ts[1] - ts[0]
         saveat = diffrax.SaveAt(ts=ts)
