@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 from collections import deque
 from pathlib import Path
@@ -45,6 +46,11 @@ def _resolve_config_path() -> Path:
         if not candidate.is_absolute():
             candidate = PROJECT_ROOT / candidate
         if candidate.exists():
+            return candidate
+
+    for process in _agent_processes():
+        candidate = _config_from_agent_command(process.get("command", ""))
+        if candidate and candidate.exists():
             return candidate
 
     config_options = _list_config_options()
@@ -214,6 +220,47 @@ def _agent_processes() -> list[dict]:
         processes.append({"pid": pid, "command": command})
 
     return processes
+
+
+def _config_from_agent_command(command: str) -> Path | None:
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        argv = command.split()
+
+    for index, token in enumerate(argv):
+        if token == "--config" and index + 1 < len(argv):
+            candidate = Path(argv[index + 1])
+            if not candidate.is_absolute():
+                candidate = PROJECT_ROOT / candidate
+            return candidate
+        if token.startswith("--config="):
+            candidate = Path(token.split("=", 1)[1])
+            if not candidate.is_absolute():
+                candidate = PROJECT_ROOT / candidate
+            return candidate
+    return None
+
+
+def _max_runs_from_agent_command(command: str) -> int | None:
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        argv = command.split()
+
+    for index, token in enumerate(argv):
+        raw_value = None
+        if token == "--max-runs" and index + 1 < len(argv):
+            raw_value = argv[index + 1]
+        elif token.startswith("--max-runs="):
+            raw_value = token.split("=", 1)[1]
+        if raw_value is None:
+            continue
+        try:
+            return int(raw_value)
+        except ValueError:
+            return None
+    return None
 
 
 def _gpu_stats() -> dict:
@@ -416,6 +463,22 @@ results = _load_results(config)
 baseline_metadata = _read_json_file(_baseline_metadata_path(config))
 state = _read_json_file(STATE_FILE)
 processes = _agent_processes()
+if not state and processes:
+    for process in processes:
+        process_config = _config_from_agent_command(process.get("command", ""))
+        if process_config != config_path:
+            continue
+        estimated_experiment = len(results) + 1 if results else 1
+        state = {
+            "phase": "RUNNING",
+            "experiment_num": estimated_experiment,
+            "max_runs": _max_runs_from_agent_command(process.get("command", "")),
+            "description": "Live text-mode run detected; fine-grained phase tracking starts on the next agent launch.",
+            "config_path": str(config_path.relative_to(PROJECT_ROOT)),
+            "workspace_dir": str(workspace_dir.relative_to(PROJECT_ROOT)),
+            "command": process.get("command", ""),
+        }
+        break
 gpu = _gpu_stats()
 log_tail = _tail_lines(LOG_FILE)
 

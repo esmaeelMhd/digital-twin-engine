@@ -194,12 +194,21 @@ def log_to_file(msg: str) -> None:
         os.fsync(f.fileno())
 
 
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def write_state(exp_num: int, description: str, phase: str, extra: dict | None = None) -> None:
     payload = {
         "timestamp": datetime.now().isoformat(),
         "experiment_num": exp_num,
         "description": description,
         "phase": phase,
+        "config_path": _display_path(ACTIVE_AUTORESEARCH_CONFIG),
+        "workspace_dir": _display_path(get_workspace_dir()),
     }
     if extra:
         payload.update(extra)
@@ -873,6 +882,16 @@ def git_head_sha() -> str:
     return out.strip()
 
 
+def git_is_ancestor(ancestor: str, descendant: str = "HEAD") -> bool:
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def git_commit(message: str, files: list[str]) -> str:
     head_before = git_head_sha()
     for f in files:
@@ -900,6 +919,30 @@ def git_reset_last_commit() -> None:
     git("reset", "--mixed", "HEAD~1")
 
 
+def git_reset_commit(commit_sha: str) -> None:
+    """Undo a specific HEAD commit while keeping working tree changes."""
+    git("reset", "--mixed", f"{commit_sha}^")
+
+
+def git_revert_commit(commit_sha: str) -> None:
+    """Create a revert commit for an older experiment commit."""
+    result = subprocess.run(
+        ["git", "revert", "--no-edit", commit_sha],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        subprocess.run(
+            ["git", "revert", "--abort"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        detail = (result.stderr or result.stdout or "unknown git revert failure").strip()
+        raise RuntimeError(detail)
+
+
 def git_discard_last_experiment(filepath: str) -> None:
     """Drop the last experiment commit and restore the touched file."""
 
@@ -921,13 +964,27 @@ def rollback_experiment_change(
     original_source: str | None,
     *,
     committed: bool,
+    commit_sha: str | None = None,
 ) -> None:
     """Restore the touched file to its pre-experiment contents."""
 
     if not filepath or original_source is None:
         return
 
-    if committed:
+    if committed and commit_sha:
+        head_sha = git_head_sha()
+        if head_sha == commit_sha:
+            git_reset_commit(commit_sha)
+        elif git_is_ancestor(commit_sha, head_sha):
+            try:
+                git_revert_commit(commit_sha)
+            except RuntimeError as revert_err:
+                log_to_file(f"ROLLBACK REVERT FAILED {commit_sha[:7]}: {revert_err}")
+        else:
+            log_to_file(
+                f"ROLLBACK SKIPPED COMMIT RESET {commit_sha[:7]}: commit is no longer reachable from HEAD"
+            )
+    elif committed:
         git_reset_last_commit()
     write_repo_file(filepath, original_source)
     git("restore", "--staged", "--", filepath)
@@ -2611,227 +2668,358 @@ def _run_text_mode(
     recent_run_context: str,
     static_prompt: str,
     reason_cached_content: str | None,
+    branch: str,
 ) -> None:
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
     consecutive_parse_failures = 0
 
-    for i in range(max_runs - prior_count):
-        proposed_file = ""
-        original: str | None = None
-        experiment_committed = False
-        exp_num = prior_count + i + 1
+    def update_text_state(
+        exp_num: int,
+        description: str,
+        phase: str,
+        *,
+        file_path: str = "",
+        current_idea: str = "",
+        extra: dict | None = None,
+    ) -> None:
+        payload = {
+            "max_runs": max_runs,
+            "best_loss": None if best_loss >= 999.0 else best_loss,
+            "llm_name": args.llm_name,
+            "branch": branch,
+        }
+        if file_path:
+            payload["file"] = file_path
+        if current_idea:
+            payload["current_idea"] = current_idea
+        if extra:
+            payload.update(extra)
+        write_state(exp_num, description, phase, payload)
 
-        try:
-            print(f"\n[Exp {exp_num}/{max_runs}] Asking {args.llm_name}...")
-            recent_run_context = build_recent_run_context()
+    try:
+        for i in range(max_runs - prior_count):
+            proposed_file = ""
+            original: str | None = None
+            experiment_committed = False
+            experiment_commit_sha: str | None = None
+            exp_num = prior_count + i + 1
 
-            target_file = _choose_file(history, modifiable_files, args.file)
             try:
-                file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
-            except FileNotFoundError:
-                print(f"  File not found: {target_file}")
-                continue
+                print(f"\n[Exp {exp_num}/{max_runs}] Asking {args.llm_name}...")
+                update_text_state(exp_num, "querying LLM", "THINKING")
+                recent_run_context = build_recent_run_context()
 
-            fail_streak = _count_recent_failures(history)
-            dynamic_prompt = build_dynamic_prompt(
-                target_file,
-                file_source,
-                history,
-                best_loss,
-                recent_run_context=recent_run_context,
-            )
-            prompt = dynamic_prompt if reason_cached_content else static_prompt + dynamic_prompt
-
-            try:
-                response, timed_out = invoke_llm_with_timeout(
-                    call_llm,
-                    prompt,
-                    fail_streak=fail_streak,
-                    phase="reason",
-                    response_schema=PATCH_RESPONSE_JSON_SCHEMA,
-                    cached_content=reason_cached_content,
-                )
-            except FatalAPIError as e:
-                print(f"Fatal API error: {e}")
-                break
-            if timed_out:
-                print(f"  LLM request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
-                history = get_results_history()
-                continue
-
-            proposal = parse_response(response)
-            if not proposal:
+                target_file = _choose_file(history, modifiable_files, args.file)
                 try:
-                    proposal, repaired, repair_timed_out = repair_response(
-                        response,
+                    file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    print(f"  File not found: {target_file}")
+                    continue
+
+                fail_streak = _count_recent_failures(history)
+                dynamic_prompt = build_dynamic_prompt(
+                    target_file,
+                    file_source,
+                    history,
+                    best_loss,
+                    recent_run_context=recent_run_context,
+                )
+                prompt = dynamic_prompt if reason_cached_content else static_prompt + dynamic_prompt
+
+                try:
+                    response, timed_out = invoke_llm_with_timeout(
                         call_llm,
+                        prompt,
                         fail_streak=fail_streak,
+                        phase="reason",
+                        response_schema=PATCH_RESPONSE_JSON_SCHEMA,
+                        cached_content=reason_cached_content,
                     )
                 except FatalAPIError as e:
                     print(f"Fatal API error: {e}")
                     break
-                if repair_timed_out:
-                    print(f"  JSON repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                if timed_out:
+                    print(f"  LLM request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
                     history = get_results_history()
                     continue
-                if proposal:
-                    print("  Repaired malformed LLM response.")
 
-            if not proposal or "changes" not in proposal:
-                print("  LLM gave unparseable response. Skipping.")
-                consecutive_parse_failures += 1
-                if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
-                    print("  Too many consecutive malformed LLM responses. Stopping cleanly.")
-                    break
-                continue
-            consecutive_parse_failures = 0
+                proposal = parse_response(response)
+                if not proposal:
+                    try:
+                        proposal, repaired, repair_timed_out = repair_response(
+                            response,
+                            call_llm,
+                            fail_streak=fail_streak,
+                        )
+                    except FatalAPIError as e:
+                        print(f"Fatal API error: {e}")
+                        break
+                    if repair_timed_out:
+                        print(f"  JSON repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                        history = get_results_history()
+                        continue
+                    if proposal:
+                        print("  Repaired malformed LLM response.")
 
-            proposed_file = proposal.get("file", target_file)
-            if proposed_file not in modifiable_files:
-                print(f"  LLM chose disallowed file {proposed_file}. Skipping.")
-                continue
-            if git_file_is_dirty(proposed_file):
-                print(f"  Skipping dirty file {proposed_file} to avoid clobbering existing changes.")
-                continue
+                if not proposal or "changes" not in proposal:
+                    print("  LLM gave unparseable response. Skipping.")
+                    consecutive_parse_failures += 1
+                    if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                        print("  Too many consecutive malformed LLM responses. Stopping cleanly.")
+                        break
+                    continue
+                consecutive_parse_failures = 0
 
-            description = proposal.get("description", "unknown")
-            print(f"  Idea: {description}")
-            print(f"  File: {proposed_file}")
+                proposed_file = proposal.get("file", target_file)
+                if proposed_file not in modifiable_files:
+                    print(f"  LLM chose disallowed file {proposed_file}. Skipping.")
+                    continue
+                if git_file_is_dirty(proposed_file):
+                    print(f"  Skipping dirty file {proposed_file} to avoid clobbering existing changes.")
+                    continue
 
-            try:
-                original = (PROJECT_ROOT / proposed_file).read_text(encoding="utf-8")
-            except FileNotFoundError:
-                print(f"  File not found: {proposed_file}")
-                continue
+                description = proposal.get("description", "unknown")
+                current_idea = f"[{proposed_file}] {description}"
+                print(f"  Idea: {description}")
+                print(f"  File: {proposed_file}")
+                update_text_state(
+                    exp_num,
+                    description,
+                    "APPLYING",
+                    file_path=proposed_file,
+                    current_idea=current_idea,
+                )
 
-            modified, apply_error = apply_changes(original, proposal["changes"])
-            if modified is None:
-                print("  Could not apply patch. Trying one repair...")
                 try:
-                    repaired_proposal, repaired_text, repair_timed_out = repair_apply_failure(
-                        proposal,
+                    original = (PROJECT_ROOT / proposed_file).read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    print(f"  File not found: {proposed_file}")
+                    continue
+
+                modified, apply_error = apply_changes(original, proposal["changes"])
+                if modified is None:
+                    print("  Could not apply patch. Trying one repair...")
+                    try:
+                        repaired_proposal, repaired_text, repair_timed_out = repair_apply_failure(
+                            proposal,
+                            proposed_file,
+                            original,
+                            apply_error or "unknown apply failure",
+                            call_llm,
+                            fail_streak=fail_streak,
+                        )
+                    except FatalAPIError as e:
+                        print(f"Fatal API error: {e}")
+                        break
+
+                    if repair_timed_out:
+                        print(f"  Patch repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                        log_result(
+                            "-------",
+                            0.0,
+                            "crash",
+                            proposed_file,
+                            f"APPLY FAIL: {description} [repair timeout]",
+                        )
+                        history = get_results_history()
+                        continue
+
+                    if repaired_proposal and "changes" in repaired_proposal:
+                        repaired_file = repaired_proposal.get("file", proposed_file)
+                        if repaired_file == proposed_file:
+                            repaired_modified, repaired_error = apply_changes(
+                                original,
+                                repaired_proposal["changes"],
+                            )
+                            if repaired_modified is not None:
+                                proposal = repaired_proposal
+                                description = proposal.get("description", description)
+                                current_idea = f"[{proposed_file}] {description}"
+                                modified = repaired_modified
+                                print("  Recovered apply-fail with repair prompt.")
+                                update_text_state(
+                                    exp_num,
+                                    description,
+                                    "APPLYING",
+                                    file_path=proposed_file,
+                                    current_idea=current_idea,
+                                )
+                            else:
+                                apply_error = repaired_error or apply_error
+                        else:
+                            apply_error = f"repair changed target file to {repaired_file}"
+
+                    if modified is None:
+                        print("  Could not apply patch after repair. Skipping.")
+                        failure_detail = apply_error or "repair failed"
+                        log_result(
+                            "-------",
+                            0.0,
+                            "crash",
+                            proposed_file,
+                            f"APPLY FAIL: {description} [{failure_detail}]",
+                        )
+                        history = get_results_history()
+                        continue
+
+                err = validate_file(proposed_file, modified, original_source=original)
+                if err:
+                    print(f"  Validation failed: {err}. Skipping.")
+                    log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{err}]")
+                    history = get_results_history()
+                    continue
+
+                write_repo_file(proposed_file, modified)
+                try:
+                    sha = git_commit(description, [proposed_file])
+                    experiment_committed = True
+                    experiment_commit_sha = git_head_sha()
+                except RuntimeError as commit_err:
+                    rollback_experiment_change(
                         proposed_file,
                         original,
-                        apply_error or "unknown apply failure",
-                        call_llm,
-                        fail_streak=fail_streak,
+                        committed=False,
+                        commit_sha=experiment_commit_sha,
                     )
-                except FatalAPIError as e:
-                    print(f"Fatal API error: {e}")
-                    break
-
-                if repair_timed_out:
-                    print(f"  Patch repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
-                    log_result(
-                        "-------",
-                        0.0,
-                        "crash",
-                        proposed_file,
-                        f"APPLY FAIL: {description} [repair timeout]",
-                    )
+                    err_msg = str(commit_err)[:120]
+                    print(f"  COMMIT FAIL: {err_msg}")
+                    log_result("-------", 0.0, "crash", proposed_file, f"COMMIT FAIL: {description} [{err_msg}]")
                     history = get_results_history()
                     continue
 
-                if repaired_proposal and "changes" in repaired_proposal:
-                    repaired_file = repaired_proposal.get("file", proposed_file)
-                    if repaired_file == proposed_file:
-                        repaired_modified, repaired_error = apply_changes(
-                            original,
-                            repaired_proposal["changes"],
+                print(f"  Committed: {sha}")
+
+                print(f"  Running experiment...")
+                update_text_state(
+                    exp_num,
+                    description,
+                    "TRAINING",
+                    file_path=proposed_file,
+                    current_idea=current_idea,
+                    extra={"commit": sha},
+                )
+                result = run_experiment(f"[{proposed_file}] {description}")
+
+                if result and result.get("status") in ("keep", "discard"):
+                    val_loss = float(result.get("metric_value", 999.0) or 999.0)
+                    if should_run_lightweight_eval(result, exp_num, eval_settings):
+                        print("  Running lightweight eval...")
+                        maybe_run_lightweight_eval(
+                            result,
+                            exp_num,
+                            train_cfg,
+                            eval_settings,
+                            on_line=lambda line: print(f"  {line}"),
                         )
-                        if repaired_modified is not None:
-                            proposal = repaired_proposal
-                            description = proposal.get("description", description)
-                            modified = repaired_modified
-                            print("  Recovered apply-fail with repair prompt.")
-                        else:
-                            apply_error = repaired_error or apply_error
+                    if result.get("status") == "keep":
+                        best_loss = val_loss
+                        print(f"  KEEP: val_loss={val_loss:.6f} (NEW BEST)")
+                        update_text_state(
+                            exp_num,
+                            description,
+                            "KEEP",
+                            file_path=proposed_file,
+                            current_idea=current_idea,
+                            extra={"commit": sha, "metric_value": val_loss},
+                        )
+                        git_push()
                     else:
-                        apply_error = f"repair changed target file to {repaired_file}"
-
-                if modified is None:
-                    print("  Could not apply patch after repair. Skipping.")
-                    failure_detail = apply_error or "repair failed"
-                    log_result(
-                        "-------",
-                        0.0,
-                        "crash",
-                        proposed_file,
-                        f"APPLY FAIL: {description} [{failure_detail}]",
-                    )
-                    history = get_results_history()
-                    continue
-
-            err = validate_file(proposed_file, modified, original_source=original)
-            if err:
-                print(f"  Validation failed: {err}. Skipping.")
-                log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{err}]")
-                history = get_results_history()
-                continue
-
-            write_repo_file(proposed_file, modified)
-            try:
-                sha = git_commit(description, [proposed_file])
-                experiment_committed = True
-            except RuntimeError as commit_err:
-                rollback_experiment_change(proposed_file, original, committed=False)
-                err_msg = str(commit_err)[:120]
-                print(f"  COMMIT FAIL: {err_msg}")
-                log_result("-------", 0.0, "crash", proposed_file, f"COMMIT FAIL: {description} [{err_msg}]")
-                history = get_results_history()
-                continue
-
-            print(f"  Committed: {sha}")
-
-            print(f"  Running experiment...")
-            result = run_experiment(f"[{proposed_file}] {description}")
-
-            if result and result.get("status") in ("keep", "discard"):
-                val_loss = float(result.get("metric_value", 999.0) or 999.0)
-                if should_run_lightweight_eval(result, exp_num, eval_settings):
-                    print("  Running lightweight eval...")
-                    maybe_run_lightweight_eval(
-                        result,
+                        print(f"  DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
+                        update_text_state(
+                            exp_num,
+                            description,
+                            "DISCARD",
+                            file_path=proposed_file,
+                            current_idea=current_idea,
+                            extra={"commit": sha, "metric_value": val_loss},
+                        )
+                        rollback_experiment_change(
+                            proposed_file,
+                            original,
+                            committed=experiment_committed,
+                            commit_sha=experiment_commit_sha,
+                        )
+                elif result and result.get("status") == "crash":
+                    print("  CRASH: experiment failed")
+                    update_text_state(
                         exp_num,
-                        train_cfg,
-                        eval_settings,
-                        on_line=lambda line: print(f"  {line}"),
+                        description,
+                        "CRASH",
+                        file_path=proposed_file,
+                        current_idea=current_idea,
+                        extra={"commit": sha},
                     )
-                if result.get("status") == "keep":
-                    best_loss = val_loss
-                    print(f"  KEEP: val_loss={val_loss:.6f} (NEW BEST)")
-                    git_push()
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=experiment_committed,
+                        commit_sha=experiment_commit_sha,
+                    )
+                elif result and "error" in result:
+                    err_msg = str(result["error"])[:80]
+                    print(f"  CRASH: {err_msg}")
+                    log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
+                    update_text_state(
+                        exp_num,
+                        description,
+                        "CRASH",
+                        file_path=proposed_file,
+                        current_idea=current_idea,
+                        extra={"commit": sha, "error": err_msg},
+                    )
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=experiment_committed,
+                        commit_sha=experiment_commit_sha,
+                    )
                 else:
-                    print(f"  DISCARD: val_loss={val_loss:.6f} (best={best_loss:.6f})")
-                    rollback_experiment_change(proposed_file, original, committed=experiment_committed)
-            elif result and result.get("status") == "crash":
-                print("  CRASH: experiment failed")
-                rollback_experiment_change(proposed_file, original, committed=experiment_committed)
-            elif result and "error" in result:
-                err_msg = str(result["error"])[:80]
-                print(f"  CRASH: {err_msg}")
-                log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
-                rollback_experiment_change(proposed_file, original, committed=experiment_committed)
-            else:
-                print("  CRASH: no result")
-                log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
-                rollback_experiment_change(proposed_file, original, committed=experiment_committed)
+                    print("  CRASH: no result")
+                    log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
+                    update_text_state(
+                        exp_num,
+                        description,
+                        "CRASH",
+                        file_path=proposed_file,
+                        current_idea=current_idea,
+                        extra={"commit": sha, "error": "no result"},
+                    )
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=experiment_committed,
+                        commit_sha=experiment_commit_sha,
+                    )
 
-            history = get_results_history()
-            valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
-            if valid:
-                best_loss = min(valid)
-            recent_run_context = build_recent_run_context()
+                history = get_results_history()
+                valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
+                if valid:
+                    best_loss = min(valid)
+                recent_run_context = build_recent_run_context()
 
-        except Exception as loop_err:
-            print(f"  Exception: {str(loop_err)[:120]}")
-            log_to_file(f"TEXT LOOP EXCEPTION: {loop_err}")
-            try:
-                rollback_experiment_change(proposed_file, original, committed=experiment_committed)
-            except Exception:
-                pass
-            history = get_results_history()
+            except Exception as loop_err:
+                print(f"  Exception: {str(loop_err)[:120]}")
+                log_to_file(f"TEXT LOOP EXCEPTION: {loop_err}")
+                try:
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=experiment_committed,
+                        commit_sha=experiment_commit_sha,
+                    )
+                except Exception:
+                    pass
+                update_text_state(
+                    exp_num,
+                    str(loop_err)[:120],
+                    "CRASH",
+                    file_path=proposed_file,
+                    extra={"error": str(loop_err)[:120]},
+                )
+                history = get_results_history()
+    finally:
+        clear_state()
 
 
 # ---------------------------------------------------------------------------
@@ -3129,6 +3317,18 @@ def main() -> None:
     if args.no_dashboard:
         if not history:
             print("Running baseline experiment...")
+            write_state(
+                prior_count + 1,
+                "baseline",
+                "TRAINING",
+                {
+                    "max_runs": args.max_runs,
+                    "best_loss": None if best_loss >= 999.0 else best_loss,
+                    "llm_name": args.llm_name,
+                    "branch": branch,
+                    "current_idea": "baseline",
+                },
+            )
             result = run_experiment("baseline")
             if result and result.get("status") in ("keep", "discard"):
                 val_loss = float(result.get("metric_value", 999.0) or 999.0)
@@ -3145,6 +3345,7 @@ def main() -> None:
                 print(f"Baseline: val_loss={val_loss:.6f}")
             elif result and result.get("status") == "crash":
                 print("Baseline failed inside autoresearch harness.")
+                clear_state()
                 return
             history = get_results_history()
             recent_run_context = build_recent_run_context()
@@ -3162,6 +3363,7 @@ def main() -> None:
             recent_run_context,
             static_prompt,
             reason_cached_content,
+            branch,
         )
         return
 
@@ -3319,6 +3521,7 @@ def main() -> None:
             proposed_file = ""
             original: str | None = None
             experiment_committed = False
+            experiment_commit_sha: str | None = None
             try:
                 exp_num = len(history) + 1
                 state["experiment_num"] = exp_num
@@ -3520,8 +3723,14 @@ def main() -> None:
                 try:
                     sha = git_commit(description, [proposed_file])
                     experiment_committed = True
+                    experiment_commit_sha = git_head_sha()
                 except RuntimeError as commit_err:
-                    rollback_experiment_change(proposed_file, original, committed=False)
+                    rollback_experiment_change(
+                        proposed_file,
+                        original,
+                        committed=False,
+                        commit_sha=experiment_commit_sha,
+                    )
                     err_msg = str(commit_err)[:120]
                     log_result(
                         "-------",
@@ -3593,6 +3802,7 @@ def main() -> None:
                             proposed_file,
                             original,
                             committed=experiment_committed,
+                            commit_sha=experiment_commit_sha,
                         )
 
                 elif result and result.get("status") == "crash":
@@ -3602,6 +3812,7 @@ def main() -> None:
                         proposed_file,
                         original,
                         committed=experiment_committed,
+                        commit_sha=experiment_commit_sha,
                     )
                 elif result and "error" in result:
                     err_msg = str(result["error"])[:80]
@@ -3612,6 +3823,7 @@ def main() -> None:
                         proposed_file,
                         original,
                         committed=experiment_committed,
+                        commit_sha=experiment_commit_sha,
                     )
                 else:
                     log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
@@ -3621,6 +3833,7 @@ def main() -> None:
                         proposed_file,
                         original,
                         committed=experiment_committed,
+                        commit_sha=experiment_commit_sha,
                     )
 
                 history = get_results_history()
@@ -3644,6 +3857,7 @@ def main() -> None:
                         proposed_file,
                         original,
                         committed=experiment_committed,
+                        commit_sha=experiment_commit_sha,
                     )
                 except Exception:
                     pass

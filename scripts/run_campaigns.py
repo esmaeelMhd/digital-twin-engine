@@ -133,6 +133,17 @@ def branch_ahead_of_main(branch: str) -> bool:
         return False
 
 
+def branch_divergence(local_ref: str, remote_ref: str) -> tuple[int, int]:
+    raw = _git_output("rev-list", "--left-right", "--count", f"{local_ref}...{remote_ref}")
+    parts = raw.split()
+    if len(parts) != 2:
+        return 0, 0
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return 0, 0
+
+
 def create_and_publish_branch(branch: str) -> None:
     checkout_main_and_sync()
     if branch_exists(branch):
@@ -147,6 +158,22 @@ def push_branch(branch: str) -> None:
     current = _git_output("branch", "--show-current")
     if current != branch:
         _run_git("checkout", branch)
+    if remote_branch_exists(branch):
+        _run_git("fetch", "origin", branch)
+        local_only, remote_only = branch_divergence(branch, f"origin/{branch}")
+        if remote_only:
+            if local_only:
+                try:
+                    _run_git("rebase", f"origin/{branch}")
+                except RunnerError as exc:
+                    _run_git("rebase", "--abort", check=False)
+                    raise RunnerError(
+                        f"failed to rebase {branch} onto origin/{branch} before push: {exc}"
+                    ) from exc
+            else:
+                _run_git("merge", "--ff-only", f"origin/{branch}")
+        _run_git("push", "origin", branch)
+        return
     _run_git("push", "--set-upstream", "origin", branch)
 
 
