@@ -1895,3 +1895,10 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-04-02 22:13:15] APPLY FAIL: ambiguous match (2x): '        input_dim = latent_dim + control_dim + disturbance_dim + param_dim\n\n        self.layers = []\n        for i in range(n_layers):\n            in_dim = inpu'
 [2026-04-02 22:13:15] Could not apply patch after repair. Skipping.
 [2026-04-02 22:13:15] RESULT: crash | val_loss=n/a | dte/models/latent_sde.py | APPLY FAIL: Inject original inputs (state, control, params) into every hidden layer of LatentDrift and LatentDiffusion to prevent forgetting of conditioning variables in deep rollouts. [ambiguous match (2x): '        input_dim = latent_dim + control_dim + disturbance_dim + param_dim\n\n        self.layers = []\n        for i in range(n_layers):\n            in_dim = inpu']
+[2026-04-02 22:42:35] Gemini cache: created cachedContents/418gby5ouo8kchno64joemxklr8klquk38di89aq (2125 tokens)
+[2026-04-02 22:42:35] Created branch: autoresearch/overnight-20260402-224230-latent-stage1
+[2026-04-02 22:42:35] Ignoring stale agent_state.json from an earlier run
+[2026-04-02 22:42:35] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=on max_runs=8 branch=autoresearch/overnight-20260402-224230-latent-stage1 prior=8 config=/home/ismayil/digital-twin-engine/configs/autoresearch_latent_stage1.yaml
+[2026-04-02 22:42:39] Gemini cache skipped: static context too small (2008 tokens < 2048)
+[2026-04-02 22:42:39] Created branch: autoresearch/overnight-20260402-224230-trainer-stage1
+[2026-04-02 22:42:39] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=off max_runs=8 branch=autoresearch/overnight-20260402-224230-trainer-stage1 prior=0 config=/home/ismayil/digital-twin-engine/configs/autoresearch_trainer_stage1.yaml

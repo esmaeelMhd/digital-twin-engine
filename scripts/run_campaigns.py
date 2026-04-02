@@ -28,7 +28,7 @@ RECOMMENDED_ORDER = [
 ]
 
 DEFAULT_STAGE1_RUNS = {
-    "latent": 8,
+    "latent": 16,
     "trainer": 8,
     "losses": 6,
     "encoder": 6,
@@ -120,12 +120,34 @@ def branch_exists(branch: str) -> bool:
     return bool(_git_output("branch", "--list", branch))
 
 
+def remote_branch_exists(branch: str) -> bool:
+    completed = _run_git("ls-remote", "--exit-code", "--heads", "origin", branch, check=False)
+    return completed.returncode == 0
+
+
 def branch_ahead_of_main(branch: str) -> bool:
     count = _git_output("rev-list", "--count", f"main..{branch}")
     try:
         return int(count or "0") > 0
     except ValueError:
         return False
+
+
+def create_and_publish_branch(branch: str) -> None:
+    checkout_main_and_sync()
+    if branch_exists(branch):
+        raise RunnerError(f"campaign branch already exists locally: {branch}")
+    if remote_branch_exists(branch):
+        raise RunnerError(f"campaign branch already exists on origin: {branch}")
+    _run_git("checkout", "-b", branch)
+    _run_git("push", "--set-upstream", "origin", branch)
+
+
+def push_branch(branch: str) -> None:
+    current = _git_output("branch", "--show-current")
+    if current != branch:
+        _run_git("checkout", branch)
+    _run_git("push", "--set-upstream", "origin", branch)
 
 
 def merge_campaign_branch(branch: str) -> bool:
@@ -266,13 +288,13 @@ def main() -> int:
     }
 
     for index, plan in enumerate(plans, start=1):
-        if branch_exists(plan.branch):
+        if branch_exists(plan.branch) or remote_branch_exists(plan.branch):
             raise RunnerError(
                 f"branch already exists for planned campaign {plan.name}: {plan.branch}; "
                 "use a new --session-tag"
             )
 
-        checkout_main_and_sync()
+        create_and_publish_branch(plan.branch)
 
         log_path = session_dir / f"{index:02d}-{plan.name}-{plan.stage}.log"
         command = [
@@ -303,6 +325,7 @@ def main() -> int:
                 f"campaign {plan.name} exited with code {returncode}; see {log_path}"
             )
 
+        push_branch(plan.branch)
         merged = merge_campaign_branch(plan.branch)
         result = {
             "campaign": plan.name,
