@@ -1439,6 +1439,55 @@ Malformed response:
     return parse_response(repaired), repaired, timed_out
 
 
+def repair_apply_failure(
+    proposal: dict,
+    filepath: str,
+    file_source: str,
+    apply_error: str,
+    call_llm,
+    fail_streak: int = 0,
+) -> tuple[dict | None, str | None, bool]:
+    """Ask the LLM to repair a JSON patch whose `old` strings did not match."""
+
+    prior_json = json.dumps(proposal, indent=2, ensure_ascii=True)
+    repair_prompt = f"""The following JSON patch could not be applied to the current file.
+
+Failure:
+{apply_error}
+
+Return ONLY one valid JSON object with this schema:
+{{
+  "file": "{filepath}",
+  "description": "short description",
+  "changes": [
+    {{
+      "old": "exact string to find",
+      "new": "replacement string"
+    }}
+  ]
+}}
+
+Requirements:
+- Keep "file" exactly "{filepath}".
+- Preserve the same intent if possible, but prioritize a patch that applies cleanly.
+- Every "old" string MUST appear exactly once in the current file text below.
+- Keep the patch minimal.
+- Do not add markdown fences or commentary.
+
+Current file:
+{file_source}
+
+Previous failed proposal:
+{prior_json}
+"""
+    repaired, timed_out = invoke_llm_with_timeout(
+        call_llm,
+        repair_prompt,
+        fail_streak=max(fail_streak, 1),
+    )
+    return parse_response(repaired), repaired, timed_out
+
+
 def invoke_llm_with_timeout(
     call_llm,
     prompt: str,
@@ -1470,7 +1519,7 @@ def invoke_llm_with_timeout(
     return llm_result[0], False
 
 
-def apply_changes(source: str, changes: list[dict]) -> str | None:
+def apply_changes(source: str, changes: list[dict]) -> tuple[str | None, str | None]:
     modified = source
     for change in changes:
         old = change.get("old", "")
@@ -1479,13 +1528,15 @@ def apply_changes(source: str, changes: list[dict]) -> str | None:
             continue
         count = modified.count(old)
         if count == 0:
-            log_to_file(f"APPLY FAIL: string not found: {old[:80]!r}")
-            return None
+            error = f"string not found: {old[:160]!r}"
+            log_to_file(f"APPLY FAIL: {error}")
+            return None, error
         if count > 1:
-            log_to_file(f"APPLY FAIL: ambiguous match ({count}x): {old[:80]!r}")
-            return None
+            error = f"ambiguous match ({count}x): {old[:160]!r}"
+            log_to_file(f"APPLY FAIL: {error}")
+            return None, error
         modified = modified.replace(old, new, 1)
-    return modified
+    return modified, None
 
 
 def validate_file(filepath: str, source: str, original_source: str | None = None) -> str | None:
@@ -2168,12 +2219,63 @@ def _run_text_mode(
             print(f"  File not found: {proposed_file}")
             continue
 
-        modified = apply_changes(original, proposal["changes"])
+        modified, apply_error = apply_changes(original, proposal["changes"])
         if modified is None:
-            print("  Could not apply patch. Skipping.")
-            log_result("-------", 0.0, "crash", proposed_file, f"APPLY FAIL: {description}")
-            history = get_results_history()
-            continue
+            print("  Could not apply patch. Trying one repair...")
+            try:
+                repaired_proposal, repaired_text, repair_timed_out = repair_apply_failure(
+                    proposal,
+                    proposed_file,
+                    original,
+                    apply_error or "unknown apply failure",
+                    call_llm,
+                    fail_streak=fail_streak,
+                )
+            except FatalAPIError as e:
+                print(f"Fatal API error: {e}")
+                break
+
+            if repair_timed_out:
+                print(f"  Patch repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                log_result(
+                    "-------",
+                    0.0,
+                    "crash",
+                    proposed_file,
+                    f"APPLY FAIL: {description} [repair timeout]",
+                )
+                history = get_results_history()
+                continue
+
+            if repaired_proposal and "changes" in repaired_proposal:
+                repaired_file = repaired_proposal.get("file", proposed_file)
+                if repaired_file == proposed_file:
+                    repaired_modified, repaired_error = apply_changes(
+                        original,
+                        repaired_proposal["changes"],
+                    )
+                    if repaired_modified is not None:
+                        proposal = repaired_proposal
+                        description = proposal.get("description", description)
+                        modified = repaired_modified
+                        print("  Recovered apply-fail with repair prompt.")
+                    else:
+                        apply_error = repaired_error or apply_error
+                else:
+                    apply_error = f"repair changed target file to {repaired_file}"
+
+            if modified is None:
+                print("  Could not apply patch after repair. Skipping.")
+                failure_detail = apply_error or "repair failed"
+                log_result(
+                    "-------",
+                    0.0,
+                    "crash",
+                    proposed_file,
+                    f"APPLY FAIL: {description} [{failure_detail}]",
+                )
+                history = get_results_history()
+                continue
 
         err = validate_file(proposed_file, modified, original_source=original)
         if err:
@@ -2780,14 +2882,68 @@ def main() -> None:
                     add_log(f"File not found: {proposed_file}")
                     continue
 
-                modified = apply_changes(original, proposal["changes"])
+                modified, apply_error = apply_changes(original, proposal["changes"])
                 if modified is None:
-                    add_log("Could not apply patch. Skipping.")
-                    log_result("-------", 0.0, "crash", proposed_file, f"APPLY FAIL: {description}")
-                    history = get_results_history()
-                    state["history"] = history
-                    refresh()
-                    continue
+                    add_log("Could not apply patch. Trying one repair...")
+                    try:
+                        repaired_proposal, repaired_text, repair_timed_out = repair_apply_failure(
+                            proposal,
+                            proposed_file,
+                            original,
+                            apply_error or "unknown apply failure",
+                            call_llm,
+                            fail_streak=fail_streak,
+                        )
+                    except FatalAPIError as e:
+                        add_log(f"Fatal API error: {e}")
+                        break
+
+                    if repair_timed_out:
+                        add_log(f"Patch repair timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s.")
+                        log_result(
+                            "-------",
+                            0.0,
+                            "crash",
+                            proposed_file,
+                            f"APPLY FAIL: {description} [repair timeout]",
+                        )
+                        history = get_results_history()
+                        state["history"] = history
+                        refresh()
+                        continue
+
+                    if repaired_proposal and "changes" in repaired_proposal:
+                        repaired_file = repaired_proposal.get("file", proposed_file)
+                        if repaired_file == proposed_file:
+                            repaired_modified, repaired_error = apply_changes(
+                                original,
+                                repaired_proposal["changes"],
+                            )
+                            if repaired_modified is not None:
+                                proposal = repaired_proposal
+                                description = proposal.get("description", description).replace("\t", " ")
+                                state["current_idea"] = f"[{proposed_file}] {description}"
+                                modified = repaired_modified
+                                add_log("Recovered apply-fail with repair prompt.")
+                            else:
+                                apply_error = repaired_error or apply_error
+                        else:
+                            apply_error = f"repair changed target file to {repaired_file}"
+
+                    if modified is None:
+                        add_log("Could not apply patch after repair. Skipping.")
+                        failure_detail = apply_error or "repair failed"
+                        log_result(
+                            "-------",
+                            0.0,
+                            "crash",
+                            proposed_file,
+                            f"APPLY FAIL: {description} [{failure_detail}]",
+                        )
+                        history = get_results_history()
+                        state["history"] = history
+                        refresh()
+                        continue
 
                 validate_err = validate_file(proposed_file, modified, original_source=original)
                 if validate_err:
