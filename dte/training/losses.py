@@ -44,7 +44,7 @@ class LossComputer:
         self.w_one_step = lw.get("one_step", 0.0)
         
         # Trajectory weighting configuration
-        self.trajectory_weighting = config.get("trajectory_weighting", "linear_decrease")
+        self.trajectory_weighting = config.get("trajectory_weighting", "uniform")
 
         # Physics weights are keyed by the residual names returned by the
         # physics loss object.  Fall back to zero for unknown residuals.
