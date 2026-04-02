@@ -83,11 +83,12 @@ class Encoder(eqx.Module):
 
         x = jnp.concatenate([scaled_state, log_params, scaled_control])
 
-        for layer in self.layers:
-            x = jax.nn.silu(layer(x))
+        for i, layer in enumerate(self.layers):
+            out = jax.nn.gelu(layer(x))
+            x = x + out if i > 0 else out
 
-        z_mean = jnp.tanh(self.mean_layer(x) * 0.05) * 5.0
-        z_logvar = jnp.tanh(self.logvar_layer(x) * 0.1) * 3.0 - 2.0
+        z_mean = self.mean_layer(x)
+        z_logvar = jnp.clip(self.logvar_layer(x), -10.0, 5.0)
 
         return z_mean, z_logvar
 

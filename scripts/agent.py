@@ -581,6 +581,47 @@ def ensure_gemini_context_cache(
     return cache_name
 
 
+def _is_gemini_cache_miss_error(error: Exception | str) -> bool:
+    """Return True when Gemini failed because the cached content ID is invalid."""
+
+    text = str(error).strip().lower()
+    if not text:
+        return False
+    return (
+        "cachedcontent not found" in text
+        or "cached_content not found" in text
+        or "cached content not found" in text
+    )
+
+
+def _call_gemini_with_cache_retry(
+    call_fn,
+    prompt: str,
+    *,
+    kwargs: dict,
+    refresh_cache,
+) -> str | None:
+    """Retry once when Gemini rejects an expired or missing cached-content ID."""
+
+    try:
+        return call_fn(prompt, **kwargs)
+    except FatalAPIError as exc:
+        cached_content = kwargs.get("cached_content")
+        if not cached_content or not _is_gemini_cache_miss_error(exc):
+            raise
+
+        log_to_file(f"Gemini cache miss for {cached_content}; refreshing and retrying once")
+        refreshed_cache = refresh_cache()
+        retry_kwargs = dict(kwargs)
+        if refreshed_cache:
+            retry_kwargs["cached_content"] = refreshed_cache
+        else:
+            retry_kwargs.pop("cached_content", None)
+            log_to_file("WARNING Gemini cache refresh failed; retrying without cached_content")
+
+        return call_fn(prompt, **retry_kwargs)
+
+
 def _tail_log_lines(path: Path, limit: int = 25) -> list[str]:
     if not path.exists():
         return []
@@ -1430,23 +1471,26 @@ MODIFIABLE_FILES = [
     "dte/training/losses.py",
 ]
 
-KNOWN_GOOD = """
-## Proven techniques for JAX Neural SDE digital twins:
-- Increasing trajectory loss weight (10.0 -> 20.0) for better long-horizon predictions
-- Reducing KL weight during early training (0.001 -> 0.0001 or 0.0)
-- Cosine annealing with warm restarts instead of linear warmup decay
-- Gradient clipping reduction (1.0 -> 0.5) for more stable SDE training
-- Increasing latent_dim (16 -> 32) for more expressive latent space
-- Adding weight decay (e.g., 1e-4) to encoder/decoder linear layers
-- Using EulerHeun instead of Heun for faster SDE steps (lower dt_ratio)
-- Adjusting diffusion scale initialisation (e.g., log-scale init at -1 instead of 0)
-- Reducing physics loss weights (0.1 -> 0.01) early in training to avoid gradient dominance
-- Larger batch_size for JAX compiled code (64 -> 128) to improve throughput
-- Curriculum training: start with shorter seq_len and grow it (curriculum_seq_len_start / _end in config)
-- Teacher forcing: high tf_weight early, anneal to 0 for free-rollout robustness (teacher_forcing_weight)
-- Stochastic SDE path (use_stochastic_training: true) vs deterministic mean trajectory
-- Increasing seq_len to expose the model to longer dependencies
-These are NOT guaranteed to work but are worth trying if not yet attempted.
+RESEARCH_PRIORITIES = """
+## Research priorities:
+- Do NOT spend experiments primarily on routine hyperparameter optimization. Assume Optuna or a separate sweep handles LR, batch size, clip, loss weights, latent_dim, hidden_dim, layer counts, seq_len, and similar scalar tuning.
+- Small hyperparameter changes are allowed only when they support a larger architectural, mathematical, or training-logic idea.
+- Prefer substantial code, logic, and mathematics changes in Python source files over YAML/config edits.
+- Focus on ideas like better drift/diffusion parameterisations, more stable latent stochasticity, improved rollout training logic, stronger physics-informed inductive biases, smarter residual/skip pathways, or novel consistency/objective formulations.
+- Favor out-of-the-box but maintainable changes that alter the training architecture or learning dynamics, not tiny coefficient nudges.
+- Bold changes are encouraged: adding/removing full helper functions, classes, pathways, or training mechanisms is good when the idea is coherent and testable in one file.
+- If you touch scripts/train.py, do it for algorithmic or training-loop logic reasons, not to expose or tweak another scalar hyperparameter.
+- Minimal support plumbing for a new algorithmic idea is acceptable. Pure config-only tuning should be a fallback, not the main search strategy.
+"""
+
+PROMISING_DIRECTIONS = """
+## Promising code-level directions:
+- Reparameterise diffusion or variance pathways to improve stability without collapsing uncertainty.
+- Add principled residual, gating, or skip structures that help long-horizon rollout fidelity.
+- Improve how one-step and rollout objectives interact so optimization better matches downstream trajectory quality.
+- Introduce architecture-level regularisers or consistency losses tied to latent dynamics rather than static scalar weights alone.
+- Improve numerical robustness in latent propagation, decoder coupling, or teacher-forcing transitions.
+- Add mathematically motivated structure that helps generalisation across systems while preserving the generic SystemSpec design.
 """
 
 JAX_PITFALLS = """
@@ -1606,9 +1650,10 @@ physics-informed latent Neural SDE (digital twin) trained on process system data
 {files_list}
 - Do NOT modify the experiment harness: scripts/autoresearch.py, dte/autoresearch/*, program.md
 - One idea per experiment. Keep changes minimal and surgical.
+- Do NOT focus on routine hyperparameter optimization or config sweeps. Scalar training/config tweaks are allowed only when they are clearly in service of a larger architectural, mathematical, or training-logic change.
 - Preserve the generic architecture. In dte/models and dte/training, do not add system-specific branches or bake config-like numbers into code; generic numeric algorithmic tweaks are fine, but bounds/scales/defaults/dims should live in config/SystemSpec.
 - Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
-{JAX_PITFALLS}{ARCHITECTURE_GUARDRAILS}{KNOWN_GOOD}{context_section}
+{JAX_PITFALLS}{ARCHITECTURE_GUARDRAILS}{RESEARCH_PRIORITIES}{PROMISING_DIRECTIONS}{context_section}
 ## Output contract
 - Respond with ONLY one JSON object.
 - Treat each entry in `changes` as an exact SEARCH/REPLACE block:
@@ -2532,13 +2577,21 @@ def _choose_file(history: list[dict], modifiable_files: list[str], forced_file: 
         return forced_file
     clean_files = [f for f in modifiable_files if not git_file_is_dirty(f)]
     candidates = clean_files or modifiable_files
+
+    def _research_priority(path: str) -> int:
+        if path.startswith(("dte/models/", "dte/training/")):
+            return 0
+        if path.endswith(".py"):
+            return 1
+        return 2
+
     # Prefer least-recently-tried files
     file_counts: dict[str, int] = {f: 0 for f in candidates}
     for r in history:
         fpath = r.get("file", "")
         if fpath in file_counts:
             file_counts[fpath] += 1
-    return min(file_counts, key=lambda f: file_counts[f])
+    return min(file_counts, key=lambda f: (_research_priority(f), file_counts[f], f))
 
 
 # ---------------------------------------------------------------------------
@@ -2840,7 +2893,7 @@ def main() -> None:
     agent_context = load_agent_context(ar_cfg)
     recent_run_context = build_recent_run_context()
 
-    default_model = str(agent_cfg.get("default_llm", DEFAULT_DEEPSEEK_MODEL))
+    default_model = str(agent_cfg.get("default_llm", DEFAULT_GEMINI_MODEL))
     if args.local:
         provider_name = "local"
         provider_model = "local"
@@ -2995,7 +3048,25 @@ def main() -> None:
                 kwargs["response_schema"] = response_schema
             if cached_content:
                 kwargs["cached_content"] = cached_content
-            return active_call_fn(prompt, **kwargs)
+
+            def refresh_cache() -> str | None:
+                nonlocal reason_cached_content
+                if not gemini_context_cache_enabled or active_provider_model != provider_model:
+                    return None
+                reason_cached_content = ensure_gemini_context_cache(
+                    static_prompt,
+                    provider_model,
+                    ttl=gemini_context_cache_ttl,
+                    min_tokens=gemini_context_cache_min_tokens,
+                )
+                return reason_cached_content
+
+            return _call_gemini_with_cache_retry(
+                active_call_fn,
+                prompt,
+                kwargs=kwargs,
+                refresh_cache=refresh_cache,
+            )
 
         if active_supports_temperature:
             return active_call_fn(prompt, temperature=temperature, thinking_level=thinking_level)

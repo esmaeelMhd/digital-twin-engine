@@ -1624,3 +1624,202 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-04-02 13:19:43] Committed: 3351049
 [2026-04-02 13:25:37] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
 [2026-04-02 13:42:11] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
+[2026-04-02 13:48:02] Created branch: autoresearch/apr02
+[2026-04-02 13:48:02] Ignoring stale agent_state.json from an earlier run
+[2026-04-02 13:48:02] Agent started: llm=DeepSeek deepseek-reasoner apply_llm=DeepSeek deepseek-reasoner cache=off max_runs=180 branch=autoresearch/apr02 prior=159 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-04-02 13:48:02] Ready. Best val_loss=0.029986 | 159 prior experiments
+[2026-04-02 13:48:02] Exp 160/180: querying DeepSeek deepseek-reasoner...
+[2026-04-02 13:48:02] Streak 10 failures — strategy change needed
+[2026-04-02 13:55:20] Gemini cache: created cachedContents/g914dprbje7uxkgtm1x8m7eg598gl12z4rjihv14 (3420 tokens)
+[2026-04-02 13:55:20] Resumed branch: autoresearch/apr02
+[2026-04-02 13:55:20] Ignoring stale agent_state.json from an earlier run
+[2026-04-02 13:55:20] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=on max_runs=180 branch=autoresearch/apr02 prior=159 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-04-02 13:55:20] Ready. Best val_loss=0.029986 | 159 prior experiments
+[2026-04-02 13:55:20] Exp 160/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 13:55:20] Streak 10 failures — strategy change needed
+[2026-04-02 13:55:33] Idea: Reduce peak learning rate from 5.0e-4 to 3.0e-4 to further stabilize optimization and find a deeper validation minimum.
+[2026-04-02 13:55:33] File: scripts/train.py
+[2026-04-02 13:55:33] Committed: 5bc22ca
+[2026-04-02 14:03:33] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
+[2026-04-02 14:07:20] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
+[2026-04-02 14:08:12] DISCARD: val_loss=2.657831 (best=0.029986)
+[2026-04-02 14:08:12] Elapsed: 759s
+[2026-04-02 14:08:18] Exp 161/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 14:08:18] Streak 10 failures — strategy change needed
+[2026-04-02 14:08:31] Idea: Cap maximum latent variance at 1.0 (logvar <= 0.0) by shifting the z_logvar bias from -2.0 to -3.0, perfectly aligning the maximum posterior uncertainty with the N(0,1) prior to prevent variance explosion.
+[2026-04-02 14:08:31] File: dte/models/encoder.py
+[2026-04-02 14:08:31] Committed: 609e8d2
+[2026-04-02 14:28:35] Gemini cache: created cachedContents/1kgsao9mzanblaroj2pv3x1asj38r5cf5m97raj3 (3515 tokens)
+[2026-04-02 14:28:35] Resumed branch: autoresearch/apr02
+[2026-04-02 14:28:35] Ignoring stale agent_state.json from an earlier run
+[2026-04-02 14:28:35] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=on max_runs=180 branch=autoresearch/apr02 prior=0 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-04-02 14:28:35] Running baseline experiment...
+[2026-04-02 14:39:55] Running lightweight eval for baseline...
+[2026-04-02 14:40:24] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-142835-baseline/eval_det/evaluation_summary.json
+[2026-04-02 14:40:24] Baseline: val_loss=0.198721
+[2026-04-02 14:40:24] Ready. Best val_loss=0.198721 | 1 prior experiments
+[2026-04-02 14:40:24] Exp 2/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 14:40:34] Idea: Replace leaky_relu with gelu in decoder hidden layers for better gradient flow and expressivity.
+[2026-04-02 14:40:34] File: dte/models/decoder.py
+[2026-04-02 14:40:35] Committed: 2a9051f
+[2026-04-02 14:52:17] Running lightweight eval...
+[2026-04-02 14:52:47] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-144035-dte-models-decoder-py-replace-leaky-relu-with-gelu-in-decoder-hidden-layers-for-better-gradient/eval_det/evaluation_summary.json
+[2026-04-02 14:52:47] KEEP: val_loss=0.195748 NEW BEST!
+[2026-04-02 14:52:48] git push: ok
+[2026-04-02 14:52:48] Elapsed: 702s
+[2026-04-02 14:52:54] Exp 3/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 14:53:09] Idea: Remove artificial 0.1 scaling on latent sampling to align sampled variance with KL divergence penalty.
+[2026-04-02 14:53:09] File: dte/models/digital_twin.py
+[2026-04-02 14:53:09] Committed: d68d0d5
+[2026-04-02 15:04:34] Running lightweight eval...
+[2026-04-02 15:05:04] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-145309-dte-models-digital-twin-py-remove-artificial-0-1-scaling-on-latent-sampling-to-align-sampled-var/eval_det/evaluation_summary.json
+[2026-04-02 15:05:04] KEEP: val_loss=0.195747 NEW BEST!
+[2026-04-02 15:05:05] git push: ok
+[2026-04-02 15:05:05] Elapsed: 685s
+[2026-04-02 15:05:11] Exp 4/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 15:05:24] Idea: Add residual connections and use GELU activations in the encoder hidden layers to improve gradient flow.
+[2026-04-02 15:05:24] File: dte/models/encoder.py
+[2026-04-02 15:05:24] Committed: c405f89
+[2026-04-02 15:16:55] Running lightweight eval...
+[2026-04-02 15:17:24] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-150524-dte-models-encoder-py-add-residual-connections-and-use-gelu-activations-in-the-encoder-hidden-la/eval_det/evaluation_summary.json
+[2026-04-02 15:17:24] KEEP: val_loss=0.191988 NEW BEST!
+[2026-04-02 15:17:26] git push: ok
+[2026-04-02 15:17:26] Elapsed: 690s
+[2026-04-02 15:17:32] Exp 5/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 15:17:42] Idea: Use GELU activations and add residual connections in LatentDiffusion to match LatentDrift and improve gradient flow.
+[2026-04-02 15:17:42] File: dte/models/latent_sde.py
+[2026-04-02 15:17:42] Committed: ac5322b
+[2026-04-02 15:28:59] Running lightweight eval...
+[2026-04-02 15:29:30] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-151743-dte-models-latent-sde-py-use-gelu-activations-and-add-residual-connections-in-latentdiffusion-to/eval_det/evaluation_summary.json
+[2026-04-02 15:29:30] KEEP: val_loss=0.189335 NEW BEST!
+[2026-04-02 15:29:31] git push: ok
+[2026-04-02 15:29:32] Elapsed: 677s
+[2026-04-02 15:29:38] Exp 6/180: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 15:29:38] ERROR Gemini: 403 PERMISSION_DENIED. {'error': {'code': 403, 'message': 'CachedContent not found (or permission denied)', 'status': 'PERMISSION_DENIED'}}
+[2026-04-02 15:29:38] Fatal API error: 403 PERMISSION_DENIED. {'error': {'code': 403, 'message': 'CachedContent not found (or permission denied)', 'status': 'PERMISSION_DENIED'}}
+[2026-04-02 15:42:01] WARNING Gemini: thinking_level=minimal is not supported for gemini-3.1-pro-preview; using low instead
+[2026-04-02 15:45:32] Gemini cache: created cachedContents/wv7c35xtqd3o1uxr8nn9zzlntkyqys2javj2laht (3515 tokens)
+[2026-04-02 15:45:32] Resumed branch: autoresearch/apr02
+[2026-04-02 15:45:32] Ignoring stale agent_state.json from an earlier run
+[2026-04-02 15:45:32] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=on max_runs=20 branch=autoresearch/apr02 prior=5 config=/home/ismayil/digital-twin-engine/configs/autoresearch_stage1.yaml
+[2026-04-02 15:45:32] Ready. Best val_loss=0.189335 | 5 prior experiments
+[2026-04-02 15:45:32] Exp 6/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 15:45:47] Idea: Increase Huber loss delta from 0.01 to 1.0 to provide stronger gradients for typical normalized state errors.
+[2026-04-02 15:45:47] File: dte/training/losses.py
+[2026-04-02 15:45:47] Committed: 908b557
+[2026-04-02 15:58:34] DISCARD: val_loss=224.811798 (best=0.189335)
+[2026-04-02 15:58:34] Elapsed: 768s
+[2026-04-02 15:58:40] Exp 7/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 15:59:13] Idea: Upgrade teacher-forced one-step prediction from Heun's method to RK4 for more accurate drift integration and better gradients.
+[2026-04-02 15:59:13] File: dte/training/trainer.py
+[2026-04-02 15:59:13] Committed: fc8adf5
+[2026-04-02 16:10:45] Running lightweight eval...
+[2026-04-02 16:11:13] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-155914-dte-training-trainer-py-upgrade-teacher-forced-one-step-prediction-from-heun-s-method-to-rk4-for/eval_det/evaluation_summary.json
+[2026-04-02 16:11:13] KEEP: val_loss=0.189329 NEW BEST!
+[2026-04-02 16:11:15] git push: ok
+[2026-04-02 16:11:15] Elapsed: 691s
+[2026-04-02 16:11:21] Exp 8/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 16:11:32] Idea: Remove the 10.0 * tanh soft-clipping on the decoder's raw output to improve expressivity and gradient flow.
+[2026-04-02 16:11:32] File: dte/models/decoder.py
+[2026-04-02 16:11:32] Committed: 703de4c
+[2026-04-02 16:22:13] Running lightweight eval...
+[2026-04-02 16:22:42] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-161132-dte-models-decoder-py-remove-the-10-0-tanh-soft-clipping-on-the-decoder-s-raw-output-to-improve/eval_det/evaluation_summary.json
+[2026-04-02 16:22:42] KEEP: val_loss=0.182620 NEW BEST!
+[2026-04-02 16:22:44] git push: ok
+[2026-04-02 16:22:44] Elapsed: 642s
+[2026-04-02 16:22:50] Exp 9/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 16:23:11] Idea: Clip z_logvar in the encoder output to [-10.0, 5.0] to prevent numerical instability in variance and KL divergence.
+[2026-04-02 16:23:11] File: dte/models/digital_twin.py
+[2026-04-02 16:23:11] Committed: 2be6f6d
+[2026-04-02 16:34:05] DISCARD: val_loss=0.182628 (best=0.182620)
+[2026-04-02 16:34:05] Elapsed: 654s
+[2026-04-02 16:34:11] Exp 10/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 16:34:23] Idea: Remove tanh soft-clipping on encoder outputs to improve expressivity, using simple clipping for logvar stability.
+[2026-04-02 16:34:23] File: dte/models/encoder.py
+[2026-04-02 16:34:23] Committed: a836066
+[2026-04-02 16:45:10] Running lightweight eval...
+[2026-04-02 16:45:38] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-163423-dte-models-encoder-py-remove-tanh-soft-clipping-on-encoder-outputs-to-improve-expressivity-using/eval_det/evaluation_summary.json
+[2026-04-02 16:45:38] KEEP: val_loss=0.169739 NEW BEST!
+[2026-04-02 16:45:39] git push: ok
+[2026-04-02 16:45:39] Elapsed: 646s
+[2026-04-02 16:45:45] Exp 11/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 16:45:45] ERROR Gemini: 403 PERMISSION_DENIED. {'error': {'code': 403, 'message': 'CachedContent not found (or permission denied)', 'status': 'PERMISSION_DENIED'}}
+[2026-04-02 16:45:45] Gemini cache miss for cachedContents/wv7c35xtqd3o1uxr8nn9zzlntkyqys2javj2laht; refreshing and retrying once
+[2026-04-02 16:45:47] Gemini cache: created cachedContents/481eg0j4srd7fey22z1hgvyikdx4j8xk5hslfdyy (3515 tokens)
+[2026-04-02 16:46:09] Idea: Upgrade deterministic mean_trajectory solver from Heun to Tsit5 for more accurate latent drift integration.
+[2026-04-02 16:46:09] File: dte/models/latent_sde.py
+[2026-04-02 16:46:09] Committed: 32527e1
+[2026-04-02 16:57:03] DISCARD: val_loss=0.169759 (best=0.169739)
+[2026-04-02 16:57:03] Elapsed: 655s
+[2026-04-02 16:57:09] Exp 12/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 16:57:21] Idea: Change default trajectory weighting from linear_decrease to uniform to equally penalize errors across the entire rollout horizon.
+[2026-04-02 16:57:21] File: dte/training/losses.py
+[2026-04-02 16:57:21] Committed: 17dbc40
+[2026-04-02 17:09:28] Running lightweight eval...
+[2026-04-02 17:09:56] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-165721-dte-training-losses-py-change-default-trajectory-weighting-from-linear-decrease-to-uniform-to-eq/eval_det/evaluation_summary.json
+[2026-04-02 17:09:56] KEEP: val_loss=0.166237 NEW BEST!
+[2026-04-02 17:10:01] git push: ok
+[2026-04-02 17:10:01] Elapsed: 726s
+[2026-04-02 17:10:07] Exp 13/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 17:10:40] Idea: Use sampled z0 instead of deterministic z_mean for mean_trajectory rollout to properly couple encoder variance with trajectory and reconstruction losses (fixing VAE training).
+[2026-04-02 17:10:40] File: dte/training/trainer.py
+[2026-04-02 17:10:40] Committed: 6d4f84f
+[2026-04-02 17:22:51] DISCARD: val_loss=0.180837 (best=0.166237)
+[2026-04-02 17:22:51] Elapsed: 730s
+[2026-04-02 17:22:57] Exp 14/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 17:23:22] Idea: Scale residual connections by 1/sqrt(2) to prevent variance explosion in the decoder MLP.
+[2026-04-02 17:23:22] File: dte/models/decoder.py
+[2026-04-02 17:23:22] Committed: 5cf1a7f
+[2026-04-02 17:35:43] DISCARD: val_loss=1.886127 (best=0.166237)
+[2026-04-02 17:35:43] Elapsed: 740s
+[2026-04-02 17:35:49] Exp 15/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 17:36:17] Idea: Double the hidden dimension of the LatentSDE to give the dynamics model more capacity than the static encoder/decoder.
+[2026-04-02 17:36:17] File: dte/models/digital_twin.py
+[2026-04-02 17:36:17] Committed: 240ad26
+[2026-04-02 17:48:26] DISCARD: val_loss=0.181674 (best=0.166237)
+[2026-04-02 17:48:26] Elapsed: 729s
+[2026-04-02 17:48:32] Exp 16/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 17:48:32] Streak 3 failures — trying simpler approach
+[2026-04-02 17:48:33] ERROR Gemini: 403 PERMISSION_DENIED. {'error': {'code': 403, 'message': 'CachedContent not found (or permission denied)', 'status': 'PERMISSION_DENIED'}}
+[2026-04-02 17:48:33] Gemini cache miss for cachedContents/481eg0j4srd7fey22z1hgvyikdx4j8xk5hslfdyy; refreshing and retrying once
+[2026-04-02 17:48:34] Gemini cache: created cachedContents/3x7qbfanrib4jim8hwnd9t6ej2z1fnjpkhl6wxn5 (3515 tokens)
+[2026-04-02 17:49:06] Idea: Add LayerNorm to the final hidden state of the encoder to stabilize latent projections.
+[2026-04-02 17:49:06] File: dte/models/encoder.py
+[2026-04-02 17:49:06] Committed: 927d646
+[2026-04-02 18:01:16] DISCARD: val_loss=1.244595 (best=0.166237)
+[2026-04-02 18:01:16] Elapsed: 731s
+[2026-04-02 18:01:22] Exp 17/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 18:01:22] Streak 4 failures — trying simpler approach
+[2026-04-02 18:01:46] Idea: Decrease integration step size in mean_trajectory to improve deterministic rollout accuracy.
+[2026-04-02 18:01:46] File: dte/models/latent_sde.py
+[2026-04-02 18:01:46] Committed: 74a4d67
+[2026-04-02 18:13:55] DISCARD: val_loss=0.166258 (best=0.166237)
+[2026-04-02 18:13:55] Elapsed: 729s
+[2026-04-02 18:14:01] Exp 18/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 18:14:01] Streak 5 failures — strategy change needed
+[2026-04-02 18:14:22] Idea: Increase Huber loss delta from 0.01 to 0.1 to expand the quadratic region and provide stronger gradients for moderate errors without exploding.
+[2026-04-02 18:14:22] File: dte/training/losses.py
+[2026-04-02 18:14:22] Committed: f444e3b
+[2026-04-02 18:26:17] DISCARD: val_loss=1.445432 (best=0.166237)
+[2026-04-02 18:26:17] Elapsed: 716s
+[2026-04-02 18:26:23] Exp 19/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 18:26:23] Streak 6 failures — strategy change needed
+[2026-04-02 18:27:28] Malformed LLM response. Attempting JSON repair...
+[2026-04-02 18:27:35] Recovered malformed LLM response.
+[2026-04-02 18:27:35] Idea: Compute reconstruction loss over all timesteps in the sequence instead of just the initial state to provide a stronger training signal for the autoencoder.
+[2026-04-02 18:27:35] File: dte/training/trainer.py
+[2026-04-02 18:27:35] APPLY FAIL: string not found: '            def teacher_forced_one_step(\n                state_t,\n                control_t,\n                control_tp1,\n                disturbance_t,\n       '
+[2026-04-02 18:27:35] Could not apply patch. Trying one repair...
+[2026-04-02 18:27:59] Recovered apply-fail with repair prompt.
+[2026-04-02 18:27:59] Committed: 2a73dda
+[2026-04-02 18:40:22] Running lightweight eval...
+[2026-04-02 18:40:53] Lightweight eval saved outputs/autoresearch_stage1/runs/20260402-182800-dte-training-trainer-py-compute-reconstruction-loss-over-all-timesteps-in-the-sequence-instead-o/eval_det/evaluation_summary.json
+[2026-04-02 18:40:53] KEEP: val_loss=0.158144 NEW BEST!
+[2026-04-02 18:40:55] git push: ok
+[2026-04-02 18:40:55] Elapsed: 742s
+[2026-04-02 18:41:01] Exp 20/20: querying Gemini gemini-3.1-pro-preview-customtools...
+[2026-04-02 18:41:18] Idea: Add LayerNorm to the decoder hidden layers to stabilize the residual MLP and improve gradient flow.
+[2026-04-02 18:41:18] File: dte/models/decoder.py
+[2026-04-02 18:41:18] Committed: f39725b
+[2026-04-02 18:53:57] DISCARD: val_loss=2.338220 (best=0.158144)
+[2026-04-02 18:53:57] Elapsed: 759s

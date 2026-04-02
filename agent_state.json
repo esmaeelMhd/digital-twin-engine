@@ -1,6 +1,0 @@
-{
-  "timestamp": "2026-04-02T13:19:43.147686",
-  "experiment_num": 160,
-  "description": "Add trajectory weighting configuration and exponential increase option",
-  "phase": "TRAINING"
-}
