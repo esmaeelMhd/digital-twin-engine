@@ -87,8 +87,8 @@ class Encoder(eqx.Module):
             out = jax.nn.gelu(layer(x))
             x = x + out if i > 0 else out
 
-        z_mean = jnp.tanh(self.mean_layer(x) * 0.05) * 5.0
-        z_logvar = jnp.tanh(self.logvar_layer(x) * 0.1) * 3.0 - 3.0
+        z_mean = self.mean_layer(x)
+        z_logvar = jnp.clip(self.logvar_layer(x), -10.0, 5.0)
 
         return z_mean, z_logvar
 
