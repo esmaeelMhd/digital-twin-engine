@@ -1902,3 +1902,6 @@ OSError: [Errno 36] File name too long: '/hom
 [2026-04-02 22:42:39] Gemini cache skipped: static context too small (2008 tokens < 2048)
 [2026-04-02 22:42:39] Created branch: autoresearch/overnight-20260402-224230-trainer-stage1
 [2026-04-02 22:42:39] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=off max_runs=8 branch=autoresearch/overnight-20260402-224230-trainer-stage1 prior=0 config=/home/ismayil/digital-twin-engine/configs/autoresearch_trainer_stage1.yaml
+[2026-04-02 22:47:01] Gemini cache: reusing cachedContents/418gby5ouo8kchno64joemxklr8klquk38di89aq
+[2026-04-02 22:47:01] Resumed branch: autoresearch/overnight-20260402-224653-latent-stage1
+[2026-04-02 22:47:01] Agent started: llm=Gemini gemini-3.1-pro-preview-customtools apply_llm=Gemini gemini-3.1-flash-lite-preview cache=on max_runs=16 branch=autoresearch/overnight-20260402-224653-latent-stage1 prior=8 config=/home/ismayil/digital-twin-engine/configs/autoresearch_latent_stage1.yaml
