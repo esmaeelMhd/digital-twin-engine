@@ -69,7 +69,8 @@ DEFAULT_AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.y
 ACTIVE_AUTORESEARCH_CONFIG = DEFAULT_AUTORESEARCH_CONFIG
 DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "outputs" / "autoresearch"
 DEFAULT_AGENT_CONTEXT_FILE = PROJECT_ROOT / "auto_research.md"
-LOG_FILE = PROJECT_ROOT / "agent.log"
+LOG_DIR = PROJECT_ROOT / "outputs" / "autoresearch_logs"
+LOG_FILE = LOG_DIR / "agent.log"
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
 
 
@@ -188,6 +189,7 @@ def wait_for_cool_gpu(max_wait: int = 120) -> bool:
 
 def log_to_file(msg: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     with LOG_FILE.open("a", encoding="utf-8") as f:
         f.write(f"[{ts}] {msg}\n")
         f.flush()

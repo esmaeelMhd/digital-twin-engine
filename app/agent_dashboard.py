@@ -18,7 +18,8 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.yaml"
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
-LOG_FILE = PROJECT_ROOT / "agent.log"
+LOG_FILE = PROJECT_ROOT / "outputs" / "autoresearch_logs" / "agent.log"
+LEGACY_LOG_FILE = PROJECT_ROOT / "agent.log"
 
 
 def _list_config_options() -> list[Path]:
@@ -187,6 +188,13 @@ def _tail_lines(path: Path, limit: int = 120) -> list[str]:
             return list(deque(handle, maxlen=limit))
     except Exception:
         return []
+
+
+def _tail_log_lines(limit: int = 120) -> list[str]:
+    lines = _tail_lines(LOG_FILE, limit=limit)
+    if lines:
+        return lines
+    return _tail_lines(LEGACY_LOG_FILE, limit=limit)
 
 
 def _agent_processes() -> list[dict]:
@@ -480,7 +488,7 @@ if not state and processes:
         }
         break
 gpu = _gpu_stats()
-log_tail = _tail_lines(LOG_FILE)
+log_tail = _tail_log_lines()
 
 st.title("🧪 Autoresearch Monitor")
 st.caption("Web dashboard for the autonomous experiment loop.")
