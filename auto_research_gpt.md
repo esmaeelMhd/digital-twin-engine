@@ -1,6 +1,6 @@
 # Digital Twin Engine — GPT Moonshot Ideas
 
-This file provides context for the moonshot ideas defined in `autoresearch_ideas_gpt.yaml`.
+This file provides context for the moonshot ideas defined in `auto_research_gpt_ideas.yaml`.
 These are deliberately high-variance experiments that could either move this repository
 toward a true **foundational model for physical systems** or make training materially worse.
 
@@ -72,7 +72,7 @@ clear long-range direction.
 ## Usage
 
 These ideas are meant to be used with:
-- `autoresearch_ideas_gpt.yaml` (structured experiment definitions)
+- `auto_research_gpt_ideas.yaml` (structured experiment definitions)
 - `configs/autoresearch_gpt_stage1.yaml` (conservative starting point)
 - `configs/autoresearch_gpt_stage2.yaml` (more aggressive settings for survivors)
 
@@ -80,5 +80,5 @@ Start with Tier 1 ideas and keep each experiment minimal. The highest-upside dir
 in this set is whether the repo can learn a **shared cross-system backbone** without
 catastrophic negative transfer.
 
-See `autoresearch_ideas_grok.yaml`, `autoresearch_ideas_grok.md`, and
+See `auto_research_grok_ideas.yaml`, `auto_research_grok.md`, and
 `auto_research_claude_ideas.yaml` for related campaigns already in the repo.

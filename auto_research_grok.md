@@ -1,6 +1,6 @@
 # Digital Twin Engine — Grok Moonshot Ideas
 
-This file provides context for the moonshot ideas defined in `autoresearch_ideas_grok.yaml`.
+This file provides context for the moonshot ideas defined in `auto_research_grok_ideas.yaml`.
 These are deliberately high-variance experiments that could either transform this repository
 into a true **foundational model for physical systems** or cause training collapse.
 
@@ -70,12 +70,12 @@ or external dependencies. Documented for future manual exploration.
 ## Usage
 
 These ideas are meant to be used with:
-- `autoresearch_ideas_grok.yaml` (the structured experiment definitions)
+- `auto_research_grok_ideas.yaml` (the structured experiment definitions)
 - `configs/autoresearch_grok_stage1.yaml` (conservative hyperparameters)
 - `configs/autoresearch_grok_stage2.yaml` (more aggressive settings)
 
 Run experiments using the autoresearch harness, starting with Tier 1 ideas.
 Each experiment should make **one minimal change** to the specified `target_file`.
 
-See `auto_research_claude_ideas.yaml` and `autoresearch_ideas_gemini.yaml` for
+See `auto_research_claude_ideas.yaml` and `auto_research_gemini_ideas.yaml` for
 similarly structured campaigns.
