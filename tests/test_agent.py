@@ -1,3 +1,5 @@
+import json
+
 import scripts.agent as agent_module
 
 from scripts.agent import (
@@ -10,8 +12,10 @@ from scripts.agent import (
     build_dynamic_prompt,
     build_prompt,
     build_static_prompt_context,
+    get_current_reference_loss,
     load_structured_ideas,
     rollback_experiment_change,
+    run_rebaseline_experiment,
     select_next_structured_idea,
 )
 
@@ -229,6 +233,44 @@ def test_annotate_description_with_idea_is_idempotent():
         annotate_description_with_idea(description, "latent_diffusion_floor")
         == description
     )
+
+
+def test_get_current_reference_loss_prefers_promoted_baseline(tmp_path, monkeypatch):
+    baseline_dir = tmp_path / "baseline"
+    baseline_dir.mkdir(parents=True)
+    (baseline_dir / "metadata.json").write_text(
+        json.dumps({"metric_name": "best_val_loss", "metric_value": 0.42}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(agent_module, "get_workspace_dir", lambda: tmp_path)
+
+    loss = get_current_reference_loss(
+        [{"description": "older best", "file": "foo.py", "status": "keep", "val_loss": 0.1}]
+    )
+
+    assert loss == 0.42
+
+
+def test_run_rebaseline_experiment_restores_previous_baseline_on_failure(tmp_path, monkeypatch):
+    baseline_dir = tmp_path / "baseline"
+    baseline_dir.mkdir(parents=True)
+    baseline_payload = {"metric_name": "best_val_loss", "metric_value": 0.123}
+    (baseline_dir / "metadata.json").write_text(json.dumps(baseline_payload), encoding="utf-8")
+
+    monkeypatch.setattr(agent_module, "get_workspace_dir", lambda: tmp_path)
+    monkeypatch.setattr(agent_module, "log_to_file", lambda msg: None)
+    monkeypatch.setattr(
+        agent_module,
+        "run_experiment",
+        lambda description, on_line=None: {"status": "crash", "baseline_promoted": False},
+    )
+
+    result = run_rebaseline_experiment()
+
+    assert result == {"status": "crash", "baseline_promoted": False}
+    restored = json.loads((tmp_path / "baseline" / "metadata.json").read_text(encoding="utf-8"))
+    assert restored == baseline_payload
 
 
 def test_rollback_experiment_change_restores_original_content(tmp_path, monkeypatch):

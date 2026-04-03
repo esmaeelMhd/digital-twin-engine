@@ -7,6 +7,7 @@ keeps improvements, reverts failures, and shows a Rich TUI dashboard.
 Usage:
     python scripts/agent.py                    # Provider from autoresearch config
     python scripts/agent.py --config configs/autoresearch_stage1.yaml
+    python scripts/agent.py --rebaseline       # Refresh workspace baseline from current code
     python scripts/agent.py --deepseek         # DeepSeek reasoning model
     python scripts/agent.py --claude           # Claude Sonnet 4.6
     python scripts/agent.py --opus             # Claude Opus 4.6 with 32k thinking
@@ -515,6 +516,50 @@ def get_results_history() -> list[dict]:
     return rows
 
 
+def _coerce_metric_value(value) -> float | None:
+    try:
+        metric_value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return metric_value if metric_value > 0.0 else None
+
+
+def get_promoted_baseline_metadata() -> dict | None:
+    baseline_dir = get_workspace_dir() / "baseline"
+    metadata = _read_json_if_exists(baseline_dir / "metadata.json")
+    if metadata:
+        metric_value = _coerce_metric_value(metadata.get("metric_value"))
+        if metric_value is not None:
+            enriched = dict(metadata)
+            enriched["metric_value"] = metric_value
+            return enriched
+
+    summary = _read_json_if_exists(baseline_dir / "summary.json")
+    if summary:
+        metric_name = str(load_autoresearch_config().get("research", {}).get("metric_name", "best_val_loss"))
+        metric_value = _coerce_metric_value(summary.get(metric_name))
+        if metric_value is not None:
+            return {
+                "metric_name": metric_name,
+                "metric_value": metric_value,
+                "description": "baseline summary fallback",
+            }
+
+    return None
+
+
+def get_current_reference_loss(history: list[dict] | None = None) -> float:
+    baseline_metadata = get_promoted_baseline_metadata()
+    if baseline_metadata:
+        metric_value = _coerce_metric_value(baseline_metadata.get("metric_value"))
+        if metric_value is not None:
+            return metric_value
+
+    history = history if history is not None else get_results_history()
+    valid_losses = [r["val_loss"] for r in history if r.get("val_loss", 999.0) < 999.0]
+    return min(valid_losses) if valid_losses else 999.0
+
+
 def get_runs_dir() -> Path:
     """Resolve the active autoresearch runs directory."""
 
@@ -916,7 +961,7 @@ def build_recent_run_context(limit: int = 8) -> str:
 
         lines.append(line[:700])
 
-    baseline_metadata = _read_json_if_exists(get_workspace_dir() / "baseline" / "metadata.json")
+    baseline_metadata = get_promoted_baseline_metadata()
     baseline_block = ""
     if baseline_metadata:
         baseline_metric = baseline_metadata.get("metric_value")
@@ -2579,6 +2624,72 @@ def run_experiment(
     return None
 
 
+def _unique_baseline_archive_dir() -> Path:
+    archive_root = get_workspace_dir() / ".baseline_archive"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate = archive_root / timestamp
+    suffix = 1
+    while candidate.exists():
+        suffix += 1
+        candidate = archive_root / f"{timestamp}-{suffix}"
+    return candidate
+
+
+def archive_promoted_baseline() -> Path | None:
+    baseline_dir = get_workspace_dir() / "baseline"
+    if not baseline_dir.exists():
+        return None
+
+    archive_dir = _unique_baseline_archive_dir()
+    archive_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(baseline_dir), str(archive_dir))
+    log_to_file(f"Archived promoted baseline to {_display_path(archive_dir)}")
+    return archive_dir
+
+
+def restore_archived_baseline(archive_dir: Path | None) -> None:
+    if not archive_dir or not archive_dir.exists():
+        return
+
+    baseline_dir = get_workspace_dir() / "baseline"
+    if baseline_dir.exists():
+        shutil.rmtree(baseline_dir)
+    shutil.move(str(archive_dir), str(baseline_dir))
+    log_to_file(f"Restored promoted baseline from {_display_path(archive_dir)}")
+
+
+def discard_archived_baseline(archive_dir: Path | None) -> None:
+    if not archive_dir or not archive_dir.exists():
+        return
+    shutil.rmtree(archive_dir)
+
+
+def run_rebaseline_experiment(on_line: callable | None = None) -> dict | None:
+    archived_baseline = archive_promoted_baseline()
+    refresh_note = "Refreshing promoted baseline against the current branch state..."
+    log_to_file(refresh_note)
+    if on_line:
+        on_line(refresh_note)
+
+    result = run_experiment("baseline", on_line=on_line)
+    promoted = bool(result and result.get("baseline_promoted"))
+
+    if promoted:
+        discard_archived_baseline(archived_baseline)
+        return result
+
+    restore_archived_baseline(archived_baseline)
+    restore_note = (
+        "Baseline refresh failed; restored previous promoted baseline."
+        if archived_baseline
+        else "Baseline refresh failed."
+    )
+    log_to_file(restore_note)
+    if on_line:
+        on_line(restore_note)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Rich TUI dashboard
 # ---------------------------------------------------------------------------
@@ -3268,6 +3379,11 @@ def main() -> None:
     )
     parser.add_argument("--max-runs",    type=int, default=100)
     parser.add_argument("--resume",      action="store_true", help="Resume existing branch")
+    parser.add_argument(
+        "--rebaseline",
+        action="store_true",
+        help="Run a fresh baseline against the current branch and promote it before new experiments",
+    )
     parser.add_argument("--tag",         type=str,  default=None, help="Branch tag (default: date)")
     parser.add_argument("--no-dashboard", action="store_true", help="Text-only output")
     parser.add_argument("--file",        type=str,  default=None, help="Restrict to one modifiable file")
@@ -3537,8 +3653,7 @@ def main() -> None:
     # Load history
     history = get_results_history()
     prior_count = len(history)
-    valid_losses = [r["val_loss"] for r in history if r["val_loss"] < 999]
-    best_loss = min(valid_losses) if valid_losses else 999.0
+    best_loss = get_current_reference_loss(history)
 
     log_to_file(
         f"Agent started: llm={llm_name} apply_llm={apply_llm_name} "
@@ -3547,8 +3662,9 @@ def main() -> None:
     )
 
     if args.no_dashboard:
-        if not history:
-            print("Running baseline experiment...")
+        if args.rebaseline or not history:
+            baseline_label = "Running fresh baseline experiment..." if args.rebaseline and history else "Running baseline experiment..."
+            print(baseline_label)
             write_state(
                 prior_count + 1,
                 "baseline",
@@ -3561,7 +3677,7 @@ def main() -> None:
                     "current_idea": "baseline",
                 },
             )
-            result = run_experiment("baseline")
+            result = run_rebaseline_experiment() if args.rebaseline else run_experiment("baseline")
             if result and result.get("status") in ("keep", "discard"):
                 val_loss = float(result.get("metric_value", 999.0) or 999.0)
                 if should_run_lightweight_eval(result, prior_count + 1, eval_settings):
@@ -3573,7 +3689,8 @@ def main() -> None:
                         eval_settings,
                         on_line=lambda line: print(f"  {line}"),
                     )
-                best_loss = val_loss
+                history = get_results_history()
+                best_loss = get_current_reference_loss(history)
                 print(f"Baseline: val_loss={val_loss:.6f}")
             elif result and result.get("status") == "crash":
                 print("Baseline failed inside autoresearch harness.")
@@ -3672,10 +3789,18 @@ def main() -> None:
                 log_to_file(f"Dashboard error: {e}")
 
         # ---- Baseline ----
-        if not history:
+        if args.rebaseline or not history:
             set_phase("BASELINE")
-            state["current_idea"] = "Establishing baseline (no code changes)"
-            add_log("Running baseline experiment...")
+            state["current_idea"] = (
+                "Refreshing promoted baseline from current branch"
+                if args.rebaseline and history
+                else "Establishing baseline (no code changes)"
+            )
+            add_log(
+                "Running fresh baseline experiment..."
+                if args.rebaseline and history
+                else "Running baseline experiment..."
+            )
             refresh()
 
             if not wait_for_cool_gpu():
@@ -3688,7 +3813,11 @@ def main() -> None:
             baseline_holder: list[dict | None] = [None]
 
             def _baseline_thread() -> None:
-                baseline_holder[0] = run_experiment("baseline", on_line=on_training_line)
+                baseline_holder[0] = (
+                    run_rebaseline_experiment(on_line=on_training_line)
+                    if args.rebaseline
+                    else run_experiment("baseline", on_line=on_training_line)
+                )
 
             bt = threading.Thread(target=_baseline_thread, daemon=True)
             bt.start()
@@ -3713,7 +3842,8 @@ def main() -> None:
                         eval_settings,
                         on_line=add_log,
                     )
-                best_loss = val_loss
+                history = get_results_history()
+                best_loss = get_current_reference_loss(history)
                 state["best_loss"] = best_loss
                 add_log(f"Baseline: val_loss={val_loss:.6f}")
             elif result and result.get("status") == "crash":
@@ -3740,8 +3870,7 @@ def main() -> None:
             recent_run_context = build_recent_run_context()
             refresh()
 
-        best_loss_valid = [r["val_loss"] for r in history if r["val_loss"] < 999]
-        best_loss = min(best_loss_valid) if best_loss_valid else 999.0
+        best_loss = get_current_reference_loss(history)
         state["best_loss"] = best_loss
         add_log(f"Ready. Best val_loss={best_loss:.6f} | {len(history)} prior experiments")
         refresh()

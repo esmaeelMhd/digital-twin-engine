@@ -38,5 +38,6 @@ agent:
   eval_skip_ensemble: true
   cooldown_between_experiments: 10
   context_file: auto_research_encoder.md
+  ideas_file: auto_research_encoder_ideas.yaml
   modifiable_files:
     - dte/models/encoder.py
