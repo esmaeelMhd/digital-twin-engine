@@ -14,6 +14,7 @@ class Encoder(eqx.Module):
     """
 
     layers: list
+    context_layers: list
     mean_layer: eqx.nn.Linear
     logvar_layer: eqx.nn.Linear
 
@@ -48,9 +49,13 @@ class Encoder(eqx.Module):
         input_dim = state_dim + param_dim + control_dim
 
         self.layers = []
+        self.context_layers = []
         for i in range(n_layers):
-            in_dim = input_dim if i == 0 else hidden_dim
-            self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[i]))
+            in_dim = state_dim if i == 0 else hidden_dim
+            ctx_dim = param_dim + control_dim if i == 0 else hidden_dim
+            k1, k2 = jax.random.split(keys[i])
+            self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=k1))
+            self.context_layers.append(eqx.nn.Linear(ctx_dim, hidden_dim * 2, key=k2))
 
         self.mean_layer = eqx.nn.Linear(hidden_dim, latent_dim, key=keys[-2])
         self.logvar_layer = eqx.nn.Linear(hidden_dim, latent_dim, key=keys[-1])
@@ -81,11 +86,16 @@ class Encoder(eqx.Module):
         scaled_control = (control - self.control_center) * self.control_scale
         log_params = jnp.sign(params) * jnp.log1p(jnp.abs(params)) * self.param_scale
 
-        x = jnp.concatenate([scaled_state, log_params, scaled_control])
+        x = scaled_state
+        ctx = jnp.concatenate([log_params, scaled_control])
 
-        for i, layer in enumerate(self.layers):
-            out = jax.nn.gelu(layer(x))
+        for i, (layer, ctx_layer) in enumerate(zip(self.layers, self.context_layers)):
+            ctx_out = ctx_layer(ctx)
+            gamma, beta = jnp.split(ctx_out, 2, axis=-1)
+            out = layer(x)
+            out = jax.nn.gelu(out * (1.0 + gamma) + beta)
             x = x + out if i > 0 else out
+            ctx = jax.nn.gelu(gamma)
 
         z_mean = self.mean_layer(x)
         z_logvar = jnp.clip(self.logvar_layer(x), -10.0, 5.0)
