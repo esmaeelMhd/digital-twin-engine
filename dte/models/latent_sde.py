@@ -20,6 +20,7 @@ class LatentDrift(eqx.Module):
     disturbance_center: Float[Array, "disturbance_dim"]
     disturbance_scale: Float[Array, "disturbance_dim"]
     param_scale: float = eqx.field(static=True)
+    shared_gate: eqx.nn.Linear
 
     def __init__(
         self,
@@ -37,6 +38,8 @@ class LatentDrift(eqx.Module):
         *,
         key: PRNGKeyArray,
     ):
+        k1, k2 = jax.random.split(key)
+        self.shared_gate = eqx.nn.Linear(latent_dim, 1, key=k1)
         keys = jax.random.split(key, n_layers + 1)
 
         input_dim = latent_dim + control_dim + disturbance_dim + param_dim
