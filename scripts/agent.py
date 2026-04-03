@@ -1,6 +1,6 @@
 """Autonomous research agent for Digital Twin Engine.
 
-Loops indefinitely: asks an LLM to propose a single-file code change,
+Loops indefinitely: asks an LLM to propose an experiment patch,
 applies it, runs the autoresearch harness (scripts/autoresearch.py),
 keeps improvements, reverts failures, and shows a Rich TUI dashboard.
 
@@ -325,6 +325,141 @@ def load_agent_context(config: dict | None = None) -> str:
     if len(text) > 12000:
         text = text[:12000].rstrip() + "\n\n[Context truncated]"
     return text
+
+
+def get_execution_mode(config: dict | None = None) -> str:
+    """Resolve the agent execution mode from config."""
+
+    agent_cfg = (config or {}).get("agent", {})
+    mode = str(agent_cfg.get("execution_mode", DEFAULT_EXECUTION_MODE)).strip().lower()
+    return "multi_file" if mode == "multi_file" else "single_file"
+
+
+def _normalize_repo_relative_path(raw_path: str) -> str | None:
+    """Return a normalized repo-relative path, or None when invalid."""
+
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+
+    candidate = Path(text)
+    if candidate.is_absolute():
+        return None
+
+    try:
+        resolved = (PROJECT_ROOT / candidate).resolve()
+        relative = resolved.relative_to(PROJECT_ROOT.resolve())
+    except Exception:
+        return None
+    return relative.as_posix()
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return ordered
+
+
+def get_editable_targets(config: dict | None = None) -> list[str]:
+    """Resolve the configured editable files or directories."""
+
+    agent_cfg = (config or {}).get("agent", {})
+    raw_targets = agent_cfg.get("modifiable_paths")
+    if raw_targets is None:
+        raw_targets = agent_cfg.get("modifiable_files", MODIFIABLE_FILES)
+
+    normalized: list[str] = []
+    for target in _normalize_text_list(raw_targets):
+        normalized_target = _normalize_repo_relative_path(target)
+        if normalized_target:
+            normalized.append(normalized_target)
+    return _dedupe_preserve_order(normalized)
+
+
+def get_forbidden_paths(config: dict | None = None) -> list[str]:
+    """Resolve the configured forbidden files or directories."""
+
+    agent_cfg = (config or {}).get("agent", {})
+    raw_paths = agent_cfg.get("forbidden_paths", DEFAULT_FORBIDDEN_PATHS)
+    normalized: list[str] = []
+    for target in _normalize_text_list(raw_paths):
+        normalized_target = _normalize_repo_relative_path(target)
+        if normalized_target:
+            normalized.append(normalized_target)
+    return _dedupe_preserve_order(normalized)
+
+
+def _path_is_within_target(path: str, target: str) -> bool:
+    return path == target or path.startswith(target + "/")
+
+
+def is_forbidden_edit_path(path: str, forbidden_paths: list[str]) -> bool:
+    normalized_path = _normalize_repo_relative_path(path)
+    if not normalized_path:
+        return True
+    return any(_path_is_within_target(normalized_path, blocked) for blocked in forbidden_paths)
+
+
+def is_allowed_edit_path(
+    path: str,
+    editable_targets: list[str],
+    forbidden_paths: list[str] | None = None,
+) -> bool:
+    """Return True when a path is inside the configured editable surface."""
+
+    normalized_path = _normalize_repo_relative_path(path)
+    if not normalized_path:
+        return False
+
+    if forbidden_paths and is_forbidden_edit_path(normalized_path, forbidden_paths):
+        return False
+
+    for target in editable_targets:
+        absolute_target = PROJECT_ROOT / target
+        if absolute_target.is_dir():
+            if _path_is_within_target(normalized_path, target):
+                return True
+        elif normalized_path == target:
+            return True
+    return False
+
+
+def list_editable_repo_files(
+    editable_targets: list[str],
+    forbidden_paths: list[str] | None = None,
+) -> list[str]:
+    """List editable files beneath the configured editable files/directories."""
+
+    collected: list[str] = []
+    for target in editable_targets:
+        absolute_target = PROJECT_ROOT / target
+        if absolute_target.is_dir():
+            for path in sorted(absolute_target.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(PROJECT_ROOT).as_posix()
+                if forbidden_paths and is_forbidden_edit_path(relative, forbidden_paths):
+                    continue
+                collected.append(relative)
+        elif absolute_target.is_file():
+            if forbidden_paths and is_forbidden_edit_path(target, forbidden_paths):
+                continue
+            collected.append(target)
+    return _dedupe_preserve_order(collected)
+
+
+def summarize_changed_paths(paths: list[str]) -> str:
+    """Return a concise label for one or more changed files."""
+
+    if not paths:
+        return ""
+    if len(paths) == 1:
+        return paths[0]
+    return f"{paths[0]} (+{len(paths) - 1} files)"
 
 
 def _normalize_text_list(value) -> list[str]:
@@ -1084,7 +1219,38 @@ def git_file_is_dirty(filepath: str) -> bool:
 
 
 def write_repo_file(filepath: str, source: str) -> None:
-    (PROJECT_ROOT / filepath).write_text(source, encoding="utf-8")
+    target = PROJECT_ROOT / filepath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(source, encoding="utf-8")
+
+
+def restore_repo_file(filepath: str, original_source: str | None) -> None:
+    """Restore a file to its pre-experiment state."""
+
+    target = PROJECT_ROOT / filepath
+    if original_source is None:
+        if target.exists():
+            target.unlink()
+    else:
+        write_repo_file(filepath, original_source)
+    git("restore", "--staged", "--", filepath)
+
+
+def write_repo_files_atomically(
+    modified_sources: dict[str, str],
+    original_sources: dict[str, str | None],
+) -> None:
+    """Write multiple files and restore already-written ones on failure."""
+
+    written_paths: list[str] = []
+    try:
+        for filepath, source in modified_sources.items():
+            write_repo_file(filepath, source)
+            written_paths.append(filepath)
+    except Exception:
+        for filepath in reversed(written_paths):
+            restore_repo_file(filepath, original_sources.get(filepath))
+        raise
 
 
 def rollback_experiment_change(
@@ -1097,6 +1263,24 @@ def rollback_experiment_change(
     """Restore the touched file to its pre-experiment contents."""
 
     if not filepath or original_source is None:
+        return
+
+    rollback_experiment_changes(
+        {filepath: original_source},
+        committed=committed,
+        commit_sha=commit_sha,
+    )
+
+
+def rollback_experiment_changes(
+    original_sources: dict[str, str | None],
+    *,
+    committed: bool,
+    commit_sha: str | None = None,
+) -> None:
+    """Restore one or more files to their pre-experiment contents."""
+
+    if not original_sources:
         return
 
     if committed and commit_sha:
@@ -1114,8 +1298,8 @@ def rollback_experiment_change(
             )
     elif committed:
         git_reset_last_commit()
-    write_repo_file(filepath, original_source)
-    git("restore", "--staged", "--", filepath)
+    for filepath, original_source in original_sources.items():
+        restore_repo_file(filepath, original_source)
 
 
 def git_push() -> None:
@@ -1158,6 +1342,14 @@ DEFAULT_DEEPSEEK_MODEL = "deepseek-reasoner"
 DEFAULT_GROK_MODEL = "grok-3"
 DEFAULT_DEEPSEEK_MAX_TOKENS = 64000
 GEMINI_CACHE_MIN_TOKENS = 2048
+DEFAULT_EXECUTION_MODE = "single_file"
+DEFAULT_FORBIDDEN_PATHS = [
+    "scripts/autoresearch.py",
+    "dte/autoresearch",
+    "scripts/agent.py",
+    "auto_research.md",
+    "program.md",
+]
 PATCH_RESPONSE_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1200,6 +1392,79 @@ PATCH_RESPONSE_JSON_SCHEMA = {
         },
     },
     "required": ["file", "description", "changes"],
+    "additionalProperties": False,
+}
+MULTI_FILE_SELECTION_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "idea_id": {
+            "type": "string",
+            "description": "Optional structured idea identifier when following an ideas backlog.",
+        },
+        "description": {
+            "type": "string",
+            "description": "Short one-line description of the proposed change.",
+        },
+        "files": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "string",
+                "description": "Repo-relative path to an existing file that should be opened for editing.",
+            },
+        },
+    },
+    "required": ["description", "files"],
+    "additionalProperties": False,
+}
+MULTI_FILE_PATCH_RESPONSE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "idea_id": {
+            "type": "string",
+            "description": "Optional structured idea identifier when following an ideas backlog.",
+        },
+        "description": {
+            "type": "string",
+            "description": "Short one-line description of the proposed change.",
+        },
+        "files": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Repo-relative path to modify or create.",
+                    },
+                    "operation": {
+                        "type": "string",
+                        "description": "Optional file operation. Use modify for existing files or create for new files.",
+                    },
+                    "changes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old": {"type": "string"},
+                                "new": {"type": "string"},
+                            },
+                            "required": ["old", "new"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "contents": {
+                        "type": "string",
+                        "description": "Full file contents when operation=create.",
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["description", "files"],
     "additionalProperties": False,
 }
 
@@ -1860,8 +2125,10 @@ def _history_has_attempted_idea(
 
 def get_eligible_structured_ideas(
     ideas: list[dict],
-    modifiable_files: list[str],
+    editable_targets: list[str],
     forced_file: str | None,
+    execution_mode: str = DEFAULT_EXECUTION_MODE,
+    forbidden_paths: list[str] | None = None,
 ) -> list[dict]:
     eligible: list[dict] = []
     for idea in ideas:
@@ -1872,7 +2139,16 @@ def get_eligible_structured_ideas(
         if forced_file and not target_file:
             idea_copy["target_file"] = forced_file
             target_file = forced_file
-        if target_file and target_file not in modifiable_files:
+        if target_file:
+            if execution_mode == "multi_file":
+                if not is_allowed_edit_path(target_file, editable_targets, forbidden_paths):
+                    continue
+            elif target_file not in editable_targets:
+                continue
+        elif forced_file and execution_mode == "multi_file":
+            if not is_allowed_edit_path(forced_file, editable_targets, forbidden_paths):
+                continue
+        elif forced_file and execution_mode != "multi_file" and forced_file not in editable_targets:
             continue
         eligible.append(idea_copy)
     return eligible
@@ -1889,20 +2165,32 @@ def count_resolved_structured_ideas(history: list[dict], eligible_ideas: list[di
 def select_next_structured_idea(
     ideas: list[dict],
     history: list[dict],
-    modifiable_files: list[str],
+    editable_targets: list[str],
     forced_file: str | None,
+    execution_mode: str = DEFAULT_EXECUTION_MODE,
+    forbidden_paths: list[str] | None = None,
 ) -> dict | None:
     """Pick the next pending idea from the backlog."""
 
     candidates: list[dict] = []
-    for idea in get_eligible_structured_ideas(ideas, modifiable_files, forced_file):
+    for idea in get_eligible_structured_ideas(
+        ideas,
+        editable_targets,
+        forced_file,
+        execution_mode=execution_mode,
+        forbidden_paths=forbidden_paths,
+    ):
         if _history_has_attempted_idea(history, idea, resolved_only=True):
             continue
         candidates.append(idea)
     return candidates[0] if candidates else None
 
 
-def build_structured_ideas_section(ideas: list[dict], selected_idea: dict | None) -> str:
+def build_structured_ideas_section(
+    ideas: list[dict],
+    selected_idea: dict | None,
+    execution_mode: str = DEFAULT_EXECUTION_MODE,
+) -> str:
     if not ideas:
         return ""
 
@@ -1945,22 +2233,35 @@ def build_structured_ideas_section(ideas: list[dict], selected_idea: dict | None
         lines.append(
             "- Use exactly this idea_id in the response. Do not invent a different backlog item or a new idea_id."
         )
-        lines.append(
-            "- Stay on this target file and keep the implementation aligned with the queued title/rationale."
-        )
+        if execution_mode == "multi_file":
+            lines.append(
+                "- Keep the implementation anchored on this queued idea. Additional files are allowed when needed."
+            )
+        else:
+            lines.append(
+                "- Stay on this target file and keep the implementation aligned with the queued title/rationale."
+            )
 
     return "\n".join(lines) + "\n"
 
 
-def enforce_selected_idea_on_proposal(proposal: dict, selected_idea: dict | None) -> dict:
+def enforce_selected_idea_on_proposal(
+    proposal: dict,
+    selected_idea: dict | None,
+    execution_mode: str = DEFAULT_EXECUTION_MODE,
+) -> dict:
     if not selected_idea:
         return proposal
 
     coerced = dict(proposal)
     coerced["idea_id"] = selected_idea["id"]
     target_file = str(selected_idea.get("target_file", "")).strip()
-    if target_file:
+    if target_file and execution_mode != "multi_file":
         coerced["file"] = target_file
+    elif target_file and execution_mode == "multi_file":
+        files = _normalize_text_list(coerced.get("files"))
+        if target_file not in files:
+            coerced["files"] = [target_file] + files
     return coerced
 
 
@@ -1968,10 +2269,18 @@ def effective_run_target(
     requested_max_runs: int,
     history: list[dict],
     structured_ideas: list[dict],
-    modifiable_files: list[str],
+    editable_targets: list[str],
     forced_file: str | None,
+    execution_mode: str = DEFAULT_EXECUTION_MODE,
+    forbidden_paths: list[str] | None = None,
 ) -> int:
-    eligible_ideas = get_eligible_structured_ideas(structured_ideas, modifiable_files, forced_file)
+    eligible_ideas = get_eligible_structured_ideas(
+        structured_ideas,
+        editable_targets,
+        forced_file,
+        execution_mode=execution_mode,
+        forbidden_paths=forbidden_paths,
+    )
     if eligible_ideas:
         return len(eligible_ideas)
     return requested_max_runs
@@ -2014,6 +2323,38 @@ physics-informed latent Neural SDE (digital twin) trained on process system data
   - `new` is the REPLACE block.
 - Use multi-line `old` blocks with enough unchanged surrounding context to match exactly once.
 - Preserve indentation and unchanged code outside the edited region.
+"""
+
+
+def build_multi_file_static_prompt_context(
+    editable_targets: list[str],
+    editable_file_inventory: list[str],
+    forbidden_paths: list[str],
+    agent_context: str = "",
+) -> str:
+    targets_list = "\n".join(f"  - {path}" for path in editable_targets)
+    forbidden_list = "\n".join(f"  - {path}" for path in forbidden_paths)
+    inventory_list = "\n".join(f"  - {path}" for path in editable_file_inventory)
+    context_section = ""
+    if agent_context:
+        context_section = f"\n## Repo context\n{agent_context}\n"
+
+    return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
+physics-informed latent Neural SDE (digital twin) trained on process system data (CSTR, heat exchanger, or other registered systems).
+
+## Constraints
+- You may modify MULTIPLE files per experiment when needed to implement one coherent idea fully.
+- Editable files must stay within these repo roots/files:
+{targets_list}
+- You must NEVER modify these locked files/directories:
+{forbidden_list}
+- One idea per experiment. Full implementations are allowed when the idea genuinely needs multiple coordinated edits.
+- Preserve the generic architecture. In dte/models and dte/training, do not add system-specific branches or bake config-like numbers into code; generic numeric algorithmic tweaks are fine, but bounds/scales/defaults/dims should live in config/SystemSpec.
+- Prefer modifying existing files. You may create new files inside the editable roots when necessary.
+- Available packages: jax, equinox, diffrax, optax, jaxtyping, numpy, yaml, h5py (no new installs).
+{JAX_PITFALLS}{ARCHITECTURE_GUARDRAILS}{RESEARCH_PRIORITIES}{PROMISING_DIRECTIONS}{context_section}
+## Editable file inventory
+{inventory_list}
 """
 
 
@@ -2087,7 +2428,11 @@ Look at category summary - avoid exhausted categories. Try a different file or a
 
     ideas_section = ""
     if ideas:
-        ideas_section = "\n" + build_structured_ideas_section(ideas, selected_idea)
+        ideas_section = "\n" + build_structured_ideas_section(
+            ideas,
+            selected_idea,
+            execution_mode="single_file",
+        )
 
     return f"""## Current best_val_loss: {best_loss:.6f}
 {streak_str}{history_section}{recent_runs_section}{ideas_section}
@@ -2140,6 +2485,138 @@ def build_prompt(
         ideas=ideas,
         selected_idea=selected_idea,
     )
+
+
+def _build_history_summary(history: list[dict], best_loss: float) -> str:
+    if not history:
+        return ""
+
+    lines = ["## Recent experiment history:"]
+    for row in history[-12:]:
+        status = str(row.get("status", "crash"))
+        description = str(row.get("description", "")).strip()
+        changed_file = str(row.get("file", "")).strip() or "?"
+        if status == "crash":
+            lines.append(f"- CRASH [{changed_file}] {description}")
+            continue
+        loss = float(row.get("val_loss", 999.0) or 999.0)
+        if loss >= 999.0:
+            lines.append(f"- {status.upper()} [{changed_file}] {description}")
+            continue
+        gap = loss - best_loss
+        lines.append(f"- {status.upper()} {loss:.6f} ({gap:+.6f}) [{changed_file}] {description}")
+    return "\n".join(lines) + "\n"
+
+
+def build_multi_file_selection_prompt(
+    history: list[dict],
+    best_loss: float,
+    recent_run_context: str = "",
+    ideas: list[dict] | None = None,
+    selected_idea: dict | None = None,
+) -> str:
+    history_section = _build_history_summary(history, best_loss)
+    ideas_section = ""
+    if ideas:
+        ideas_section = "\n" + build_structured_ideas_section(
+            ideas,
+            selected_idea,
+            execution_mode="multi_file",
+        )
+    recent_runs_section = f"\n{recent_run_context}\n" if recent_run_context else ""
+
+    return f"""## Current best_val_loss: {best_loss:.6f}
+{history_section}{recent_runs_section}{ideas_section}
+## Your task
+Choose the existing repository files you need to inspect or modify to implement one coherent experiment fully.
+
+Respond with ONLY one JSON object:
+{{
+  "idea_id": "optional structured idea identifier when following a queued idea",
+  "description": "short description of the full experiment",
+  "files": [
+    "repo-relative path to an existing file you need opened"
+  ]
+}}
+
+Requirements:
+- Every file path must already exist in the editable inventory.
+- Choose all files you genuinely need; there is no single-file restriction in this mode.
+- Do not include locked files.
+- Keep the experiment aligned with the queued idea when one is provided."""
+
+
+def build_multi_file_patch_prompt(
+    description: str,
+    file_sources: dict[str, str],
+    editable_targets: list[str],
+    recent_run_context: str = "",
+    selected_idea: dict | None = None,
+) -> str:
+    files_section = "\n\n".join(
+        f"## File: {path}\n```\n{source}\n```"
+        for path, source in file_sources.items()
+    )
+    idea_section = ""
+    if selected_idea:
+        title = str(selected_idea.get("title", "")).strip()
+        rationale = str(selected_idea.get("rationale", "")).strip()
+        instructions = selected_idea.get("instructions", []) or []
+        idea_lines = ["## Selected idea"]
+        idea_lines.append(f"- idea_id: {selected_idea['id']}")
+        if title:
+            idea_lines.append(f"- title: {title}")
+        if rationale:
+            idea_lines.append(f"- rationale: {rationale}")
+        if instructions:
+            idea_lines.append("- implementation guidance:")
+            for instruction in instructions:
+                idea_lines.append(f"  - {instruction}")
+        idea_section = "\n" + "\n".join(idea_lines) + "\n"
+
+    recent_runs_section = f"\n{recent_run_context}\n" if recent_run_context else ""
+    editable_list = "\n".join(f"  - {path}" for path in editable_targets)
+
+    return f"""## Experiment description
+{description}
+{recent_runs_section}{idea_section}
+## Editable roots/files
+{editable_list}
+
+## Opened files
+{files_section}
+
+## Your task
+Implement the experiment fully across these files. You may also CREATE new files inside the editable roots when necessary.
+
+Respond with ONLY one JSON object:
+{{
+  "idea_id": "optional structured idea identifier when following a queued idea",
+  "description": "short description of the final experiment",
+  "files": [
+    {{
+      "path": "repo-relative path",
+      "operation": "modify",
+      "changes": [
+        {{
+          "old": "exact SEARCH block copied from the current file",
+          "new": "replacement REPLACE block"
+        }}
+      ]
+    }},
+    {{
+      "path": "repo-relative path for a new file",
+      "operation": "create",
+      "contents": "full contents of the new file"
+    }}
+  ]
+}}
+
+Requirements:
+- For modify operations, every SEARCH block must appear exactly once in the provided file text.
+- For create operations, provide the full file contents in `contents`.
+- Modify only files that are shown above. Create operations may target new paths inside the editable roots.
+- Do not target locked files."""
 
 
 # ---------------------------------------------------------------------------
@@ -2212,6 +2689,36 @@ def parse_response(text: str) -> dict | None:
     return None
 
 
+def repair_json_response_with_schema(
+    text: str | None,
+    schema_prompt: str,
+    call_llm,
+    response_schema: dict,
+    fail_streak: int = 0,
+) -> tuple[dict | None, str | None, bool]:
+    """Ask the LLM to repair malformed JSON into a known schema."""
+
+    if not text:
+        return None, None, False
+
+    repair_prompt = f"""The following response was supposed to be a single JSON object but was malformed.
+Return ONLY one valid JSON object.
+
+{schema_prompt}
+
+Malformed response:
+{text}
+"""
+    repaired, timed_out = invoke_llm_with_timeout(
+        call_llm,
+        repair_prompt,
+        fail_streak=max(fail_streak, 1),
+        phase="apply",
+        response_schema=response_schema,
+    )
+    return parse_response(repaired), repaired, timed_out
+
+
 def repair_response(
     text: str | None,
     call_llm,
@@ -2249,6 +2756,30 @@ Malformed response:
         response_schema=PATCH_RESPONSE_JSON_SCHEMA,
     )
     return parse_response(repaired), repaired, timed_out
+
+
+def repair_multi_file_selection_response(
+    text: str | None,
+    call_llm,
+    fail_streak: int = 0,
+) -> tuple[dict | None, str | None, bool]:
+    schema_prompt = """Use this schema:
+{
+  "idea_id": "optional structured idea identifier",
+  "description": "short description",
+  "files": [
+    "repo-relative path to an existing file you need opened"
+  ]
+}
+
+Do not add markdown fences or commentary."""
+    return repair_json_response_with_schema(
+        text,
+        schema_prompt,
+        call_llm,
+        MULTI_FILE_SELECTION_JSON_SCHEMA,
+        fail_streak=fail_streak,
+    )
 
 
 def repair_apply_failure(
@@ -2301,6 +2832,70 @@ Previous failed proposal:
         response_schema=PATCH_RESPONSE_JSON_SCHEMA,
     )
     return parse_response(repaired), repaired, timed_out
+
+
+def repair_multi_file_apply_failure(
+    proposal: dict,
+    file_sources: dict[str, str],
+    apply_error: str,
+    editable_targets: list[str],
+    call_llm,
+    fail_streak: int = 0,
+) -> tuple[dict | None, str | None, bool]:
+    """Ask the LLM to repair a multi-file patch after an apply or validation failure."""
+
+    prior_json = json.dumps(proposal, indent=2, ensure_ascii=True)
+    files_section = "\n\n".join(
+        f"## File: {path}\n```\n{source}\n```"
+        for path, source in file_sources.items()
+    )
+    editable_list = "\n".join(f"  - {path}" for path in editable_targets)
+    schema_prompt = f"""Return ONLY one valid JSON object with this schema:
+{{
+  "idea_id": "optional structured idea identifier",
+  "description": "short description",
+  "files": [
+    {{
+      "path": "repo-relative path",
+      "operation": "modify",
+      "changes": [
+        {{
+          "old": "exact SEARCH block copied from the current file",
+          "new": "replacement REPLACE block"
+        }}
+      ]
+    }},
+    {{
+      "path": "repo-relative path for a new file",
+      "operation": "create",
+      "contents": "full contents of the new file"
+    }}
+  ]
+}}
+
+Requirements:
+- Only modify files shown below.
+- Create operations may add new files only within these editable roots/files:
+{editable_list}
+- Every SEARCH block must appear exactly once in its current file text.
+- Keep the same intent if possible, but prioritize a patch that applies cleanly.
+- Do not add markdown fences or commentary.
+
+Failure:
+{apply_error}
+
+Current opened files:
+{files_section}
+
+Previous failed proposal:
+{prior_json}"""
+    return repair_json_response_with_schema(
+        prior_json,
+        schema_prompt,
+        call_llm,
+        MULTI_FILE_PATCH_RESPONSE_JSON_SCHEMA,
+        fail_streak=fail_streak,
+    )
 
 
 def invoke_llm_with_timeout(
@@ -2380,6 +2975,110 @@ def validate_file(filepath: str, source: str, original_source: str | None = None
         if guardrail_error:
             return guardrail_error
     return None
+
+
+def validate_multi_file_selection(
+    proposal: dict,
+    editable_targets: list[str],
+    forbidden_paths: list[str],
+) -> tuple[list[str] | None, str | None]:
+    """Validate and normalize a multi-file selection proposal."""
+
+    raw_files = proposal.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        return None, "selection is missing a non-empty files list"
+
+    selected_files: list[str] = []
+    for raw_path in raw_files:
+        normalized = _normalize_repo_relative_path(str(raw_path))
+        if not normalized:
+            return None, f"invalid repo-relative path: {raw_path!r}"
+        if not is_allowed_edit_path(normalized, editable_targets, forbidden_paths):
+            return None, f"disallowed file in selection: {normalized}"
+        absolute_path = PROJECT_ROOT / normalized
+        if not absolute_path.exists() or not absolute_path.is_file():
+            return None, f"selection path does not exist: {normalized}"
+        selected_files.append(normalized)
+
+    selected_files = _dedupe_preserve_order(selected_files)
+    return selected_files, None
+
+
+def _normalize_multi_file_entries(proposal: dict) -> list[dict] | None:
+    raw_files = proposal.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        return None
+    entries: list[dict] = []
+    for item in raw_files:
+        if not isinstance(item, dict):
+            return None
+        entries.append(dict(item))
+    return entries
+
+
+def prepare_multi_file_patch(
+    proposal: dict,
+    opened_file_sources: dict[str, str],
+    editable_targets: list[str],
+    forbidden_paths: list[str],
+) -> tuple[list[str] | None, dict[str, str | None] | None, dict[str, str] | None, str | None]:
+    """Validate and materialize a multi-file patch proposal."""
+
+    entries = _normalize_multi_file_entries(proposal)
+    if entries is None:
+        return None, None, None, "proposal is missing a non-empty files list"
+
+    changed_paths: list[str] = []
+    original_sources: dict[str, str | None] = {}
+    modified_sources: dict[str, str] = {}
+    seen_paths: set[str] = set()
+
+    for entry in entries:
+        raw_path = entry.get("path", "")
+        normalized_path = _normalize_repo_relative_path(str(raw_path))
+        if not normalized_path:
+            return None, None, None, f"invalid repo-relative path: {raw_path!r}"
+        if normalized_path in seen_paths:
+            return None, None, None, f"duplicate file entry: {normalized_path}"
+        if not is_allowed_edit_path(normalized_path, editable_targets, forbidden_paths):
+            return None, None, None, f"disallowed file in patch: {normalized_path}"
+
+        operation = str(entry.get("operation", "")).strip().lower()
+        if not operation:
+            operation = "create" if "contents" in entry and "changes" not in entry else "modify"
+
+        absolute_path = PROJECT_ROOT / normalized_path
+        if operation == "modify":
+            if normalized_path not in opened_file_sources:
+                return None, None, None, f"modify target was not opened first: {normalized_path}"
+            original = opened_file_sources[normalized_path]
+            changes = entry.get("changes")
+            if not isinstance(changes, list) or not changes:
+                return None, None, None, f"modify entry is missing changes: {normalized_path}"
+            modified, apply_error = apply_changes(original, changes)
+            if modified is None:
+                return None, None, None, f"{normalized_path}: {apply_error or 'apply failed'}"
+        elif operation == "create":
+            if absolute_path.exists():
+                return None, None, None, f"create target already exists: {normalized_path}"
+            contents = entry.get("contents")
+            if not isinstance(contents, str):
+                return None, None, None, f"create entry is missing contents: {normalized_path}"
+            original = None
+            modified = contents
+        else:
+            return None, None, None, f"unsupported operation {operation!r} for {normalized_path}"
+
+        validate_err = validate_file(normalized_path, modified, original_source=original)
+        if validate_err:
+            return None, None, None, f"{normalized_path}: {validate_err}"
+
+        seen_paths.add(normalized_path)
+        changed_paths.append(normalized_path)
+        original_sources[normalized_path] = original
+        modified_sources[normalized_path] = modified
+
+    return changed_paths, original_sources, modified_sources, None
 
 
 def get_eval_settings(config: dict | None = None) -> dict:
@@ -3040,7 +3739,7 @@ def _run_text_mode(
     history: list[dict],
     best_loss: float,
     call_llm,
-    modifiable_files: list[str],
+    editable_targets: list[str],
     max_runs: int,
     train_cfg: dict,
     eval_settings: dict,
@@ -3050,14 +3749,18 @@ def _run_text_mode(
     reason_cached_content: str | None,
     branch: str,
     structured_ideas: list[dict],
+    execution_mode: str,
+    forbidden_paths: list[str],
 ) -> None:
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
     consecutive_parse_failures = 0
     eligible_structured_ideas = get_eligible_structured_ideas(
         structured_ideas,
-        modifiable_files,
+        editable_targets,
         args.file,
+        execution_mode=execution_mode,
+        forbidden_paths=forbidden_paths,
     )
     strict_structured_ideas = bool(eligible_structured_ideas)
     display_max_runs = (
@@ -3107,6 +3810,8 @@ def _run_text_mode(
 
             proposed_file = ""
             original: str | None = None
+            changed_paths: list[str] = []
+            original_sources: dict[str, str | None] = {}
             experiment_committed = False
             experiment_commit_sha: str | None = None
 
@@ -3118,35 +3823,49 @@ def _run_text_mode(
                 selected_idea = select_next_structured_idea(
                     structured_ideas,
                     history,
-                    modifiable_files,
+                    editable_targets,
                     args.file,
+                    execution_mode=execution_mode,
+                    forbidden_paths=forbidden_paths,
                 )
                 if strict_structured_ideas and not selected_idea:
                     print("  No pending structured ideas remain. Stopping.")
                     break
-                target_file = _choose_file(
-                    history,
-                    modifiable_files,
-                    args.file,
-                    preferred_file=selected_idea.get("target_file") if selected_idea else None,
-                )
-                try:
-                    file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
-                except FileNotFoundError:
-                    print(f"  File not found: {target_file}")
-                    continue
 
                 fail_streak = _count_recent_failures(history)
-                dynamic_prompt = build_dynamic_prompt(
-                    target_file,
-                    file_source,
-                    history,
-                    best_loss,
-                    recent_run_context=recent_run_context,
-                    ideas=structured_ideas,
-                    selected_idea=selected_idea,
-                )
-                prompt = dynamic_prompt if reason_cached_content else static_prompt + dynamic_prompt
+                if execution_mode == "multi_file":
+                    selection_prompt = build_multi_file_selection_prompt(
+                        history,
+                        best_loss,
+                        recent_run_context=recent_run_context,
+                        ideas=structured_ideas,
+                        selected_idea=selected_idea,
+                    )
+                    prompt = selection_prompt if reason_cached_content else static_prompt + selection_prompt
+                    response_schema = MULTI_FILE_SELECTION_JSON_SCHEMA
+                else:
+                    target_file = _choose_file(
+                        history,
+                        editable_targets,
+                        args.file,
+                        preferred_file=selected_idea.get("target_file") if selected_idea else None,
+                    )
+                    try:
+                        file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
+                    except FileNotFoundError:
+                        print(f"  File not found: {target_file}")
+                        continue
+                    dynamic_prompt = build_dynamic_prompt(
+                        target_file,
+                        file_source,
+                        history,
+                        best_loss,
+                        recent_run_context=recent_run_context,
+                        ideas=structured_ideas,
+                        selected_idea=selected_idea,
+                    )
+                    prompt = dynamic_prompt if reason_cached_content else static_prompt + dynamic_prompt
+                    response_schema = PATCH_RESPONSE_JSON_SCHEMA
 
                 try:
                     response, timed_out = invoke_llm_with_timeout(
@@ -3154,7 +3873,7 @@ def _run_text_mode(
                         prompt,
                         fail_streak=fail_streak,
                         phase="reason",
-                        response_schema=PATCH_RESPONSE_JSON_SCHEMA,
+                        response_schema=response_schema,
                         cached_content=reason_cached_content,
                     )
                 except FatalAPIError as e:
@@ -3168,11 +3887,18 @@ def _run_text_mode(
                 proposal = parse_response(response)
                 if not proposal:
                     try:
-                        proposal, repaired, repair_timed_out = repair_response(
-                            response,
-                            call_llm,
-                            fail_streak=fail_streak,
-                        )
+                        if execution_mode == "multi_file":
+                            proposal, repaired, repair_timed_out = repair_multi_file_selection_response(
+                                response,
+                                call_llm,
+                                fail_streak=fail_streak,
+                            )
+                        else:
+                            proposal, repaired, repair_timed_out = repair_response(
+                                response,
+                                call_llm,
+                                fail_streak=fail_streak,
+                            )
                     except FatalAPIError as e:
                         print(f"Fatal API error: {e}")
                         break
@@ -3183,7 +3909,7 @@ def _run_text_mode(
                     if proposal:
                         print("  Repaired malformed LLM response.")
 
-                if not proposal or "changes" not in proposal:
+                if not proposal:
                     print("  LLM gave unparseable response. Skipping.")
                     consecutive_parse_failures += 1
                     if (
@@ -3195,132 +3921,358 @@ def _run_text_mode(
                     continue
                 consecutive_parse_failures = 0
 
-                proposal = enforce_selected_idea_on_proposal(proposal, selected_idea)
-
-                proposed_file = proposal.get("file", target_file)
-                if proposed_file not in modifiable_files:
-                    print(f"  LLM chose disallowed file {proposed_file}. Skipping.")
-                    continue
-                if git_file_is_dirty(proposed_file):
-                    print(f"  Skipping dirty file {proposed_file} to avoid clobbering existing changes.")
-                    continue
-
-                description = annotate_description_with_idea(
-                    proposal.get("description", "unknown"),
-                    proposal.get("idea_id"),
-                )
-                current_idea = f"[{proposed_file}] {description}"
-                print(f"  Idea: {description}")
-                print(f"  File: {proposed_file}")
-                update_text_state(
-                    exp_num,
-                    description,
-                    "APPLYING",
-                    file_path=proposed_file,
-                    current_idea=current_idea,
+                proposal = enforce_selected_idea_on_proposal(
+                    proposal,
+                    selected_idea,
+                    execution_mode=execution_mode,
                 )
 
-                try:
-                    original = (PROJECT_ROOT / proposed_file).read_text(encoding="utf-8")
-                except FileNotFoundError:
-                    print(f"  File not found: {proposed_file}")
-                    continue
+                if execution_mode == "multi_file":
+                    selected_paths, selection_error = validate_multi_file_selection(
+                        proposal,
+                        editable_targets,
+                        forbidden_paths,
+                    )
+                    if selection_error or not selected_paths:
+                        print(f"  Invalid multi-file selection: {selection_error or 'no files selected'}. Skipping.")
+                        history = get_results_history()
+                        continue
+                    dirty_paths = [path for path in selected_paths if git_file_is_dirty(path)]
+                    if dirty_paths:
+                        print(
+                            "  Skipping selection because these files are dirty: "
+                            + ", ".join(dirty_paths)
+                        )
+                        history = get_results_history()
+                        continue
 
-                modified, apply_error = apply_changes(original, proposal["changes"])
-                if modified is None:
-                    print("  Could not apply patch. Trying one repair...")
+                    description = annotate_description_with_idea(
+                        proposal.get("description", "unknown"),
+                        proposal.get("idea_id"),
+                    )
+                    opened_file_sources = {
+                        path: (PROJECT_ROOT / path).read_text(encoding="utf-8")
+                        for path in selected_paths
+                    }
+                    selection_label = summarize_changed_paths(selected_paths)
+                    current_idea = f"[{selection_label}] {description}"
+                    print(f"  Idea: {description}")
+                    print(f"  Files: {selection_label}")
+                    update_text_state(
+                        exp_num,
+                        description,
+                        "APPLYING",
+                        file_path=selection_label,
+                        current_idea=current_idea,
+                    )
+
+                    patch_prompt = build_multi_file_patch_prompt(
+                        description,
+                        opened_file_sources,
+                        editable_targets,
+                        recent_run_context=recent_run_context,
+                        selected_idea=selected_idea,
+                    )
+                    patch_input = patch_prompt if reason_cached_content else static_prompt + patch_prompt
                     try:
-                        repaired_proposal, repaired_text, repair_timed_out = repair_apply_failure(
-                            proposal,
-                            proposed_file,
-                            original,
-                            apply_error or "unknown apply failure",
+                        patch_response, patch_timed_out = invoke_llm_with_timeout(
                             call_llm,
+                            patch_input,
                             fail_streak=fail_streak,
+                            phase="reason",
+                            response_schema=MULTI_FILE_PATCH_RESPONSE_JSON_SCHEMA,
+                            cached_content=reason_cached_content,
                         )
                     except FatalAPIError as e:
                         print(f"Fatal API error: {e}")
                         break
-
-                    if repair_timed_out:
-                        print(f"  Patch repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
-                        log_result(
-                            "-------",
-                            0.0,
-                            "crash",
-                            proposed_file,
-                            f"APPLY FAIL: {description} [repair timeout]",
-                        )
+                    if patch_timed_out:
+                        print(f"  Patch generation timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
                         history = get_results_history()
                         continue
 
-                    if repaired_proposal and "changes" in repaired_proposal:
-                        repaired_proposal = enforce_selected_idea_on_proposal(
-                            repaired_proposal,
-                            selected_idea,
-                        )
-                        repaired_file = repaired_proposal.get("file", proposed_file)
-                        if repaired_file == proposed_file:
-                            repaired_modified, repaired_error = apply_changes(
-                                original,
-                                repaired_proposal["changes"],
+                    patch_proposal = parse_response(patch_response)
+                    if not patch_proposal:
+                        try:
+                            patch_proposal, repaired_patch, repair_timed_out = repair_json_response_with_schema(
+                                patch_response,
+                                """Use this schema:
+{
+  "idea_id": "optional structured idea identifier",
+  "description": "short description",
+  "files": [
+    {
+      "path": "repo-relative path",
+      "operation": "modify",
+      "changes": [
+        {
+          "old": "exact SEARCH block copied from the current file",
+          "new": "replacement REPLACE block"
+        }
+      ]
+    },
+    {
+      "path": "repo-relative path for a new file",
+      "operation": "create",
+      "contents": "full contents of the new file"
+    }
+  ]
+}
+
+Do not add markdown fences or commentary.""",
+                                call_llm,
+                                MULTI_FILE_PATCH_RESPONSE_JSON_SCHEMA,
+                                fail_streak=fail_streak,
                             )
-                            if repaired_modified is not None:
-                                proposal = repaired_proposal
+                        except FatalAPIError as e:
+                            print(f"Fatal API error: {e}")
+                            break
+                        if repair_timed_out:
+                            print(f"  Patch JSON repair timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                            history = get_results_history()
+                            continue
+                        if patch_proposal:
+                            print("  Repaired malformed multi-file patch response.")
+
+                    if not patch_proposal:
+                        print("  LLM gave unparseable multi-file patch. Skipping.")
+                        history = get_results_history()
+                        continue
+
+                    patch_proposal = enforce_selected_idea_on_proposal(
+                        patch_proposal,
+                        selected_idea,
+                        execution_mode=execution_mode,
+                    )
+                    description = annotate_description_with_idea(
+                        patch_proposal.get("description", description),
+                        patch_proposal.get("idea_id"),
+                    )
+                    changed_paths, original_sources, modified_sources, apply_error = prepare_multi_file_patch(
+                        patch_proposal,
+                        opened_file_sources,
+                        editable_targets,
+                        forbidden_paths,
+                    )
+                    if apply_error or not changed_paths or original_sources is None or modified_sources is None:
+                        print("  Could not apply multi-file patch. Trying one repair...")
+                        try:
+                            repaired_patch, repaired_text, repair_timed_out = repair_multi_file_apply_failure(
+                                patch_proposal,
+                                opened_file_sources,
+                                apply_error or "unknown multi-file apply failure",
+                                editable_targets,
+                                call_llm,
+                                fail_streak=fail_streak,
+                            )
+                        except FatalAPIError as e:
+                            print(f"Fatal API error: {e}")
+                            break
+                        if repair_timed_out:
+                            print(f"  Patch repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                            log_result(
+                                "-------",
+                                0.0,
+                                "crash",
+                                selection_label,
+                                f"APPLY FAIL: {description} [repair timeout]",
+                            )
+                            history = get_results_history()
+                            continue
+                        if repaired_patch:
+                            repaired_patch = enforce_selected_idea_on_proposal(
+                                repaired_patch,
+                                selected_idea,
+                                execution_mode=execution_mode,
+                            )
+                            repaired_paths, repaired_originals, repaired_modified, repaired_error = prepare_multi_file_patch(
+                                repaired_patch,
+                                opened_file_sources,
+                                editable_targets,
+                                forbidden_paths,
+                            )
+                            if repaired_error is None and repaired_paths and repaired_originals is not None and repaired_modified is not None:
+                                patch_proposal = repaired_patch
+                                changed_paths = repaired_paths
+                                original_sources = repaired_originals
+                                modified_sources = repaired_modified
                                 description = annotate_description_with_idea(
-                                    proposal.get("description", description),
-                                    proposal.get("idea_id"),
+                                    patch_proposal.get("description", description),
+                                    patch_proposal.get("idea_id"),
                                 )
-                                current_idea = f"[{proposed_file}] {description}"
-                                modified = repaired_modified
-                                print("  Recovered apply-fail with repair prompt.")
-                                update_text_state(
-                                    exp_num,
-                                    description,
-                                    "APPLYING",
-                                    file_path=proposed_file,
-                                    current_idea=current_idea,
-                                )
+                                print("  Recovered multi-file apply failure with repair prompt.")
                             else:
                                 apply_error = repaired_error or apply_error
-                        else:
-                            apply_error = f"repair changed target file to {repaired_file}"
+                        if apply_error or not changed_paths or not original_sources:
+                            print(f"  Could not apply multi-file patch after repair. Skipping.")
+                            log_result(
+                                "-------",
+                                0.0,
+                                "crash",
+                                selection_label,
+                                f"APPLY FAIL: {description} [{apply_error or 'repair failed'}]",
+                            )
+                            history = get_results_history()
+                            continue
 
-                    if modified is None:
-                        print("  Could not apply patch after repair. Skipping.")
-                        failure_detail = apply_error or "repair failed"
+                    proposed_file = changed_paths[0]
+                    current_idea = f"[{summarize_changed_paths(changed_paths)}] {description}"
+                    print(f"  Final files: {summarize_changed_paths(changed_paths)}")
+                    update_text_state(
+                        exp_num,
+                        description,
+                        "APPLYING",
+                        file_path=summarize_changed_paths(changed_paths),
+                        current_idea=current_idea,
+                    )
+                    try:
+                        write_repo_files_atomically(modified_sources, original_sources)
+                    except Exception as write_err:
+                        print(f"  WRITE FAIL: {str(write_err)[:120]}")
                         log_result(
                             "-------",
                             0.0,
                             "crash",
-                            proposed_file,
-                            f"APPLY FAIL: {description} [{failure_detail}]",
+                            summarize_changed_paths(changed_paths),
+                            f"WRITE FAIL: {description} [{str(write_err)[:120]}]",
                         )
                         history = get_results_history()
                         continue
+                else:
+                    if "changes" not in proposal:
+                        print("  LLM gave unparseable response. Skipping.")
+                        history = get_results_history()
+                        continue
 
-                err = validate_file(proposed_file, modified, original_source=original)
-                if err:
-                    print(f"  Validation failed: {err}. Skipping.")
-                    log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{err}]")
-                    history = get_results_history()
-                    continue
+                    proposed_file = proposal.get("file", target_file)
+                    if proposed_file not in editable_targets:
+                        print(f"  LLM chose disallowed file {proposed_file}. Skipping.")
+                        continue
+                    if git_file_is_dirty(proposed_file):
+                        print(f"  Skipping dirty file {proposed_file} to avoid clobbering existing changes.")
+                        continue
 
-                write_repo_file(proposed_file, modified)
+                    description = annotate_description_with_idea(
+                        proposal.get("description", "unknown"),
+                        proposal.get("idea_id"),
+                    )
+                    current_idea = f"[{proposed_file}] {description}"
+                    print(f"  Idea: {description}")
+                    print(f"  File: {proposed_file}")
+                    update_text_state(
+                        exp_num,
+                        description,
+                        "APPLYING",
+                        file_path=proposed_file,
+                        current_idea=current_idea,
+                    )
+
+                    try:
+                        original = (PROJECT_ROOT / proposed_file).read_text(encoding="utf-8")
+                    except FileNotFoundError:
+                        print(f"  File not found: {proposed_file}")
+                        continue
+
+                    modified, apply_error = apply_changes(original, proposal["changes"])
+                    if modified is None:
+                        print("  Could not apply patch. Trying one repair...")
+                        try:
+                            repaired_proposal, repaired_text, repair_timed_out = repair_apply_failure(
+                                proposal,
+                                proposed_file,
+                                original,
+                                apply_error or "unknown apply failure",
+                                call_llm,
+                                fail_streak=fail_streak,
+                            )
+                        except FatalAPIError as e:
+                            print(f"Fatal API error: {e}")
+                            break
+
+                        if repair_timed_out:
+                            print(f"  Patch repair request timed out after {LLM_REQUEST_TIMEOUT_SECONDS}s. Skipping.")
+                            log_result(
+                                "-------",
+                                0.0,
+                                "crash",
+                                proposed_file,
+                                f"APPLY FAIL: {description} [repair timeout]",
+                            )
+                            history = get_results_history()
+                            continue
+
+                        if repaired_proposal and "changes" in repaired_proposal:
+                            repaired_proposal = enforce_selected_idea_on_proposal(
+                                repaired_proposal,
+                                selected_idea,
+                                execution_mode=execution_mode,
+                            )
+                            repaired_file = repaired_proposal.get("file", proposed_file)
+                            if repaired_file == proposed_file:
+                                repaired_modified, repaired_error = apply_changes(
+                                    original,
+                                    repaired_proposal["changes"],
+                                )
+                                if repaired_modified is not None:
+                                    proposal = repaired_proposal
+                                    description = annotate_description_with_idea(
+                                        proposal.get("description", description),
+                                        proposal.get("idea_id"),
+                                    )
+                                    current_idea = f"[{proposed_file}] {description}"
+                                    modified = repaired_modified
+                                    print("  Recovered apply-fail with repair prompt.")
+                                    update_text_state(
+                                        exp_num,
+                                        description,
+                                        "APPLYING",
+                                        file_path=proposed_file,
+                                        current_idea=current_idea,
+                                    )
+                                else:
+                                    apply_error = repaired_error or apply_error
+                            else:
+                                apply_error = f"repair changed target file to {repaired_file}"
+
+                        if modified is None:
+                            print("  Could not apply patch after repair. Skipping.")
+                            failure_detail = apply_error or "repair failed"
+                            log_result(
+                                "-------",
+                                0.0,
+                                "crash",
+                                proposed_file,
+                                f"APPLY FAIL: {description} [{failure_detail}]",
+                            )
+                            history = get_results_history()
+                            continue
+
+                    err = validate_file(proposed_file, modified, original_source=original)
+                    if err:
+                        print(f"  Validation failed: {err}. Skipping.")
+                        log_result("-------", 0.0, "crash", proposed_file, f"VALIDATE: {description} [{err}]")
+                        history = get_results_history()
+                        continue
+
+                    changed_paths = [proposed_file]
+                    original_sources = {proposed_file: original}
+                    modified_sources = {proposed_file: modified}
+                    write_repo_file(proposed_file, modified)
+
+                file_label = summarize_changed_paths(changed_paths)
                 try:
-                    sha = git_commit(description, [proposed_file])
+                    sha = git_commit(description, changed_paths)
                     experiment_committed = True
                     experiment_commit_sha = git_head_sha()
                 except RuntimeError as commit_err:
-                    rollback_experiment_change(
-                        proposed_file,
-                        original,
+                    rollback_experiment_changes(
+                        original_sources,
                         committed=False,
                         commit_sha=experiment_commit_sha,
                     )
                     err_msg = str(commit_err)[:120]
                     print(f"  COMMIT FAIL: {err_msg}")
-                    log_result("-------", 0.0, "crash", proposed_file, f"COMMIT FAIL: {description} [{err_msg}]")
+                    log_result("-------", 0.0, "crash", file_label, f"COMMIT FAIL: {description} [{err_msg}]")
                     history = get_results_history()
                     continue
 
@@ -3331,11 +4283,11 @@ def _run_text_mode(
                     exp_num,
                     description,
                     "TRAINING",
-                    file_path=proposed_file,
+                    file_path=file_label,
                     current_idea=current_idea,
                     extra={"commit": sha},
                 )
-                result = run_experiment(f"[{proposed_file}] {description}")
+                result = run_experiment(f"[{file_label}] {description}")
 
                 if result and result.get("status") in ("keep", "discard"):
                     val_loss = float(result.get("metric_value", 999.0) or 999.0)
@@ -3355,7 +4307,7 @@ def _run_text_mode(
                             exp_num,
                             description,
                             "KEEP",
-                            file_path=proposed_file,
+                            file_path=file_label,
                             current_idea=current_idea,
                             extra={"commit": sha, "metric_value": val_loss},
                         )
@@ -3366,13 +4318,12 @@ def _run_text_mode(
                             exp_num,
                             description,
                             "DISCARD",
-                            file_path=proposed_file,
+                            file_path=file_label,
                             current_idea=current_idea,
                             extra={"commit": sha, "metric_value": val_loss},
                         )
-                        rollback_experiment_change(
-                            proposed_file,
-                            original,
+                        rollback_experiment_changes(
+                            original_sources,
                             committed=experiment_committed,
                             commit_sha=experiment_commit_sha,
                         )
@@ -3382,48 +4333,45 @@ def _run_text_mode(
                         exp_num,
                         description,
                         "CRASH",
-                        file_path=proposed_file,
+                        file_path=file_label,
                         current_idea=current_idea,
                         extra={"commit": sha},
                     )
-                    rollback_experiment_change(
-                        proposed_file,
-                        original,
+                    rollback_experiment_changes(
+                        original_sources,
                         committed=experiment_committed,
                         commit_sha=experiment_commit_sha,
                     )
                 elif result and "error" in result:
                     err_msg = str(result["error"])[:80]
                     print(f"  CRASH: {err_msg}")
-                    log_result(sha, 0.0, "crash", proposed_file, f"{description} [{err_msg}]")
+                    log_result(sha, 0.0, "crash", file_label, f"{description} [{err_msg}]")
                     update_text_state(
                         exp_num,
                         description,
                         "CRASH",
-                        file_path=proposed_file,
+                        file_path=file_label,
                         current_idea=current_idea,
                         extra={"commit": sha, "error": err_msg},
                     )
-                    rollback_experiment_change(
-                        proposed_file,
-                        original,
+                    rollback_experiment_changes(
+                        original_sources,
                         committed=experiment_committed,
                         commit_sha=experiment_commit_sha,
                     )
                 else:
                     print("  CRASH: no result")
-                    log_result(sha, 0.0, "crash", proposed_file, f"{description} [no output]")
+                    log_result(sha, 0.0, "crash", file_label, f"{description} [no output]")
                     update_text_state(
                         exp_num,
                         description,
                         "CRASH",
-                        file_path=proposed_file,
+                        file_path=file_label,
                         current_idea=current_idea,
                         extra={"commit": sha, "error": "no result"},
                     )
-                    rollback_experiment_change(
-                        proposed_file,
-                        original,
+                    rollback_experiment_changes(
+                        original_sources,
                         committed=experiment_committed,
                         commit_sha=experiment_commit_sha,
                     )
@@ -3438,9 +4386,8 @@ def _run_text_mode(
                 print(f"  Exception: {str(loop_err)[:120]}")
                 log_to_file(f"TEXT LOOP EXCEPTION: {loop_err}")
                 try:
-                    rollback_experiment_change(
-                        proposed_file,
-                        original,
+                    rollback_experiment_changes(
+                        original_sources,
                         committed=experiment_committed,
                         commit_sha=experiment_commit_sha,
                     )
@@ -3450,7 +4397,7 @@ def _run_text_mode(
                     exp_num,
                     str(loop_err)[:120],
                     "CRASH",
-                    file_path=proposed_file,
+                    file_path=summarize_changed_paths(changed_paths) or proposed_file,
                     extra={"error": str(loop_err)[:120]},
                 )
                 history = get_results_history()
@@ -3516,7 +4463,10 @@ def main() -> None:
 
     ar_cfg = load_autoresearch_config()
     agent_cfg = ar_cfg.get("agent", {})
-    modifiable_files = agent_cfg.get("modifiable_files", MODIFIABLE_FILES)
+    execution_mode = get_execution_mode(ar_cfg)
+    editable_targets = get_editable_targets(ar_cfg)
+    forbidden_paths = get_forbidden_paths(ar_cfg)
+    editable_file_inventory = list_editable_repo_files(editable_targets, forbidden_paths)
     research_cfg = ar_cfg.get("research", {})
     train_cfg = ar_cfg.get("train", {})
     eval_settings = get_eval_settings(ar_cfg)
@@ -3704,24 +4654,48 @@ def main() -> None:
         return active_call_fn(prompt, thinking_level=thinking_level)
 
     if args.file:
-        if args.file not in modifiable_files:
-            print(f"Warning: {args.file} not in modifiable_files list, proceeding anyway.")
-        modifiable_files_active = [args.file]
+        normalized_forced_file = _normalize_repo_relative_path(args.file)
+        if not normalized_forced_file:
+            print(f"Warning: {args.file} is not a valid repo-relative path, proceeding anyway.")
+            normalized_forced_file = args.file
+        if execution_mode == "multi_file":
+            if not is_allowed_edit_path(normalized_forced_file, editable_targets, forbidden_paths):
+                print(f"Warning: {args.file} not under editable targets, proceeding anyway.")
+            editable_targets_active = [normalized_forced_file]
+        else:
+            if normalized_forced_file not in editable_targets:
+                print(f"Warning: {args.file} not in modifiable_files list, proceeding anyway.")
+            editable_targets_active = [normalized_forced_file]
     else:
-        modifiable_files_active = modifiable_files
+        editable_targets_active = editable_targets
 
     effective_max_runs = effective_run_target(
         args.max_runs,
         history=[],
         structured_ideas=structured_ideas,
-        modifiable_files=modifiable_files_active,
+        editable_targets=editable_targets_active,
         forced_file=args.file,
+        execution_mode=execution_mode,
+        forbidden_paths=forbidden_paths,
     )
 
-    static_prompt = build_static_prompt_context(
-        modifiable_files_active,
-        agent_context=agent_context,
-    )
+    if execution_mode == "multi_file":
+        editable_inventory_active = list_editable_repo_files(editable_targets_active, forbidden_paths)
+        static_prompt = build_multi_file_static_prompt_context(
+            editable_targets_active,
+            editable_inventory_active,
+            forbidden_paths,
+            agent_context=agent_context,
+        )
+    else:
+        editable_inventory_active = list_editable_repo_files(editable_targets_active, forbidden_paths)
+        static_prompt = build_static_prompt_context(
+            editable_targets_active,
+            agent_context=agent_context,
+        )
+    if execution_mode == "multi_file" and not args.no_dashboard:
+        print("Multi-file moonshot mode currently uses text-only output; enabling --no-dashboard.")
+        args.no_dashboard = True
     gemini_context_cache_enabled = bool(agent_cfg.get("gemini_context_cache", False))
     gemini_context_cache_ttl = str(agent_cfg.get("gemini_context_cache_ttl", "3600s"))
     gemini_context_cache_min_tokens = max(
@@ -3761,7 +4735,7 @@ def main() -> None:
     log_to_file(
         f"Agent started: llm={llm_name} apply_llm={apply_llm_name} "
         f"cache={'on' if reason_cached_content else 'off'} max_runs={effective_max_runs} "
-        f"branch={branch} prior={prior_count} config={active_config_path}"
+        f"branch={branch} prior={prior_count} mode={execution_mode} config={active_config_path}"
     )
 
     if args.no_dashboard:
@@ -3807,7 +4781,7 @@ def main() -> None:
             history,
             best_loss,
             call_llm,
-            modifiable_files_active,
+            editable_targets_active,
             effective_max_runs,
             train_cfg,
             eval_settings,
@@ -3817,6 +4791,8 @@ def main() -> None:
             reason_cached_content,
             branch,
             structured_ideas,
+            execution_mode,
+            forbidden_paths,
         )
         return
 
@@ -3882,8 +4858,10 @@ def main() -> None:
 
     eligible_structured_ideas = get_eligible_structured_ideas(
         structured_ideas,
-        modifiable_files_active,
+        editable_targets_active,
         args.file,
+        execution_mode=execution_mode,
+        forbidden_paths=forbidden_paths,
     )
     strict_structured_ideas = bool(eligible_structured_ideas)
 
@@ -4022,15 +5000,17 @@ def main() -> None:
                 selected_idea = select_next_structured_idea(
                     structured_ideas,
                     history,
-                    modifiable_files_active,
+                    editable_targets_active,
                     args.file,
+                    execution_mode=execution_mode,
+                    forbidden_paths=forbidden_paths,
                 )
                 if strict_structured_ideas and not selected_idea:
                     add_log("No pending structured ideas remain. Stopping.")
                     break
                 target_file = _choose_file(
                     history,
-                    modifiable_files_active,
+                    editable_targets_active,
                     args.file,
                     preferred_file=selected_idea.get("target_file") if selected_idea else None,
                 )
@@ -4123,7 +5103,11 @@ def main() -> None:
                     continue
                 consecutive_parse_failures = 0
 
-                proposal = enforce_selected_idea_on_proposal(proposal, selected_idea)
+                proposal = enforce_selected_idea_on_proposal(
+                    proposal,
+                    selected_idea,
+                    execution_mode=execution_mode,
+                )
 
                 proposed_file = proposal.get("file", target_file)
                 description = annotate_description_with_idea(
@@ -4134,7 +5118,7 @@ def main() -> None:
                 add_log(f"Idea: {description}")
                 add_log(f"File: {proposed_file}")
 
-                if proposed_file not in modifiable_files_active:
+                if proposed_file not in editable_targets_active:
                     add_log(f"Disallowed file: {proposed_file}. Skipping.")
                     history = get_results_history()
                     state["history"] = history
@@ -4190,6 +5174,7 @@ def main() -> None:
                         repaired_proposal = enforce_selected_idea_on_proposal(
                             repaired_proposal,
                             selected_idea,
+                            execution_mode=execution_mode,
                         )
                         repaired_file = repaired_proposal.get("file", proposed_file)
                         if repaired_file == proposed_file:
