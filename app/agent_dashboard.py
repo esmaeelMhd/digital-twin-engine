@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import os
+import re
 import shlex
 import subprocess
 from collections import deque
@@ -20,6 +22,8 @@ DEFAULT_AUTORESEARCH_CONFIG = PROJECT_ROOT / "configs" / "autoresearch_default.y
 STATE_FILE = PROJECT_ROOT / "agent_state.json"
 LOG_FILE = PROJECT_ROOT / "outputs" / "autoresearch_logs" / "agent.log"
 LEGACY_LOG_FILE = PROJECT_ROOT / "agent.log"
+CAMPAIGN_RUNNER_DIR = PROJECT_ROOT / "outputs" / "campaign_runner"
+IDEA_MARKER_RE = re.compile(r"\[idea:([a-zA-Z0-9_.-]+)\]")
 
 
 def _list_config_options() -> list[Path]:
@@ -100,6 +104,24 @@ def _read_json_file(path: Path) -> dict | None:
         return None
 
 
+def _parse_iso_datetime(raw_value: str | None) -> datetime | None:
+    if not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw_value))
+    except ValueError:
+        return None
+
+
+def _parse_results_timestamp(raw_value: str | None) -> datetime | None:
+    if not raw_value:
+        return None
+    try:
+        return datetime.strptime(str(raw_value), "%Y%m%d-%H%M%S")
+    except ValueError:
+        return None
+
+
 def _parse_metric(raw_value: str) -> float | None:
     raw_value = (raw_value or "").strip()
     if raw_value in ("", "0", "0.0", "0.000000"):
@@ -119,6 +141,18 @@ def _decode_description(description: str) -> tuple[str, str]:
         file_changed, remainder = description[1:].split("] ", 1)
         return file_changed, remainder
     return "", description
+
+
+def _idea_label(description: str) -> str | None:
+    match = IDEA_MARKER_RE.search(description or "")
+    return match.group(1) if match else None
+
+
+def _display_description(description: str) -> str:
+    idea_id = _idea_label(description)
+    if idea_id:
+        return idea_id
+    return " ".join((description or "").split())
 
 
 def _load_results(config: dict) -> list[dict]:
@@ -178,6 +212,82 @@ def _load_results(config: dict) -> list[dict]:
                 )
 
     return rows
+
+
+def _campaign_runner_summary_paths() -> list[Path]:
+    if not CAMPAIGN_RUNNER_DIR.exists():
+        return []
+    return sorted(CAMPAIGN_RUNNER_DIR.glob("*/summary.json"))
+
+
+def _load_campaign_runner_session(summary_path: Path) -> dict | None:
+    summary = _read_json_file(summary_path)
+    if not summary:
+        return None
+
+    aggregated_rows: list[dict] = []
+    campaign_rows: list[dict] = []
+    for campaign in summary.get("campaigns", []):
+        config_path = Path(str(campaign.get("config_path", "")))
+        if not config_path.is_absolute():
+            config_path = PROJECT_ROOT / config_path
+        config = _load_config(config_path)
+        rows = _load_results(config)
+        started_at = _parse_iso_datetime(campaign.get("started_at"))
+        finished_at = _parse_iso_datetime(campaign.get("finished_at"))
+
+        session_rows: list[dict] = []
+        for row in rows:
+            row_ts = _parse_results_timestamp(row.get("timestamp"))
+            if started_at and row_ts and row_ts < started_at:
+                continue
+            if finished_at and row_ts and row_ts > finished_at:
+                continue
+            enriched = dict(row)
+            enriched["campaign"] = str(campaign.get("campaign", ""))
+            enriched["stage"] = str(campaign.get("stage", ""))
+            enriched["branch"] = str(campaign.get("branch", ""))
+            enriched["merged_into_main"] = bool(campaign.get("merged_into_main", False))
+            enriched["_parsed_timestamp"] = row_ts
+            session_rows.append(enriched)
+
+        session_rows.sort(
+            key=lambda row: (
+                row.get("_parsed_timestamp") or datetime.min,
+                str(row.get("run_id", "")),
+            )
+        )
+        aggregated_rows.extend(session_rows)
+
+        valid_losses = [row["val_loss"] for row in session_rows if row["val_loss"] is not None]
+        campaign_rows.append(
+            {
+                "campaign": campaign.get("campaign", ""),
+                "stage": campaign.get("stage", ""),
+                "runs": len(session_rows),
+                "keeps": sum(1 for row in session_rows if row["status"] == "keep"),
+                "crashes": sum(1 for row in session_rows if row["status"] == "crash"),
+                "best_val_loss": min(valid_losses) if valid_losses else None,
+                "merged_into_main": bool(campaign.get("merged_into_main", False)),
+                "branch": campaign.get("branch", ""),
+            }
+        )
+
+    aggregated_rows.sort(
+        key=lambda row: (
+            row.get("_parsed_timestamp") or datetime.min,
+            str(row.get("campaign", "")),
+            str(row.get("run_id", "")),
+        )
+    )
+    for row in aggregated_rows:
+        row.pop("_parsed_timestamp", None)
+
+    return {
+        "summary": summary,
+        "rows": aggregated_rows,
+        "campaign_rows": campaign_rows,
+    }
 
 
 def _tail_lines(path: Path, limit: int = 120) -> list[str]:
@@ -364,25 +474,31 @@ def _high_outlier_cutoff(values: list[float]) -> float | None:
     return q3 + 3.0 * iqr
 
 
-def _short_label(text: str, limit: int = 28) -> str:
-    clean = " ".join((text or "").split())
+def _short_label(text: str, limit: int = 40) -> str:
+    clean = _display_description(text)
     if len(clean) <= limit:
         return clean
     return clean[: limit - 3].rstrip() + "..."
 
 
-def _render_validation_trend(results: list[dict]) -> None:
+def _render_validation_trend(
+    results: list[dict],
+    *,
+    title_prefix: str = "Validation Trend",
+    keep_only: bool | None = None,
+    hide_high_outliers: bool = True,
+) -> None:
     points = _metric_points(results)
     if not points:
         st.info("No validation-loss points logged yet.")
         return
 
     keep_only_points = [point for point in points if point["status"] == "keep"]
-    showing_keep_only = bool(keep_only_points)
+    showing_keep_only = bool(keep_only_points) if keep_only is None else (keep_only and bool(keep_only_points))
     visible_points = keep_only_points if showing_keep_only else points
     hidden_points: list[dict] = []
     cutoff = None
-    if not showing_keep_only:
+    if hide_high_outliers and not showing_keep_only:
         cutoff = _high_outlier_cutoff([point["val_loss"] for point in visible_points])
     if cutoff is not None:
         visible_points = [point for point in points if point["val_loss"] <= cutoff]
@@ -429,7 +545,7 @@ def _render_validation_trend(results: list[dict]) -> None:
                 arrowprops={"arrowstyle": "-", "color": "#D9C98E", "lw": 0.8},
             )
 
-    title = "Validation Trend"
+    title = title_prefix
     if showing_keep_only:
         title += " (kept changes only)"
     if hidden_points:
@@ -457,6 +573,28 @@ def _render_validation_trend(results: list[dict]) -> None:
         st.caption(" ".join(caption_bits))
 
 
+def _render_baseline_details(baseline_payload: dict | None) -> None:
+    if not baseline_payload:
+        st.info("No baseline metadata found yet.")
+        return
+
+    metric_value = baseline_payload.get("metric_value", baseline_payload.get("best_val_loss"))
+    commit = str(baseline_payload.get("commit", "—"))[:7]
+    run_id = str(baseline_payload.get("run_id", "—"))
+    promoted_at = str(baseline_payload.get("promoted_at", "—"))
+    description = str(baseline_payload.get("description", "")).strip()
+
+    col1, col2 = st.columns(2)
+    col1.metric("Baseline Val Loss", f"{metric_value:.6f}" if isinstance(metric_value, (int, float)) else "—")
+    col2.metric("Commit", commit or "—")
+    st.caption(f"Run ID: `{run_id}`")
+    st.caption(f"Promoted: `{promoted_at}`")
+    if description:
+        st.write(description)
+    with st.expander("Baseline metadata JSON"):
+        st.json(baseline_payload)
+
+
 st.set_page_config(
     page_title="Autoresearch Monitor",
     page_icon="🧪",
@@ -469,6 +607,7 @@ config = _load_config(config_path)
 workspace_dir = _workspace_dir(config)
 results = _load_results(config)
 baseline_metadata = _read_json_file(_baseline_metadata_path(config))
+campaign_runner_summaries = _campaign_runner_summary_paths()
 state = _read_json_file(STATE_FILE)
 processes = _agent_processes()
 if not state and processes:
@@ -508,6 +647,36 @@ with st.sidebar:
         st.query_params["config"] = selected_label
         st.rerun()
 
+    selected_session_summary = None
+    selected_session_label = ""
+    query_session = str(st.query_params.get("session") or "")
+    query_view_mode = str(st.query_params.get("view") or "Active config")
+
+    if campaign_runner_summaries:
+        session_options = list(reversed(campaign_runner_summaries))
+        session_labels = [path.parent.name for path in session_options]
+        default_session_index = session_labels.index(query_session) if query_session in session_labels else 0
+        selected_session_label = st.selectbox(
+            "Campaign runner session",
+            session_labels,
+            index=default_session_index,
+            key="campaign_runner_session",
+        )
+        selected_session_summary = session_options[session_labels.index(selected_session_label)]
+    else:
+        selected_session_summary = None
+
+    if selected_session_summary is not None:
+        default_view_index = 1 if query_view_mode == "Campaign runner session" else 0
+        view_mode = st.radio(
+            "Primary view",
+            ["Active config", "Campaign runner session"],
+            index=default_view_index,
+            key="primary_view_mode",
+        )
+    else:
+        view_mode = "Active config"
+
     auto_refresh = st.toggle("Auto-refresh", value=True)
     refresh_seconds = st.slider("Refresh every (seconds)", min_value=2, max_value=30, value=30)
     st.divider()
@@ -528,6 +697,13 @@ with st.sidebar:
     )
     st.warning("This dashboard has no authentication. Do not expose it to the public internet.")
 
+if selected_session_summary is not None:
+    st.query_params["session"] = selected_session_label
+    st.query_params["view"] = view_mode
+else:
+    st.query_params.pop("session", None)
+    st.query_params.pop("view", None)
+
 if auto_refresh:
     components.html(
         f"""
@@ -540,53 +716,97 @@ if auto_refresh:
         height=0,
     )
 
-phase = state.get("phase") if state else "IDLE"
-phase_label = phase
-if state and not processes:
-    phase_label = f"{phase} (stale state)"
+campaign_runner_session = (
+    _load_campaign_runner_session(selected_session_summary)
+    if selected_session_summary is not None
+    else None
+)
 
-best_val_loss = None
-if baseline_metadata:
-    best_val_loss = baseline_metadata.get("best_val_loss")
+using_campaign_session = (
+    view_mode == "Campaign runner session"
+    and campaign_runner_session is not None
+)
+
+if using_campaign_session:
+    session_summary = campaign_runner_session["summary"]
+    display_results = campaign_runner_session["rows"]
+    display_best_val_loss = min(
+        [row["val_loss"] for row in display_results if row["val_loss"] is not None],
+        default=None,
+    )
+    display_phase_label = f"{session_summary.get('stage', 'session')} (campaign session)"
+    display_experiment = len(display_results)
+    display_workspace_text = f"outputs/campaign_runner/{session_summary.get('session_tag', 'unknown')}"
+    display_config_text = "aggregated campaign-runner session"
+    display_results_text = f"aggregated across {len(campaign_runner_session['campaign_rows'])} campaign workspaces"
+    display_keep_count = sum(1 for row in display_results if row["status"] == "keep")
+    display_crash_count = sum(1 for row in display_results if row["status"] == "crash")
+    display_state_payload = session_summary
+    display_state_header = "Campaign Session Summary"
+    display_baseline_payload = None
+    display_baseline_header = "Session Details"
 else:
-    valid_losses = [row["val_loss"] for row in results if row["val_loss"] is not None]
-    if valid_losses:
-        best_val_loss = min(valid_losses)
+    display_results = results
+    display_best_val_loss = None
+    if baseline_metadata:
+        display_best_val_loss = baseline_metadata.get("metric_value", baseline_metadata.get("best_val_loss"))
+    else:
+        valid_losses = [row["val_loss"] for row in display_results if row["val_loss"] is not None]
+        if valid_losses:
+            display_best_val_loss = min(valid_losses)
+    phase = state.get("phase") if state else "IDLE"
+    display_phase_label = phase
+    if state and not processes:
+        display_phase_label = f"{phase} (stale state)"
+    display_experiment = state.get("experiment_num", "—") if state else "—"
+    display_workspace_text = str(workspace_dir)
+    display_config_text = str(config_path.relative_to(PROJECT_ROOT))
+    display_results_text = str(_results_path(config))
+    display_keep_count = sum(1 for row in display_results if row["status"] == "keep")
+    display_crash_count = sum(1 for row in display_results if row["status"] == "crash")
+    display_state_payload = state
+    display_state_header = "Current Agent State"
+    display_baseline_payload = baseline_metadata
+    display_baseline_header = "Promoted Baseline"
 
 status_col, phase_col, exp_col, best_col, keep_col, crash_col = st.columns(6)
 status_col.metric("Agent Process", "Running" if processes else "Stopped")
-phase_col.metric("Phase", phase_label)
-exp_col.metric("Experiment", state.get("experiment_num", "—") if state else "—")
-best_col.metric("Best Val Loss", f"{best_val_loss:.6f}" if isinstance(best_val_loss, (int, float)) else "—")
-keep_col.metric("Keeps", sum(1 for row in results if row["status"] == "keep"))
-crash_col.metric("Crashes", sum(1 for row in results if row["status"] == "crash"))
+phase_col.metric("Phase", display_phase_label)
+exp_col.metric("Experiment", display_experiment)
+best_col.metric("Best Val Loss", f"{display_best_val_loss:.6f}" if isinstance(display_best_val_loss, (int, float)) else "—")
+keep_col.metric("Keeps", display_keep_count)
+crash_col.metric("Crashes", display_crash_count)
 
-st.caption(f"Workspace: `{workspace_dir}`")
-st.caption(f"Config: `{config_path.relative_to(PROJECT_ROOT)}`")
-st.caption(f"Results ledger: `{_results_path(config)}`")
+st.caption(f"Workspace: `{display_workspace_text}`")
+st.caption(f"Config/View: `{display_config_text}`")
+st.caption(f"Results source: `{display_results_text}`")
 
 left, right = st.columns([3, 2])
 
 with left:
-    st.subheader("Current Agent State")
-    if state:
-        st.json(state)
+    st.subheader(display_state_header)
+    if display_state_payload:
+        st.json(display_state_payload)
     else:
-        st.info("No `agent_state.json` found.")
+        st.info("No data available.")
 
-    st.subheader("Recent Results")
+    st.subheader("Recent Results" if not using_campaign_session else "Campaign Results")
     display_rows = []
-    for index, row in enumerate(results[-20:], start=max(1, len(results) - 19)):
-        display_rows.append(
-            {
-                "#": index,
-                "status": row["status"],
-                "val_loss": row["val_loss"],
-                "file": row["file"],
-                "description": row["description"],
-                "commit": row["commit"][:7] if row["commit"] else "—",
-            }
-        )
+    table_rows = display_results if using_campaign_session else display_results[-20:]
+    table_start = 1 if using_campaign_session else max(1, len(display_results) - 19)
+    for index, row in enumerate(table_rows, start=table_start):
+        display_row = {
+            "#": index,
+            "status": row["status"],
+            "val_loss": row["val_loss"],
+            "file": row["file"],
+            "description": row["description"],
+            "commit": row["commit"][:7] if row["commit"] else "—",
+        }
+        if using_campaign_session:
+            display_row["campaign"] = row.get("campaign", "")
+            display_row["stage"] = row.get("stage", "")
+        display_rows.append(display_row)
     if display_rows:
         st.dataframe(display_rows, width="stretch", hide_index=True)
     else:
@@ -610,15 +830,91 @@ with right:
     else:
         st.info("No live `scripts/agent.py` process detected.")
 
-    st.subheader("Promoted Baseline")
-    if baseline_metadata:
-        st.json(baseline_metadata)
+    st.subheader(display_baseline_header)
+    if display_baseline_payload:
+        _render_baseline_details(display_baseline_payload)
+    elif using_campaign_session and campaign_runner_session:
+        st.dataframe(
+            [
+                {
+                    "campaign": row["campaign"],
+                    "stage": row["stage"],
+                    "runs": row["runs"],
+                    "keeps": row["keeps"],
+                    "crashes": row["crashes"],
+                    "best_val_loss": row["best_val_loss"],
+                    "merged_into_main": row["merged_into_main"],
+                }
+                for row in campaign_runner_session["campaign_rows"]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
     else:
         st.info("No baseline metadata found yet.")
 
-if any(row["val_loss"] is not None for row in results):
+if any(row["val_loss"] is not None for row in display_results):
     st.subheader("Validation Trend")
-    _render_validation_trend(results)
+    _render_validation_trend(
+        display_results,
+        title_prefix="Campaign Runner Validation Trend" if using_campaign_session else "Validation Trend",
+        keep_only=False if using_campaign_session else None,
+        hide_high_outliers=not using_campaign_session,
+    )
+
+if campaign_runner_session and campaign_runner_session["rows"] and not using_campaign_session:
+    st.subheader("Campaign Runner History")
+    session_summary = campaign_runner_session["summary"]
+    session_rows = campaign_runner_session["rows"]
+    session_campaign_rows = campaign_runner_session["campaign_rows"]
+    session_valid_losses = [row["val_loss"] for row in session_rows if row["val_loss"] is not None]
+    session_best = min(session_valid_losses) if session_valid_losses else None
+    sess_col1, sess_col2, sess_col3, sess_col4 = st.columns(4)
+    sess_col1.metric("Session", str(session_summary.get("session_tag", "—")))
+    sess_col2.metric("Campaigns", len(session_campaign_rows))
+    sess_col3.metric("Session Best", f"{session_best:.6f}" if isinstance(session_best, (int, float)) else "—")
+    sess_col4.metric("Merged Campaigns", sum(1 for row in session_campaign_rows if row["merged_into_main"]))
+
+    _render_validation_trend(session_rows, title_prefix="Campaign Runner Validation Trend", keep_only=False, hide_high_outliers=False)
+
+    st.caption("Aggregated from all campaign workspaces in the selected runner session, filtered to each campaign's start and finish window.")
+
+    st.subheader("Campaign Summary")
+    st.dataframe(
+        [
+            {
+                "campaign": row["campaign"],
+                "stage": row["stage"],
+                "runs": row["runs"],
+                "keeps": row["keeps"],
+                "crashes": row["crashes"],
+                "best_val_loss": row["best_val_loss"],
+                "merged_into_main": row["merged_into_main"],
+                "branch": row["branch"],
+            }
+            for row in session_campaign_rows
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.subheader("Aggregated Recent Runs")
+    st.dataframe(
+        [
+            {
+                "#": index,
+                "campaign": row["campaign"],
+                "status": row["status"],
+                "val_loss": row["val_loss"],
+                "file": row["file"],
+                "description": row["description"],
+                "commit": row["commit"][:7] if row["commit"] else "—",
+            }
+            for index, row in enumerate(session_rows[-30:], start=max(1, len(session_rows) - 29))
+        ],
+        width="stretch",
+        hide_index=True,
+    )
 
 st.subheader("Activity Log")
 if log_tail:
