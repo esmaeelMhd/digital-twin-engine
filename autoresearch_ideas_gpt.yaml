@@ -1,0 +1,188 @@
+ideas:
+
+  # ── Tier 1: Feasible within autoresearch harness, single-file changes ──────
+
+  - id: dimensionless_buckingham_pi_frontend
+    priority: 10
+    target_file: dte/models/encoder.py
+    title: Expand the encoder input with generic dimensionless groups, ratio features, and log-scaled operating quantities derived from SystemSpec normalization so the representation is invariant to units and operating scale.
+    rationale: >
+      A true foundational model for physical systems should not have to re-learn the
+      same dynamics just because variables are expressed in different units or ranges.
+      If the encoder sees generic dimensionless structure, it may discover reusable
+      physical operators across reactors, heat exchangers, and future systems. The
+      opposite risk is that hand-crafted invariances erase useful signal and make the
+      latent representation too rigid.
+    instructions:
+      - Add an optional feature expansion path ahead of the existing encoder stack.
+      - Include only generic features that can be derived from normalized states,
+        controls, and params without system-specific formulas.
+      - Keep the raw normalized inputs in the concatenation so the fallback path
+        remains intact.
+      - Add config flag model.use_dimensionless_inputs (true/false).
+      - Keep parameter count growth modest; avoid feature explosion.
+
+  - id: contrastive_cross_system_latent_alignment
+    priority: 20
+    target_file: dte/training/losses.py
+    title: Add a contrastive latent alignment loss that pulls similar operating regimes together across systems while repelling genuinely different regimes.
+    rationale: >
+      Foundational behavior requires a shared latent geometry, not just shared code.
+      If two systems are both in near-steady thermal transients or both experiencing
+      control shocks, their latent states should become nearby even if the raw state
+      vectors differ. This could unlock transfer and few-shot adaptation, or it could
+      collapse distinct systems into an average representation that predicts neither
+      one well.
+    instructions:
+      - Compute the contrastive loss on z_mean or another deterministic latent summary.
+      - Use a lightweight batch-local InfoNCE or NT-Xent formulation.
+      - Derive positives from similar normalized derivative signatures or nearby
+        operating regimes rather than hardcoded system identity rules.
+      - Add config block contrastive_alignment with enabled, weight, and temperature.
+      - Fall back exactly to current behavior when the block is absent or disabled.
+
+  - id: koopman_residual_hybrid_drift
+    priority: 30
+    target_file: dte/models/latent_sde.py
+    title: Replace the purely nonlinear drift with a Koopman-style linear latent operator plus a small nonlinear residual correction network.
+    rationale: >
+      Many industrial systems are locally close to linear once expressed in the right
+      coordinates. If the latent space learns that coordinate system, a Koopman-like
+      operator could provide better stability, easier transfer, and more MPC-friendly
+      dynamics. The failure mode is equally large: a bad linear bias can underfit the
+      nonlinear physics and make rollouts worse everywhere.
+    instructions:
+      - Parameterize a latent linear operator A and control/disturbance injection B.
+      - Add a residual nonlinear drift branch with a small initial scale.
+      - Constrain the initial linear dynamics to be near-stable at startup.
+      - Add config flag model.use_koopman_residual (true/false).
+      - Preserve the current MLP drift path as the fallback implementation.
+
+  - id: neural_cde_control_integration
+    priority: 40
+    target_file: dte/models/latent_sde.py
+    title: Treat controls and disturbances as paths and inject them through a Neural CDE-style matrix field instead of only pointwise interpolation.
+    rationale: >
+      Real plants are driven by piecewise-constant, abrupt, and sometimes irregular
+      inputs. A pointwise drift can miss the geometry of how those signals act over
+      time. Neural CDE-style control integration is a principled way to model rough
+      control paths and could make the engine much more robust on real data. It could
+      also add complexity with little benefit if the synthetic datasets are already
+      smooth enough.
+    instructions:
+      - Keep the existing autonomous drift and add an optional control-path term.
+      - Build the path from time, controls, and disturbances on the existing rollout grid.
+      - Use a compact projection to produce a latent_dim x path_dim matrix field.
+      - Add config flag model.use_neural_cde (true/false).
+      - Leave diffusion and decoder behavior unchanged.
+
+  # ── Tier 2: Structural changes, higher reward, higher risk ─────────────────
+
+  - id: simulator_plus_residual_dynamics
+    priority: 50
+    target_file: dte/models/latent_sde.py
+    title: Use the registered ProcessSimulator as the base drift prior and let the neural network learn only the sim-to-real residual mismatch.
+    rationale: >
+      This is one of the cleanest routes to making the repo feel like a foundational
+      model rather than a pure black box. If the simulator already captures most of
+      the physics, the learned part only needs to absorb the gap between idealized
+      equations and data. That could dramatically improve sample efficiency and
+      transfer. If the prior is biased or mismatched, it may instead anchor the model
+      to the wrong dynamics and prevent it from learning reality.
+    instructions:
+      - Add an optional simulator-prior path inside the latent drift.
+      - Use the simulator contribution as a base term and add a learned residual on top.
+      - Keep gradient flow through the residual safe; be conservative around stiff paths.
+      - Add config flag model.use_simulator_residual (true/false).
+      - Preserve the existing purely learned drift when disabled.
+
+  - id: port_hamiltonian_dissipative_latent_drift
+    priority: 60
+    target_file: dte/models/latent_sde.py
+    title: Restructure the latent drift as a port-Hamiltonian or dissipative system so energy exchange and dissipation are architectural priors instead of only loss penalties.
+    rationale: >
+      Dissipation is one of the most universal properties in thermodynamic process
+      systems. Baking it into the latent dynamics could massively improve long-horizon
+      stability and reduce unphysical rollouts. But industrial plants are open,
+      forced, and imperfectly measured; an overly rigid Hamiltonian structure could
+      make optimization unstable or simply encode the wrong physics.
+    instructions:
+      - Parameterize a skew-symmetric coupling term and a positive semi-definite
+        dissipation term.
+      - Learn a scalar latent energy function and compute its gradient with JAX.
+      - Keep control and disturbance actuation paths explicit.
+      - Add config flag model.port_hamiltonian (true/false).
+      - Initialize the structured terms small so training starts near current behavior.
+
+  - id: cross_system_masked_pretraining
+    priority: 70
+    target_file: dte/training/trainer.py
+    title: Add a masked trajectory pretraining phase across systems so the model learns generic interpolation and recovery dynamics before full rollout training.
+    rationale: >
+      Large foundational models are usually built in two stages: broad self-supervised
+      representation learning first, harder task-specific optimization second. The same
+      idea may apply here. A masked trajectory objective could teach reusable physical
+      structure before the SDE has to solve the harder long-horizon problem. Or it may
+      teach shortcut interpolation behavior that looks good in reconstruction and hurts
+      true forecasting.
+    instructions:
+      - Add a pretraining phase before the main optimization loop.
+      - Mask random or contiguous spans of states and require reconstruction from context.
+      - Support configuration under the existing pretraining block with minimal API change.
+      - Allow future extension to multiple systems without hardcoding dataset names.
+      - Keep the current training flow unchanged when pretraining is disabled.
+
+  # ── Tier 3: Transformative but multi-file; document here for future manual runs ─
+
+  - id: universal_systemspec_conditioned_backbone
+    priority: 80
+    target_file: dte/models/digital_twin.py
+    title: Train a single shared backbone conditioned on a rich embedding of the full SystemSpec so new systems require little more than thin adaptation heads.
+    rationale: >
+      This is the clearest foundational-model bet in the repo. If a shared backbone can
+      understand state/control/disturbance structure, normalization, constraints, and
+      nominal operating conditions from SystemSpec alone, new systems become adaptation
+      problems rather than full retrains. But the main existential risk is negative
+      transfer: one backbone may average incompatible systems together and degrade all
+      of them.
+    instructions:
+      - Build a learned embedding of the SystemSpec and inject it into the core model.
+      - Keep existing initialization paths and single-system behavior intact.
+      - Prefer conditioning mechanisms like FiLM, gating, or lightweight cross-attention.
+      - Add config flag model.use_system_backbone_conditioning (true/false).
+      - Do not introduce hardcoded system-name branches in model code.
+
+  - id: compositional_process_graph_hypernetwork
+    priority: 90
+    target_file: dte/models/digital_twin.py
+    title: Generate parts of the model weights from a compositional process graph so the architecture can generalize to unseen physical topologies.
+    rationale: >
+      A flat SystemSpec may be enough for transfer between small systems, but a real
+      foundational model for physical plants probably needs compositional structure:
+      inventories, flows, couplings, transport paths, and actuation edges. A graph-
+      conditioned hypernetwork could synthesize system-specific inductive bias from
+      topology. The downside is extreme complexity, fragile optimization, and a very
+      real chance that the extra structure simply adds noise.
+    instructions:
+      - Represent a system as nodes, edges, and global attributes derived from spec metadata.
+      - Use a compact hypernetwork or adapter generator rather than generating every weight.
+      - Keep the shared latent dynamics backbone intact where possible.
+      - Add config flag model.use_process_graph_hypernetwork (true/false).
+      - Treat this as experimental and avoid breaking current single-system construction.
+
+  - id: latent_trajectory_diffusion_foundation_model
+    priority: 100
+    target_file: dte/models/latent_sde.py
+    title: Replace forward latent SDE rollout with a trajectory diffusion model over full latent sequences conditioned on initial state, controls, disturbances, and parameters.
+    rationale: >
+      If the repo is ever going to behave like a true generative foundation model for
+      physical systems, full-trajectory diffusion is one of the boldest routes. It could
+      capture multi-modal futures, bifurcations, and regime uncertainty much better than
+      a single SDE path. It could also be slower, harder to train, and far less useful
+      for downstream control if sampling becomes too expensive.
+    instructions:
+      - Add a config switch such as sde.mode = diffusion with graceful fallback to SDE.
+      - Keep the encoder and decoder interfaces unchanged.
+      - Model full latent trajectories with a temporal UNet or transformer-style denoiser.
+      - Condition on control and disturbance sequences without hardcoding system dimensions.
+      - Flag as highly experimental and preserve current deterministic rollout paths.

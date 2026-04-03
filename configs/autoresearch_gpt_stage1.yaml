@@ -1,0 +1,113 @@
+# Stage 1: Conservative configuration for GPT moonshot ideas
+# Smaller models, shorter rollouts, and safe defaults for new experimental knobs
+
+model:
+  latent_dim: 16
+  hidden_dim: 64
+  n_layers: 2
+  drift_layers: 2
+  diffusion_layers: 2
+  diffusion_hidden_dim: 32
+  initial_diffusion_scale: 0.001
+  # state_dim, control_dim, etc. come from SystemSpec
+  use_dimensionless_inputs: false
+  use_koopman_residual: false
+  use_neural_cde: false
+  port_hamiltonian: false
+  use_simulator_residual: false
+  use_system_backbone_conditioning: false
+  use_process_graph_hypernetwork: false
+
+sde:
+  solver: "euler_heun"
+  dt_ratio: 0.5
+  mode: "sde"
+
+training:
+  n_epochs: 30
+  batch_size: 32
+  max_batches_per_epoch: 32
+  seq_len: 15
+  stride: 5
+  val_split: 0.3
+
+optimizer:
+  peak_lr: 2.0e-4
+  warmup_steps: 500
+  total_steps: 3000
+  end_lr: 1.0e-6
+  gradient_clip: 1.0
+  weight_decay: 0.0005
+
+loss_weights:
+  reconstruction: 1.0
+  kl: 0.00005
+  one_step: 1.0
+  trajectory: 5.0
+  mass_balance: 0.0005
+  energy_balance: 0.0005
+
+kl_annealing:
+  start_weight: 0.0
+  end_weight: 0.00005
+  anneal_steps: 2000
+
+sde_training:
+  enabled: false
+  warmup_steps: 1000
+  sde_kl_weight: 0.000005
+
+curriculum:
+  enabled: true
+  initial_seq_len: 5
+  final_seq_len: 15
+  warmup_epochs: 10
+
+teacher_forcing:
+  initial_ratio: 0.8
+  final_ratio: 0.2
+  anneal_epochs: 15
+
+checkpointing:
+  save_every: 5
+  save_best: true
+  output_dir: outputs/gpt_moonshot_stage1/
+
+dimensionless_features:
+  include_log_features: true
+  include_ratio_features: true
+  ratio_clip: 10.0
+
+contrastive_alignment:
+  enabled: false
+  weight: 0.01
+  temperature: 0.2
+
+koopman:
+  residual_scale_init: 0.05
+  spectral_radius_limit: 1.05
+
+neural_cde:
+  derivative_smoothing: "finite_difference"
+  control_path_scale: 1.0
+
+simulator_residual:
+  residual_scale_init: 0.01
+  stop_gradient_through_simulator: false
+
+pretraining:
+  enabled: false
+  n_steps: 1000
+  mask_fraction: 0.3
+  mask_strategy: "random"
+  across_systems: false
+
+joint_training:
+  enabled: false
+  system_sampling: "round_robin"
+  shared_backbone: true
+
+process_graph:
+  enabled: false
+  node_dim: 32
+  edge_dim: 16
