@@ -332,7 +332,7 @@ class LatentSDE(eqx.Module):
         drift_term = diffrax.ODETerm(drift_fn)
         diffusion_term = diffrax.ControlTerm(diffusion_fn, brownian_motion)
         terms = diffrax.MultiTerm(drift_term, diffusion_term)
-        solver = diffrax.Heun()
+        solver = diffrax.Euler()
 
         saveat = diffrax.SaveAt(ts=ts)
         solution = diffrax.diffeqsolve(
