@@ -57,8 +57,8 @@ class Encoder(eqx.Module):
             self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=k1))
             self.context_layers.append(eqx.nn.Linear(ctx_dim, hidden_dim * 2, key=k2))
 
-        self.mean_layer = eqx.nn.Linear(hidden_dim, latent_dim, key=keys[-2])
-        self.logvar_layer = eqx.nn.Linear(hidden_dim, latent_dim, key=keys[-1])
+        self.mean_layer = eqx.nn.Linear(hidden_dim + state_dim, latent_dim, key=keys[-2])
+        self.logvar_layer = eqx.nn.Linear(hidden_dim + state_dim, latent_dim, key=keys[-1])
 
         # Store normalization as frozen arrays
         self.state_center = jnp.array(
@@ -97,8 +97,9 @@ class Encoder(eqx.Module):
             x = x + out if i > 0 else out
             ctx = jax.nn.gelu(gamma)
 
-        z_mean = self.mean_layer(x)
-        z_logvar = jnp.clip(self.logvar_layer(x), -10.0, 5.0)
+        x_final = jnp.concatenate([x, scaled_state], axis=-1)
+        z_mean = self.mean_layer(x_final)
+        z_logvar = jnp.clip(self.logvar_layer(x_final), -10.0, 5.0)
 
         return z_mean, z_logvar
 
