@@ -217,6 +217,32 @@ class CSTRSimulator(ProcessSimulator):
             "controls": control_trajectory,
         }
 
+    def simulate_for_data_generation_with_params(
+        self,
+        initial_state: Float[Array, "4"],
+        control_trajectory: Float[Array, "n_steps 2"],
+        disturbance_trajectory: Float[Array, "n_steps 2"],
+        params: Float[Array, "11"],
+        t_span: Tuple[float, float],
+        dt: float = 0.1,
+        n_steps: int = 1000,
+    ) -> Dict[str, Float[Array, "..."]]:
+        """Param-aware fixed-grid rollout for offline data generation."""
+        del dt, n_steps
+        time, states = simulate_data_generation_jit(
+            initial_state,
+            control_trajectory,
+            disturbance_trajectory,
+            params,
+            t_span[0],
+            t_span[1],
+        )
+        return {
+            "time": time,
+            "states": states,
+            "controls": control_trajectory,
+        }
+
     def _steady_state_residual(
         self,
         T: Float[Array, ""],
@@ -358,6 +384,127 @@ class CSTRSimulator(ProcessSimulator):
 
         return jnp.array([Ca, Cb, T, Tc])
 
+    def steady_state_for_data_generation_with_params(
+        self,
+        control: Float[Array, "2"],
+        disturbance: Float[Array, "2"],
+        params: Float[Array, "11"],
+        initial_guess: Optional[Float[Array, "4"]] = None,
+    ) -> Float[Array, "4"]:
+        """Param-aware steady state used by the generic generation pipeline."""
+        if initial_guess is None:
+            initial_guess = jnp.array([0.5, 0.5, 350.0, 300.0])
+        state = steady_state_from_packed_params_jit(control, disturbance, initial_guess, params)
+        residual = jnp.abs(_steady_state_residual_with_params(state[2], control, disturbance, params))
+        if bool(jnp.isfinite(residual) & (residual <= 1e-4)):
+            return state
+        return CSTRSimulator(unpack_params(params)).steady_state(control, disturbance, initial_guess)
+
+    def steady_state_batch_for_data_generation(
+        self,
+        controls: Float[Array, "batch 2"],
+        disturbances: Float[Array, "batch 2"],
+        params_batch: Optional[Float[Array, "batch 11"]] = None,
+        initial_guesses: Optional[Float[Array, "batch 4"]] = None,
+    ) -> Float[Array, "batch 4"]:
+        """Vectorized steady-state solve with robust fallback handling."""
+        if params_batch is None:
+            params_batch = jnp.tile(_pack_params(self.params)[None, :], (controls.shape[0], 1))
+        if initial_guesses is None:
+            initial_guesses = jnp.tile(jnp.array([[0.5, 0.5, 350.0, 300.0]]), (controls.shape[0], 1))
+        alt_temperature_guess = 0.5 * (disturbances[:, 1] + controls[:, 1]) + 20.0
+        alternative_initial_guesses = initial_guesses.at[:, 2].set(alt_temperature_guess)
+        candidate_states_default, residuals_default = steady_state_batch_with_residuals_jit(
+            controls,
+            disturbances,
+            initial_guesses,
+            params_batch,
+        )
+        candidate_states_alt, residuals_alt = steady_state_batch_with_residuals_jit(
+            controls,
+            disturbances,
+            alternative_initial_guesses,
+            params_batch,
+        )
+        use_alternative_mask = residuals_alt < residuals_default
+        residuals = jnp.where(use_alternative_mask, residuals_alt, residuals_default)
+        candidate_states = jnp.where(
+            use_alternative_mask[:, None],
+            candidate_states_alt,
+            candidate_states_default,
+        )
+        valid_fast_mask = jnp.isfinite(residuals) & (residuals <= 1e-4)
+        states = []
+        for idx in range(controls.shape[0]):
+            if bool(valid_fast_mask[idx]):
+                states.append(candidate_states[idx])
+            else:
+                params_obj = unpack_params(params_batch[idx])
+                states.append(
+                    CSTRSimulator(params_obj).steady_state(
+                        controls[idx],
+                        disturbances[idx],
+                        initial_guesses[idx],
+                    )
+                )
+        return jnp.stack(states)
+
+    def simulate_batch_for_data_generation(
+        self,
+        initial_states: Float[Array, "batch 4"],
+        control_trajectories: Float[Array, "batch n_steps 2"],
+        disturbance_trajectories: Float[Array, "batch n_steps 2"],
+        t_span: Tuple[float, float],
+        params_batch: Optional[Float[Array, "batch 11"]] = None,
+        dt: float = 0.1,
+        n_steps: int = 1000,
+    ) -> Dict[str, Float[Array, "..."]]:
+        """Vectorized fixed-grid rollout used by the generic generation pipeline."""
+        del dt, n_steps
+        if params_batch is None:
+            params_batch = jnp.tile(_pack_params(self.params)[None, :], (initial_states.shape[0], 1))
+        times, states = simulate_data_generation_batch_jit(
+            initial_states,
+            control_trajectories,
+            disturbance_trajectories,
+            params_batch,
+            t_span[0],
+            t_span[1],
+        )
+        return {
+            "time": times,
+            "states": states,
+            "controls": control_trajectories,
+        }
+
+    def sample_data_generation_params(
+        self,
+        key: PRNGKeyArray,
+    ) -> Float[Array, "11"]:
+        """Sample packed simulator parameters for offline data generation."""
+        return _pack_params(sample_random_params(key))
+
+    def apply_measurement_noise(
+        self,
+        key: PRNGKeyArray,
+        states: Float[Array, "n_steps 4"],
+    ) -> Float[Array, "n_steps 4"]:
+        """Add CSTR measurement noise during offline data generation."""
+        noise_std = jnp.array([0.01, 0.01, 0.5, 0.5])
+        state_noise = jax.random.normal(key, shape=states.shape) * noise_std[None, :]
+        return states + state_noise
+
+    def is_valid_trajectory(
+        self,
+        states: Float[Array, "n_steps 4"],
+    ) -> bool:
+        """Reject non-finite or physically implausible CSTR trajectories."""
+        return bool(
+            jnp.all(jnp.isfinite(states))
+            & jnp.all(states[:, 0] >= 0.0)
+            & jnp.all(states[:, 1] >= -0.5)
+        )
+
     def get_conservation_quantities(
         self,
         states: Float[Array, "n_steps 4"],
@@ -412,6 +559,23 @@ def _pack_params(params: CSTRParams) -> Float[Array, "11"]:
 def pack_params(params: CSTRParams) -> Float[Array, "11"]:
     """Public wrapper for packing simulator parameters into an array."""
     return _pack_params(params)
+
+
+def unpack_params(params: Float[Array, "11"]) -> CSTRParams:
+    """Unpack a packed parameter array into a ``CSTRParams`` object."""
+    return CSTRParams(
+        V=float(params[0]),
+        Vc=float(params[1]),
+        k0=float(params[2]),
+        Ea_over_R=float(params[3]),
+        dH_rxn=float(params[4]),
+        rho=float(params[5]),
+        Cp=float(params[6]),
+        UA=float(params[7]),
+        rho_c=float(params[8]),
+        Cp_c=float(params[9]),
+        Fc=float(params[10]),
+    )
 
 
 def _dynamics_with_params(

@@ -311,3 +311,40 @@ class ProcessSimulator(ABC):
     ) -> Float[Array, "batch param_dim"]:
         """Vectorized parameter sampling hook for offline data generation."""
         return jnp.stack([self.sample_data_generation_params(key) for key in keys], axis=0)
+
+    def apply_measurement_noise(
+        self,
+        key,
+        states: Float[Array, "n_steps state_dim"],
+    ) -> Float[Array, "n_steps state_dim"]:
+        """Optional measurement-noise hook for offline data generation."""
+        del key
+        return states
+
+    def apply_measurement_noise_batch(
+        self,
+        keys,
+        states: Float[Array, "batch n_steps state_dim"],
+    ) -> Float[Array, "batch n_steps state_dim"]:
+        """Vectorized measurement-noise hook for offline data generation."""
+        return jnp.stack(
+            [self.apply_measurement_noise(keys[idx], states[idx]) for idx in range(states.shape[0])],
+            axis=0,
+        )
+
+    def is_valid_trajectory(
+        self,
+        states: Float[Array, "n_steps state_dim"],
+    ) -> bool:
+        """Optional trajectory validity hook for offline data generation."""
+        return bool(jnp.all(jnp.isfinite(states)))
+
+    def valid_trajectory_mask(
+        self,
+        states: Float[Array, "batch n_steps state_dim"],
+    ) -> Float[Array, "batch"]:
+        """Vectorized trajectory-validity hook for offline data generation."""
+        return jnp.asarray(
+            [self.is_valid_trajectory(states[idx]) for idx in range(states.shape[0])],
+            dtype=bool,
+        )

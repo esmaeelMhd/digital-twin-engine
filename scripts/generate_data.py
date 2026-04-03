@@ -12,8 +12,6 @@ import jax
 import jax.numpy as jnp
 
 from dte.simulators.registry import get_system_spec, get_simulator
-from dte.data.generation import DataGenerator
-
 
 def main():
     parser = argparse.ArgumentParser(description="Generate process system training data")
@@ -75,17 +73,12 @@ def main():
     system_spec = get_system_spec(config)
     system_name = system_spec.name
 
+    simulator = get_simulator(system_name, config)
     if system_name == "cstr":
-        # Use the original DataGenerator (CSTR-native, fast)
-        from dte.simulators.cstr import CSTRSimulator, CSTRParams
-        cstr_cfg = config.get("cstr", {})
-        params = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
-        simulator = CSTRSimulator(params)
-        generator = DataGenerator(simulator, config)
+        from dte.data.generation import UnifiedCSTRDataGenerator
+        generator = UnifiedCSTRDataGenerator(simulator, config)
     else:
-        # Generic path: use the GenericDataGenerator wrapper
         from dte.data.generation_generic import GenericDataGenerator
-        simulator = get_simulator(system_name, config)
         generator = GenericDataGenerator(simulator, config, system_spec)
     batch_size = (
         args.batch_size

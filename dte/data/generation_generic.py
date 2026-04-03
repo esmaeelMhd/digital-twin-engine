@@ -214,10 +214,15 @@ class GenericDataGenerator:
         else:
             raise ValueError(f"Unknown simulation_mode: {simulation_mode}")
 
-        states = result["states"]
+        noise_start = time.perf_counter()
+        states = self.simulator.apply_measurement_noise(key_ic, result["states"])
+        noise_seconds = time.perf_counter() - noise_start
 
         # Reject divergent trajectories
-        if jnp.any(~jnp.isfinite(states)):
+        validation_start = time.perf_counter()
+        is_valid = self.simulator.is_valid_trajectory(states)
+        validation_seconds = time.perf_counter() - validation_start
+        if not is_valid:
             return None
 
         return {
@@ -226,6 +231,8 @@ class GenericDataGenerator:
             "disturbances": disturbances,
             "params": params,
             "t": ts,
+            "measurement_noise_seconds": noise_seconds,
+            "validation_seconds": validation_seconds,
         }
 
     # ------------------------------------------------------------------
@@ -295,12 +302,17 @@ class GenericDataGenerator:
         else:
             raise ValueError(f"Unknown simulation_mode: {simulation_mode}")
 
+        noise_start = time.perf_counter()
+        noisy_states = self.simulator.apply_measurement_noise_batch(key_ic, result["states"])
+        noise_seconds = time.perf_counter() - noise_start
+
         return {
-            "states": result["states"],
+            "states": noisy_states,
             "controls": controls,
             "disturbances": disturbances,
             "params": params,
             "time": result["time"],
+            "measurement_noise_seconds": noise_seconds,
         }
 
     def generate_dataset_to_hdf5(
@@ -331,6 +343,7 @@ class GenericDataGenerator:
         signal_seconds = 0.0
         steady_state_seconds = 0.0
         rollout_seconds = 0.0
+        measurement_noise_seconds = 0.0
         validation_seconds = 0.0
 
         pbar = tqdm(total=n_trajectories, desc="Generating trajectories")
@@ -353,6 +366,8 @@ class GenericDataGenerator:
                     if traj is None:
                         invalid += 1
                         continue
+                    validation_seconds += float(traj.get("validation_seconds", 0.0))
+                    measurement_noise_seconds += float(traj.get("measurement_noise_seconds", 0.0))
                     valid_trajs = [traj]
                 else:
                     batch_start = time.perf_counter()
@@ -364,9 +379,10 @@ class GenericDataGenerator:
                     )
                     batch_elapsed = time.perf_counter() - batch_start
                     rollout_seconds += batch_elapsed
+                    measurement_noise_seconds += float(batch.get("measurement_noise_seconds", 0.0))
 
                     validation_start = time.perf_counter()
-                    valid_mask = jnp.all(jnp.isfinite(batch["states"]), axis=(1, 2))
+                    valid_mask = self.simulator.valid_trajectory_mask(batch["states"])
                     validation_seconds += time.perf_counter() - validation_start
                     valid_indices = np.asarray(jnp.where(valid_mask)[0])
                     invalid += current_batch_size - int(valid_mask.sum())
@@ -432,7 +448,7 @@ class GenericDataGenerator:
             "signal_generation_seconds": signal_seconds,
             "steady_state_seconds": steady_state_seconds,
             "rollout_seconds": rollout_seconds,
-            "measurement_noise_seconds": 0.0,
+            "measurement_noise_seconds": measurement_noise_seconds,
             "validation_seconds": validation_seconds,
             "attempts": attempts,
             "invalid_trajectories": invalid,

@@ -318,6 +318,29 @@ class HeatExchangerSimulator(ProcessSimulator):
             [sampled.V_hot, sampled.V_cold, sampled.UA, sampled.rho, sampled.Cp]
         )
 
+    def apply_measurement_noise(
+        self,
+        key,
+        states: Float[Array, "n_steps 2"],
+    ) -> Float[Array, "n_steps 2"]:
+        """Add mild temperature sensor noise during offline data generation."""
+        noise_std = jnp.array([0.5, 0.5])
+        noise = jax.random.normal(key, shape=states.shape) * noise_std[None, :]
+        return states + noise
+
+    def is_valid_trajectory(
+        self,
+        states: Float[Array, "n_steps 2"],
+    ) -> bool:
+        """Reject non-finite or physically implausible temperature trajectories."""
+        return bool(
+            jnp.all(jnp.isfinite(states))
+            & jnp.all(states[:, 0] >= 200.0)
+            & jnp.all(states[:, 1] >= 200.0)
+            & jnp.all(states[:, 0] <= 500.0)
+            & jnp.all(states[:, 1] <= 500.0)
+        )
+
     def get_params_vector(self) -> Float[Array, "5"]:
         """Return parameters as a JAX array [V_hot, V_cold, UA, rho, Cp]."""
         p = self._params
