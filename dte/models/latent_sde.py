@@ -15,6 +15,8 @@ class LatentDrift(eqx.Module):
     expert2_layers: list
     expert2_out: eqx.nn.Linear
     gate_layer: eqx.nn.Linear
+    physics_prior_z: eqx.nn.Linear
+    physics_prior_u: eqx.nn.Linear
 
     # Input normalizations stored as regular (non-static) JAX arrays.
     # They are frozen from gradient updates via eqx.filter in the optimizer.
@@ -40,10 +42,12 @@ class LatentDrift(eqx.Module):
         *,
         key: PRNGKeyArray,
     ):
-        k1, k2, k3 = jax.random.split(key, 3)
+        k1, k2, k3, k4, k5 = jax.random.split(key, 5)
         input_dim = latent_dim + control_dim + disturbance_dim + param_dim
 
         self.gate_layer = eqx.nn.Linear(input_dim, 1, key=k1)
+        self.physics_prior_z = eqx.nn.Linear(latent_dim, latent_dim, key=k4)
+        self.physics_prior_u = eqx.nn.Linear(control_dim, latent_dim, key=k5)
 
         keys1 = jax.random.split(k2, n_layers + 1)
         self.expert1_layers = []
@@ -110,7 +114,10 @@ class LatentDrift(eqx.Module):
             x2 = x2 + h if i > 0 else h
         out2 = self.expert2_out(jnp.concatenate([x2, x_in]))
 
-        return gate * out1 + (1.0 - gate) * out2
+        physics_drift = self.physics_prior_z(z) + self.physics_prior_u(u_norm)
+        residual_drift = gate * out1 + (1.0 - gate) * out2
+
+        return physics_drift + residual_drift
 
 
 class LatentDiffusion(eqx.Module):
