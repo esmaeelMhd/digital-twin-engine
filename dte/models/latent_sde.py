@@ -10,8 +10,11 @@ import diffrax
 class LatentDrift(eqx.Module):
     """Drift function f(z, u, d, c) for the latent SDE: dz = f*dt + g*dW"""
 
-    layers: list
-    output_layer: eqx.nn.Linear
+    expert1_layers: list
+    expert1_out: eqx.nn.Linear
+    expert2_layers: list
+    expert2_out: eqx.nn.Linear
+    gate_layer: eqx.nn.Linear
 
     # Input normalizations stored as regular (non-static) JAX arrays.
     # They are frozen from gradient updates via eqx.filter in the optimizer.
@@ -20,7 +23,6 @@ class LatentDrift(eqx.Module):
     disturbance_center: Float[Array, "disturbance_dim"]
     disturbance_scale: Float[Array, "disturbance_dim"]
     param_scale: float = eqx.field(static=True)
-    shared_gate: eqx.nn.Linear
 
     def __init__(
         self,
@@ -38,18 +40,24 @@ class LatentDrift(eqx.Module):
         *,
         key: PRNGKeyArray,
     ):
-        k1, k2 = jax.random.split(key)
-        self.shared_gate = eqx.nn.Linear(latent_dim, 1, key=k1)
-        keys = jax.random.split(key, n_layers + 1)
-
+        k1, k2, k3 = jax.random.split(key, 3)
         input_dim = latent_dim + control_dim + disturbance_dim + param_dim
 
-        self.layers = []
+        self.gate_layer = eqx.nn.Linear(input_dim, 1, key=k1)
+
+        keys1 = jax.random.split(k2, n_layers + 1)
+        self.expert1_layers = []
         for i in range(n_layers):
             in_dim = input_dim if i == 0 else hidden_dim
-            self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[i]))
+            self.expert1_layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys1[i]))
+        self.expert1_out = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys1[-1])
 
-        self.output_layer = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys[-1])
+        keys2 = jax.random.split(k3, n_layers + 1)
+        self.expert2_layers = []
+        for i in range(n_layers):
+            in_dim = input_dim if i == 0 else hidden_dim
+            self.expert2_layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys2[i]))
+        self.expert2_out = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys2[-1])
 
         self.control_center = jnp.array(
             control_center if control_center is not None else [0.0] * control_dim
@@ -86,12 +94,23 @@ class LatentDrift(eqx.Module):
         x = jnp.concatenate(parts)
         x_in = x
 
-        for i, layer in enumerate(self.layers):
-            h = layer(x)
-            h = jax.nn.gelu(h)
-            x = x + h if i > 0 else h
+        gate = jax.nn.sigmoid(self.gate_layer(x_in))
 
-        return self.output_layer(jnp.concatenate([x, x_in]))
+        x1 = x
+        for i, layer in enumerate(self.expert1_layers):
+            h = layer(x1)
+            h = jax.nn.gelu(h)
+            x1 = x1 + h if i > 0 else h
+        out1 = self.expert1_out(jnp.concatenate([x1, x_in]))
+
+        x2 = x
+        for i, layer in enumerate(self.expert2_layers):
+            h = layer(x2)
+            h = jax.nn.gelu(h)
+            x2 = x2 + h if i > 0 else h
+        out2 = self.expert2_out(jnp.concatenate([x2, x_in]))
+
+        return gate * out1 + (1.0 - gate) * out2
 
 
 class LatentDiffusion(eqx.Module):
