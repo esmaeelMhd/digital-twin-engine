@@ -1,0 +1,47 @@
+# Moonshot autoresearch campaign — stage 2 (longer budget, deeper search).
+# Runs all Tier 1 and Tier 2 ideas with enough epochs to detect genuine
+# improvement vs collapse. Use after stage 1 has identified survivors.
+research:
+  workspace_dir: outputs/autoresearch_gemini_stage2
+  metric_name: best_val_loss
+  metric_mode: min
+  time_budget_minutes: 25
+  hard_timeout_buffer_minutes: 5
+  promote_if_improved: true
+
+train:
+  config: configs/training_default.yaml
+  system_config: configs/cstr_default.yaml
+  data_dir: data/cstr/
+  n_epochs: 40
+  batch_size: null
+  val_every: 1
+  seed: 42
+
+agent:
+  default_llm: gemini-3.1-pro-preview-customtools
+  adaptive_temperature: true
+  max_fail_streak_temp: 0.5
+  temperature: 0.1
+  deepseek_temperature: 0.0
+  deepseek_max_tokens: 64000
+  thinking_level: medium
+  apply_llm: gemini-3.1-flash-lite-preview
+  apply_temperature: 0.0
+  apply_thinking_level: low
+  gemini_context_cache: true
+  gemini_context_cache_ttl: 3600s
+  gemini_context_cache_min_tokens: 2048
+  eval_on_keep: true
+  eval_every_n_runs: 3
+  eval_n_trajectories: 16
+  eval_predict_mode: deterministic
+  eval_plot_count: 2
+  eval_skip_ensemble: false
+  cooldown_between_experiments: 10
+  context_file: autoresearch_ideas_gemini.md
+  ideas_file: autoresearch_ideas_gemini.yaml
+  modifiable_files:
+    - dte/models/latent_sde.py
+    - dte/training/losses.py
+    - dte/training/trainer.py
