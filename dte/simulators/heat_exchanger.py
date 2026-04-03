@@ -138,6 +138,30 @@ class HeatExchangerSimulator(ProcessSimulator):
             "controls": control_trajectory,
         }
 
+    def simulate_for_data_generation(
+        self,
+        initial_state: Float[Array, "2"],
+        control_trajectory: Float[Array, "n_steps 2"],
+        disturbance_trajectory: Float[Array, "n_steps 2"],
+        t_span: Tuple[float, float],
+        dt: float = 0.1,
+        n_steps: int = 1000,
+    ) -> Dict[str, Array]:
+        """Fixed-grid rollout optimized for offline dataset generation."""
+        time, states = simulate_heat_exchanger_data_generation_jit(
+            initial_state,
+            control_trajectory,
+            disturbance_trajectory,
+            self.get_params_vector(),
+            t_span[0],
+            t_span[1],
+        )
+        return {
+            "time": time,
+            "states": states,
+            "controls": control_trajectory,
+        }
+
     def steady_state(
         self,
         control: Float[Array, "2"],
@@ -168,6 +192,40 @@ class HeatExchangerSimulator(ProcessSimulator):
         )
         return result["states"][-1]
 
+    def steady_state_for_data_generation(
+        self,
+        control: Float[Array, "2"],
+        disturbance: Float[Array, "2"],
+        initial_guess: Optional[Float[Array, "2"]] = None,
+    ) -> Float[Array, "2"]:
+        """Closed-form steady state for constant inputs.
+
+        For
+            0 = a_h (T_hot_in - T_hot) - b_h (T_hot - T_cold)
+            0 = a_c (T_cold_in - T_cold) + b_c (T_hot - T_cold)
+        solve the 2x2 linear system directly.
+        """
+        p = self._params
+        F_hot = jnp.maximum(control[0], 1e-6)
+        F_cold = jnp.maximum(control[1], 1e-6)
+        T_hot_in = disturbance[0]
+        T_cold_in = disturbance[1]
+
+        a_h = F_hot / p.V_hot
+        a_c = F_cold / p.V_cold
+        b_h = p.UA / (p.V_hot * p.rho * p.Cp)
+        b_c = p.UA / (p.V_cold * p.rho * p.Cp)
+
+        matrix = jnp.array([
+            [a_h + b_h, -b_h],
+            [-b_c, a_c + b_c],
+        ])
+        rhs = jnp.array([
+            a_h * T_hot_in,
+            a_c * T_cold_in,
+        ])
+        return jnp.linalg.solve(matrix, rhs)
+
     def get_params_vector(self) -> Float[Array, "5"]:
         """Return parameters as a JAX array [V_hot, V_cold, UA, rho, Cp]."""
         p = self._params
@@ -189,3 +247,80 @@ class HeatExchangerSimulator(ProcessSimulator):
             rho=float(p.rho),
             Cp=float(p.Cp),
         )
+
+
+@jax.jit
+def _heat_exchanger_dynamics_with_params(
+    state: Float[Array, "2"],
+    control: Float[Array, "2"],
+    disturbance: Float[Array, "2"],
+    params: Float[Array, "5"],
+) -> Float[Array, "2"]:
+    T_hot, T_cold = state
+    F_hot, F_cold = control
+    T_hot_in, T_cold_in = disturbance
+    V_hot, V_cold, UA, rho, Cp = params
+
+    heat_transfer = (UA / (rho * Cp)) * (T_hot - T_cold)
+    dT_hot_dt = (F_hot / V_hot) * (T_hot_in - T_hot) - heat_transfer / V_hot
+    dT_cold_dt = (F_cold / V_cold) * (T_cold_in - T_cold) + heat_transfer / V_cold
+    return jnp.array([dT_hot_dt, dT_cold_dt])
+
+
+@jax.jit
+def simulate_heat_exchanger_data_generation_jit(
+    initial_state: Float[Array, "2"],
+    control_trajectory: Float[Array, "n_steps 2"],
+    disturbance_trajectory: Float[Array, "n_steps 2"],
+    params: Float[Array, "5"],
+    t0: float,
+    t1: float,
+) -> Tuple[Float[Array, "n_steps"], Float[Array, "n_steps 2"]]:
+    """Fixed-grid RK4 rollout used by offline data generation."""
+    n_steps = control_trajectory.shape[0]
+    ts = jnp.linspace(t0, t1, n_steps)
+
+    if n_steps <= 1:
+        return ts, initial_state[None, :]
+
+    step_dt = ts[1] - ts[0]
+    control_start = control_trajectory[:-1]
+    control_end = control_trajectory[1:]
+    disturbance_start = disturbance_trajectory[:-1]
+    disturbance_end = disturbance_trajectory[1:]
+
+    def step_fn(state, inputs):
+        control_0, control_1, disturbance_0, disturbance_1 = inputs
+        control_mid = 0.5 * (control_0 + control_1)
+        disturbance_mid = 0.5 * (disturbance_0 + disturbance_1)
+
+        k1 = _heat_exchanger_dynamics_with_params(state, control_0, disturbance_0, params)
+        k2 = _heat_exchanger_dynamics_with_params(
+            state + 0.5 * step_dt * k1,
+            control_mid,
+            disturbance_mid,
+            params,
+        )
+        k3 = _heat_exchanger_dynamics_with_params(
+            state + 0.5 * step_dt * k2,
+            control_mid,
+            disturbance_mid,
+            params,
+        )
+        k4 = _heat_exchanger_dynamics_with_params(
+            state + step_dt * k3,
+            control_1,
+            disturbance_1,
+            params,
+        )
+
+        next_state = state + (step_dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+        return next_state, next_state
+
+    _, states_tail = jax.lax.scan(
+        step_fn,
+        initial_state,
+        (control_start, control_end, disturbance_start, disturbance_end),
+    )
+    states = jnp.concatenate([initial_state[None, :], states_tail], axis=0)
+    return ts, states

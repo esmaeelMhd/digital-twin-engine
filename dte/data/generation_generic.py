@@ -142,21 +142,24 @@ class GenericDataGenerator:
         key: PRNGKeyArray,
         n_steps: int,
         dt: float,
+        simulation_mode: str,
     ) -> Optional[Dict[str, Array]]:
         """Generate one trajectory.  Returns None if simulation diverges."""
         key_ctrl, key_dist, key_ic, key_params = jax.random.split(key, 4)
-
-        sim_cfg = self.config.get("simulation", {})
 
         controls = self._generate_control_trajectory(key_ctrl, n_steps, dt)
         disturbances = self._generate_disturbance_trajectory(key_dist, n_steps, dt)
         params = self._sample_params(key_params)
 
-        # Initial state: steady state at mean control / disturbance
+        # Initial state: use the simulator's data-generation steady-state hook
+        # so systems can swap in cheaper closed-form or approximate solvers.
         mean_control = jnp.mean(controls, axis=0)
         mean_disturbance = jnp.mean(disturbances, axis=0)
         try:
-            initial_state = self.simulator.steady_state(mean_control, mean_disturbance)
+            initial_state = self.simulator.steady_state_for_data_generation(
+                mean_control,
+                mean_disturbance,
+            )
         except Exception:
             # Fall back to spec default
             initial_state = self.spec.default_initial_state_array()
@@ -164,14 +167,26 @@ class GenericDataGenerator:
         t_end = n_steps * dt
         ts = jnp.linspace(0.0, t_end, n_steps)
 
-        result = self.simulator.simulate(
-            initial_state,
-            controls,
-            disturbances,
-            (0.0, t_end),
-            dt=dt,
-            n_steps=n_steps,
-        )
+        if simulation_mode == "dataset":
+            result = self.simulator.simulate_for_data_generation(
+                initial_state,
+                controls,
+                disturbances,
+                (0.0, t_end),
+                dt=dt,
+                n_steps=n_steps,
+            )
+        elif simulation_mode == "reference":
+            result = self.simulator.simulate(
+                initial_state,
+                controls,
+                disturbances,
+                (0.0, t_end),
+                dt=dt,
+                n_steps=n_steps,
+            )
+        else:
+            raise ValueError(f"Unknown simulation_mode: {simulation_mode}")
 
         states = result["states"]
 
@@ -222,7 +237,7 @@ class GenericDataGenerator:
         while generated < n_trajectories:
             key, subkey = jax.random.split(key)
             try:
-                traj = self._generate_trajectory(subkey, n_steps, dt)
+                traj = self._generate_trajectory(subkey, n_steps, dt, simulation_mode)
             except Exception as e:
                 exceptions += 1
                 continue

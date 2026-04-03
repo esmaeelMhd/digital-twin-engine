@@ -129,6 +129,30 @@ class ProcessSimulator(ABC):
     ) -> Dict[str, Float[Array, "..."]]:
         """Simulate a trajectory and return a dict with 'time', 'states', 'controls'."""
 
+    def simulate_for_data_generation(
+        self,
+        initial_state: Float[Array, "state_dim"],
+        control_trajectory: Float[Array, "n_steps control_dim"],
+        disturbance_trajectory: Float[Array, "n_steps disturbance_dim"],
+        t_span: Tuple[float, float],
+        dt: float = 0.1,
+        n_steps: int = 1000,
+    ) -> Dict[str, Float[Array, "..."]]:
+        """Optional fast rollout path used by offline data generation.
+
+        Systems can override this with a cheaper fixed-grid or otherwise
+        specialized implementation. The default falls back to ``simulate`` so
+        future systems pick up the generic interface automatically.
+        """
+        return self.simulate(
+            initial_state,
+            control_trajectory,
+            disturbance_trajectory,
+            t_span,
+            dt=dt,
+            n_steps=n_steps,
+        )
+
     @abstractmethod
     def steady_state(
         self,
@@ -137,3 +161,16 @@ class ProcessSimulator(ABC):
         initial_guess: Optional[Float[Array, "state_dim"]] = None,
     ) -> Float[Array, "state_dim"]:
         """Compute the steady state for the given constant inputs."""
+
+    def steady_state_for_data_generation(
+        self,
+        control: Float[Array, "control_dim"],
+        disturbance: Float[Array, "disturbance_dim"],
+        initial_guess: Optional[Float[Array, "state_dim"]] = None,
+    ) -> Float[Array, "state_dim"]:
+        """Optional fast steady-state path used during dataset creation.
+
+        Systems can override this when they have a closed-form solve or a
+        cheaper approximation than the general-purpose ``steady_state`` path.
+        """
+        return self.steady_state(control, disturbance, initial_guess=initial_guess)
