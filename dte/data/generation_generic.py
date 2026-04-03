@@ -155,7 +155,7 @@ class GenericDataGenerator:
         Uses unit params (all ones) by default; override for parametric
         diversity by subclassing or modifying.
         """
-        return jnp.ones(self.spec.param_dim)
+        return self.simulator.sample_data_generation_params(key)
 
     # ------------------------------------------------------------------
     # Single trajectory generation
@@ -180,9 +180,10 @@ class GenericDataGenerator:
         mean_control = jnp.mean(controls, axis=0)
         mean_disturbance = jnp.mean(disturbances, axis=0)
         try:
-            initial_state = self.simulator.steady_state_for_data_generation(
+            initial_state = self.simulator.steady_state_for_data_generation_with_params(
                 mean_control,
                 mean_disturbance,
+                params,
             )
         except Exception:
             # Fall back to spec default
@@ -192,10 +193,11 @@ class GenericDataGenerator:
         ts = jnp.linspace(0.0, t_end, n_steps)
 
         if simulation_mode == "dataset":
-            result = self.simulator.simulate_for_data_generation(
+            result = self.simulator.simulate_for_data_generation_with_params(
                 initial_state,
                 controls,
                 disturbances,
+                params,
                 (0.0, t_end),
                 dt=dt,
                 n_steps=n_steps,
@@ -246,7 +248,7 @@ class GenericDataGenerator:
 
         controls = self._generate_control_trajectories(key_ctrl, n_steps, dt)
         disturbances = self._generate_disturbance_trajectories(key_dist, n_steps, dt)
-        params = jnp.stack([self._sample_params(key) for key in key_params], axis=0)
+        params = self.simulator.sample_data_generation_params_batch(key_params)
 
         mean_controls = jnp.mean(controls, axis=1)
         mean_disturbances = jnp.mean(disturbances, axis=1)
@@ -256,6 +258,7 @@ class GenericDataGenerator:
             initial_states = self.simulator.steady_state_batch_for_data_generation(
                 mean_controls,
                 mean_disturbances,
+                params_batch=params,
                 initial_guesses=default_initial,
             )
         except Exception:
@@ -268,6 +271,7 @@ class GenericDataGenerator:
                 controls,
                 disturbances,
                 (0.0, t_end),
+                params_batch=params,
                 dt=dt,
                 n_steps=n_steps,
             )

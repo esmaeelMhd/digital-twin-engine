@@ -162,6 +162,32 @@ class HeatExchangerSimulator(ProcessSimulator):
             "controls": control_trajectory,
         }
 
+    def simulate_for_data_generation_with_params(
+        self,
+        initial_state: Float[Array, "2"],
+        control_trajectory: Float[Array, "n_steps 2"],
+        disturbance_trajectory: Float[Array, "n_steps 2"],
+        params: Float[Array, "5"],
+        t_span: Tuple[float, float],
+        dt: float = 0.1,
+        n_steps: int = 1000,
+    ) -> Dict[str, Array]:
+        """Param-aware fixed-grid rollout optimized for offline dataset generation."""
+        del dt, n_steps
+        time, states = simulate_heat_exchanger_data_generation_jit(
+            initial_state,
+            control_trajectory,
+            disturbance_trajectory,
+            params,
+            t_span[0],
+            t_span[1],
+        )
+        return {
+            "time": time,
+            "states": states,
+            "controls": control_trajectory,
+        }
+
     def steady_state(
         self,
         control: Float[Array, "2"],
@@ -226,18 +252,32 @@ class HeatExchangerSimulator(ProcessSimulator):
         ])
         return jnp.linalg.solve(matrix, rhs)
 
+    def steady_state_for_data_generation_with_params(
+        self,
+        control: Float[Array, "2"],
+        disturbance: Float[Array, "2"],
+        params: Float[Array, "5"],
+        initial_guess: Optional[Float[Array, "2"]] = None,
+    ) -> Float[Array, "2"]:
+        """Param-aware closed-form steady state for constant inputs."""
+        del initial_guess
+        return steady_state_heat_exchanger_jit(control, disturbance, params)
+
     def steady_state_batch_for_data_generation(
         self,
         controls: Float[Array, "batch 2"],
         disturbances: Float[Array, "batch 2"],
+        params_batch: Optional[Float[Array, "batch 5"]] = None,
         initial_guesses: Optional[Float[Array, "batch 2"]] = None,
     ) -> Float[Array, "batch 2"]:
         """Vectorized closed-form steady states for offline data generation."""
         del initial_guesses
+        if params_batch is None:
+            params_batch = jnp.tile(self.get_params_vector()[None, :], (controls.shape[0], 1))
         return steady_state_heat_exchanger_batch_jit(
             controls,
             disturbances,
-            self.get_params_vector(),
+            params_batch,
         )
 
     def simulate_batch_for_data_generation(
@@ -246,16 +286,19 @@ class HeatExchangerSimulator(ProcessSimulator):
         control_trajectories: Float[Array, "batch n_steps 2"],
         disturbance_trajectories: Float[Array, "batch n_steps 2"],
         t_span: Tuple[float, float],
+        params_batch: Optional[Float[Array, "batch 5"]] = None,
         dt: float = 0.1,
         n_steps: int = 1000,
     ) -> Dict[str, Array]:
         """Vectorized fixed-grid rollout for offline dataset generation."""
         del dt, n_steps
+        if params_batch is None:
+            params_batch = jnp.tile(self.get_params_vector()[None, :], (initial_states.shape[0], 1))
         times, states = simulate_heat_exchanger_data_generation_batch_jit(
             initial_states,
             control_trajectories,
             disturbance_trajectories,
-            self.get_params_vector(),
+            params_batch,
             t_span[0],
             t_span[1],
         )
@@ -264,6 +307,16 @@ class HeatExchangerSimulator(ProcessSimulator):
             "states": states,
             "controls": control_trajectories,
         }
+
+    def sample_data_generation_params(
+        self,
+        key,
+    ) -> Float[Array, "5"]:
+        """Sample physical parameters for one generated trajectory."""
+        sampled = self.sample_params(key)
+        return jnp.array(
+            [sampled.V_hot, sampled.V_cold, sampled.UA, sampled.rho, sampled.Cp]
+        )
 
     def get_params_vector(self) -> Float[Array, "5"]:
         """Return parameters as a JAX array [V_hot, V_cold, UA, rho, Cp]."""
@@ -339,13 +392,13 @@ def steady_state_heat_exchanger_jit(
 def steady_state_heat_exchanger_batch_jit(
     controls: Float[Array, "batch 2"],
     disturbances: Float[Array, "batch 2"],
-    params: Float[Array, "5"],
+    params_batch: Float[Array, "batch 5"],
 ) -> Float[Array, "batch 2"]:
     """Vectorized closed-form steady-state solve."""
-    return jax.vmap(steady_state_heat_exchanger_jit, in_axes=(0, 0, None))(
+    return jax.vmap(steady_state_heat_exchanger_jit, in_axes=(0, 0, 0))(
         controls,
         disturbances,
-        params,
+        params_batch,
     )
 
 
@@ -413,19 +466,19 @@ def simulate_heat_exchanger_data_generation_batch_jit(
     initial_states: Float[Array, "batch 2"],
     control_trajectories: Float[Array, "batch n_steps 2"],
     disturbance_trajectories: Float[Array, "batch n_steps 2"],
-    params: Float[Array, "5"],
+    params_batch: Float[Array, "batch 5"],
     t0: float,
     t1: float,
 ) -> Tuple[Float[Array, "batch n_steps"], Float[Array, "batch n_steps 2"]]:
     """Vectorized fixed-grid RK4 rollout used by offline data generation."""
     return jax.vmap(
         simulate_heat_exchanger_data_generation_jit,
-        in_axes=(0, 0, 0, None, None, None),
+        in_axes=(0, 0, 0, 0, None, None),
     )(
         initial_states,
         control_trajectories,
         disturbance_trajectories,
-        params,
+        params_batch,
         t0,
         t1,
     )
