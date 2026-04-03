@@ -64,6 +64,8 @@ def verify_dte_modules():
     
     modules = [
         "dte.simulators.cstr",
+        "dte.simulators.heat_exchanger",
+        "dte.simulators.two_tank",
         "dte.data.generation",
         "dte.data.dataset",
         "dte.models.encoder",
@@ -71,6 +73,8 @@ def verify_dte_modules():
         "dte.models.latent_sde",
         "dte.models.digital_twin",
         "dte.physics.conservation",
+        "dte.physics.heat_exchanger",
+        "dte.physics.two_tank",
         "dte.control.pid",
         "dte.control.mpc",
         "dte.training.trainer",
@@ -100,7 +104,11 @@ def verify_configs():
     
     configs = [
         "configs/cstr_default.yaml",
+        "configs/heat_exchanger_default.yaml",
+        "configs/two_tank_default.yaml",
         "configs/training_default.yaml",
+        "configs/heat_exchanger_training.yaml",
+        "configs/two_tank_training.yaml",
         "configs/mpc_default.yaml",
         "configs/autoresearch_default.yaml",
     ]

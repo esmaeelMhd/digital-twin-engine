@@ -26,6 +26,7 @@ The product goal is not just forecasting. The learned model must be useful for:
 |---|---|---|---|---|
 | `cstr` | 4 (Ca, Cb, T, Tc) | 2 (F_in, Tc_in) | 2 (Ca_in, T_in) | Mass + Energy balance |
 | `heat_exchanger` | 2 (T_hot, T_cold) | 2 (F_hot, F_cold) | 2 (T_hot_in, T_cold_in) | Energy balance |
+| `two_tank` | 2 (h1, h2) | 2 (q_in, valve) | 2 (d1, d2) | Mass balance |
 
 New systems require only: a simulator class, an optional physics loss class, a YAML
 config, and registration in the simulator and physics registries. No core engine

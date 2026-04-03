@@ -1,0 +1,67 @@
+# Training config for the coupled two-tank process.
+
+model:
+  latent_dim: 16
+  hidden_dim: 64
+  n_layers: 3
+  drift_layers: 3
+  diffusion_layers: 2
+  diffusion_hidden_dim: 32
+  initial_diffusion_scale: 0.0001
+
+sde:
+  solver: "euler_heun"
+  dt_ratio: 0.5
+
+training:
+  n_epochs: 100
+  batch_size: 128
+  max_batches_per_epoch: 64
+  seq_len: 25
+  stride: 5
+  val_split: 0.2
+
+optimizer:
+  peak_lr: 2.0e-3
+  warmup_steps: 200
+  total_steps: 5000
+  end_lr: 1.0e-6
+  gradient_clip: 0.5
+  weight_decay: 0.0001
+
+loss_weights:
+  reconstruction: 1.0
+  kl: 0.0
+  one_step: 2.0
+  trajectory: 10.0
+  mass: 0.001
+
+state_loss_weights:
+  h1: 1.0
+  h2: 1.0
+
+kl_annealing:
+  start_weight: 0.0
+  end_weight: 0.0001
+  anneal_steps: 5000
+
+sde_training:
+  enabled: false
+  warmup_steps: 2000
+  sde_kl_weight: 0.00001
+
+curriculum:
+  enabled: true
+  initial_seq_len: 5
+  final_seq_len: 25
+  warmup_epochs: 20
+
+teacher_forcing:
+  initial_ratio: 1.0
+  final_ratio: 0.0
+  anneal_epochs: 30
+
+checkpointing:
+  save_every: 10
+  save_best: true
+  output_dir: outputs/

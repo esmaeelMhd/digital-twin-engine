@@ -34,3 +34,18 @@ def test_list_systems_exposes_registered_systems():
 
     assert "cstr" in systems
     assert "heat_exchanger" in systems
+    assert "two_tank" in systems
+
+
+def test_two_tank_system_spec_and_simulator_are_registered():
+    system_config = _load_yaml("configs/two_tank_default.yaml")
+
+    spec = get_system_spec(system_config)
+    simulator = get_simulator("two_tank", system_config)
+
+    assert spec.name == "two_tank"
+    assert spec.state_dim == 2
+    assert spec.control_dim == 2
+    assert spec.disturbance_dim == 2
+    assert isinstance(simulator, ProcessSimulator)
+    assert simulator.spec.name == "two_tank"

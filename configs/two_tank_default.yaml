@@ -1,0 +1,39 @@
+system:
+  name: two_tank
+  state_names: [h1, h2]
+  control_names: [q_in, valve]
+  disturbance_names: [d1, d2]
+  normalization:
+    state_center: [1.5, 1.0]
+    state_scale: [0.5, 0.5]
+    control_center: [1.5, 0.7]
+    control_scale: [0.5, 0.25]
+    disturbance_center: [0.1, 0.05]
+    disturbance_scale: [0.1, 0.1]
+    param_scale: 0.1
+  decoder_constraints:
+    - type: sigmoid_range
+      indices: [0, 1]
+      low: 0.0
+      high: 5.0
+
+two_tank:
+  A1: 1.5
+  A2: 1.2
+  k12: 0.9
+  kout: 1.0
+  h_max: 5.0
+
+simulation:
+  dt: 0.1
+  t_span: [0.0, 100.0]
+
+initial_conditions:
+  h1: 1.8
+  h2: 1.1
+
+operating_ranges:
+  q_in: [0.6, 2.5]
+  valve: [0.4, 1.0]
+  d1: [0.0, 0.4]
+  d2: [0.0, 0.3]

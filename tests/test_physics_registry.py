@@ -40,3 +40,26 @@ def test_get_physics_diagnostic_fn_for_heat_exchanger_exposes_energy_only():
 
     assert "energy" in residuals
     assert "mass" not in residuals
+
+
+def test_get_physics_loss_for_two_tank_exposes_mass_only():
+    config = _load_yaml("configs/two_tank_default.yaml")
+    physics_loss = get_physics_loss("two_tank", config)
+
+    assert physics_loss.residual_names() == ["mass"]
+
+
+def test_get_physics_diagnostic_fn_for_two_tank_exposes_mass_only():
+    config = _load_yaml("configs/two_tank_default.yaml")
+    diagnostic_fn = get_physics_diagnostic_fn("two_tank", config)
+
+    assert diagnostic_fn is not None
+    residuals = diagnostic_fn(
+        states=jnp.array([[1.8, 1.1], [1.81, 1.11]]),
+        controls=jnp.array([[1.0, 0.8], [1.0, 0.8]]),
+        disturbances=jnp.array([[0.1, 0.05], [0.1, 0.05]]),
+        dt=0.1,
+    )
+
+    assert "mass" in residuals
+    assert "energy" not in residuals

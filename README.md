@@ -48,6 +48,7 @@ graph LR
 |---|---|---|---|---|
 | `cstr` | 4 (Ca, Cb, T, Tc) | 2 (F_in, Tc_in) | 2 (Ca_in, T_in) | Mass + Energy balance |
 | `heat_exchanger` | 2 (T_hot, T_cold) | 2 (F_hot, F_cold) | 2 (T_hot_in, T_cold_in) | Energy balance |
+| `two_tank` | 2 (h1, h2) | 2 (q_in, valve) | 2 (d1, d2) | Mass balance |
 
 New systems require a YAML config, a simulator class, an optional physics loss, and registry entries — no changes to the core model or trainer.
 
@@ -85,6 +86,12 @@ python scripts/generate_data.py \
   --config configs/heat_exchanger_default.yaml \
   --n_trajectories 10000 \
   --output_dir data/heat_exchanger/
+
+# Two-tank level process
+python scripts/generate_data.py \
+  --config configs/two_tank_default.yaml \
+  --n_trajectories 10000 \
+  --output_dir data/two_tank/
 ```
 
 ### 2. Ingest Real Plant Data
@@ -115,6 +122,9 @@ python scripts/train.py \
 ```
 
 Training includes stochastic SDE path, curriculum learning, and teacher-forcing annealing (all configurable in `configs/training_default.yaml`).
+
+System-specific training configs are also included for simpler 2-state systems:
+`configs/heat_exchanger_training.yaml` and `configs/two_tank_training.yaml`.
 
 ### 4. Few-Shot Transfer Learning
 

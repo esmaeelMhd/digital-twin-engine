@@ -32,6 +32,7 @@ source .venv/bin/activate
 | `dte/simulators/registry.py` | `get_system_spec(config)`, `get_simulator(name, config)`, `list_systems()` |
 | `dte/simulators/cstr.py` | CSTR concrete simulator |
 | `dte/simulators/heat_exchanger.py` | Counter-current heat exchanger simulator |
+| `dte/simulators/two_tank.py` | Coupled two-tank level simulator |
 
 `SystemSpec` carries: `state_dim`, `control_dim`, `disturbance_dim`, `param_dim`,
 `state_names`, `control_names`, `disturbance_names`, `decoder_constraints`,
@@ -50,6 +51,7 @@ normalisation constants anywhere in the model code.
 | `dte/physics/registry.py` | Registry-driven physics loss / diagnostic lookup |
 | `dte/physics/cstr.py` | `CSTRPhysicsLoss` (mass + energy residuals) |
 | `dte/physics/heat_exchanger.py` | `HeatExchangerPhysicsLoss` (energy residual) |
+| `dte/physics/two_tank.py` | `TwoTankPhysicsLoss` (mass residual) |
 | `dte/physics/conservation.py` | Re-exports from `cstr.py` for backward compatibility |
 
 `LossComputer` (`dte/training/losses.py`) accepts any `PhysicsLoss` instance and
@@ -113,6 +115,8 @@ Physics losses are computed in physical units.
 | `configs/cstr_default.yaml` | CSTR `SystemSpec`, simulator params, decoder constraints, normalisation |
 | `configs/heat_exchanger_default.yaml` | Heat exchanger `SystemSpec` and simulator params |
 | `configs/heat_exchanger_training.yaml` | HX-specific training hypers (smaller model, energy loss weights) |
+| `configs/two_tank_default.yaml` | Two-tank `SystemSpec`, simulator params, decoder constraints, normalisation |
+| `configs/two_tank_training.yaml` | Two-tank-specific training hypers (smaller model, mass loss weights) |
 | `configs/training_default.yaml` | Model architecture + training loop + SDE/curriculum/teacher-forcing |
 | `configs/mpc_default.yaml` | CEM-MPC horizon, candidates, elite fraction |
 | `configs/autoresearch_default.yaml` | Bounded experiment harness settings + agent modifiable-file list |

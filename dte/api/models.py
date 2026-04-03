@@ -33,7 +33,7 @@ class PredictRequest(BaseModel):
     initial state under a given control and disturbance sequence.
     """
 
-    system: str = Field("cstr", description="Registered system name (e.g. 'cstr', 'heat_exchanger').")
+    system: str = Field("cstr", description="Registered system name (e.g. 'cstr', 'heat_exchanger', 'two_tank').")
     initial_state: List[float] = Field(
         ..., description="Initial physical state vector (length = state_dim)."
     )

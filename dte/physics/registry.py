@@ -32,6 +32,15 @@ def _build_heat_exchanger_physics_loss(system_config: dict) -> PhysicsLoss:
     return HeatExchangerPhysicsLoss(params)
 
 
+def _build_two_tank_physics_loss(system_config: dict) -> PhysicsLoss:
+    from dte.physics.two_tank import TwoTankPhysicsLoss
+    from dte.simulators.two_tank import TwoTankParams
+
+    two_tank_cfg = system_config.get("two_tank", {})
+    params = TwoTankParams(**{k: float(v) for k, v in two_tank_cfg.items()})
+    return TwoTankPhysicsLoss(params)
+
+
 def _build_cstr_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
     from dte.physics.cstr import energy_balance_residual, mass_balance_residual
     from dte.simulators.cstr import CSTRParams
@@ -63,14 +72,31 @@ def _build_heat_exchanger_diagnostic_fn(system_config: dict) -> PhysicsDiagnosti
     return _diagnose
 
 
+def _build_two_tank_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
+    from dte.physics.two_tank import mass_balance_residual
+    from dte.simulators.two_tank import TwoTankParams
+
+    two_tank_cfg = system_config.get("two_tank", {})
+    params = TwoTankParams(**{k: float(v) for k, v in two_tank_cfg.items()})
+
+    def _diagnose(states, controls, disturbances, dt):
+        return {
+            "mass": mass_balance_residual(states, controls, disturbances, params, dt),
+        }
+
+    return _diagnose
+
+
 _PHYSICS_LOSS_BUILDERS = {
     "cstr": _build_cstr_physics_loss,
     "heat_exchanger": _build_heat_exchanger_physics_loss,
+    "two_tank": _build_two_tank_physics_loss,
 }
 
 _PHYSICS_DIAGNOSTIC_BUILDERS = {
     "cstr": _build_cstr_diagnostic_fn,
     "heat_exchanger": _build_heat_exchanger_diagnostic_fn,
+    "two_tank": _build_two_tank_diagnostic_fn,
 }
 
 
