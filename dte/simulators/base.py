@@ -137,7 +137,7 @@ class ProcessSimulator(ABC):
         t_span: Tuple[float, float],
         dt: float = 0.1,
         n_steps: int = 1000,
-    ) -> Dict[str, Float[Array, "..."]]:
+        ) -> Dict[str, Float[Array, "..."]]:
         """Optional fast rollout path used by offline data generation.
 
         Systems can override this with a cheaper fixed-grid or otherwise
@@ -152,6 +152,37 @@ class ProcessSimulator(ABC):
             dt=dt,
             n_steps=n_steps,
         )
+
+    def simulate_batch_for_data_generation(
+        self,
+        initial_states: Float[Array, "batch state_dim"],
+        control_trajectories: Float[Array, "batch n_steps control_dim"],
+        disturbance_trajectories: Float[Array, "batch n_steps disturbance_dim"],
+        t_span: Tuple[float, float],
+        dt: float = 0.1,
+        n_steps: int = 1000,
+    ) -> Dict[str, Float[Array, "..."]]:
+        """Optional batched fast rollout path for offline data generation.
+
+        Systems can override this with a vectorized implementation. The default
+        loops over trajectories and delegates to ``simulate_for_data_generation``.
+        """
+        results = [
+            self.simulate_for_data_generation(
+                initial_states[idx],
+                control_trajectories[idx],
+                disturbance_trajectories[idx],
+                t_span,
+                dt=dt,
+                n_steps=n_steps,
+            )
+            for idx in range(initial_states.shape[0])
+        ]
+        return {
+            "time": jnp.stack([result["time"] for result in results]),
+            "states": jnp.stack([result["states"] for result in results]),
+            "controls": jnp.stack([result["controls"] for result in results]),
+        }
 
     @abstractmethod
     def steady_state(
@@ -174,3 +205,26 @@ class ProcessSimulator(ABC):
         cheaper approximation than the general-purpose ``steady_state`` path.
         """
         return self.steady_state(control, disturbance, initial_guess=initial_guess)
+
+    def steady_state_batch_for_data_generation(
+        self,
+        controls: Float[Array, "batch control_dim"],
+        disturbances: Float[Array, "batch disturbance_dim"],
+        initial_guesses: Optional[Float[Array, "batch state_dim"]] = None,
+    ) -> Float[Array, "batch state_dim"]:
+        """Optional batched fast steady-state path for offline data generation.
+
+        Systems can override this with a vectorized implementation. The default
+        loops over trajectories and delegates to ``steady_state_for_data_generation``.
+        """
+        states = []
+        for idx in range(controls.shape[0]):
+            guess = None if initial_guesses is None else initial_guesses[idx]
+            states.append(
+                self.steady_state_for_data_generation(
+                    controls[idx],
+                    disturbances[idx],
+                    initial_guess=guess,
+                )
+            )
+        return jnp.stack(states)

@@ -90,6 +90,30 @@ class GenericDataGenerator:
 
         return jnp.stack(channels, axis=-1)
 
+    def _generate_control_trajectories(
+        self,
+        keys: PRNGKeyArray,
+        n_steps: int,
+        dt: float,
+    ) -> Float[Array, "batch n_steps control_dim"]:
+        """Generate control trajectories for a batch of seeds."""
+        return jnp.stack(
+            [self._generate_control_trajectory(key, n_steps, dt) for key in keys],
+            axis=0,
+        )
+
+    def _generate_disturbance_trajectories(
+        self,
+        keys: PRNGKeyArray,
+        n_steps: int,
+        dt: float,
+    ) -> Float[Array, "batch n_steps disturbance_dim"]:
+        """Generate disturbance trajectories for a batch of seeds."""
+        return jnp.stack(
+            [self._generate_disturbance_trajectory(key, n_steps, dt) for key in keys],
+            axis=0,
+        )
+
     @staticmethod
     def _prbs_channel(
         key: PRNGKeyArray,
@@ -206,6 +230,75 @@ class GenericDataGenerator:
     # Dataset generation
     # ------------------------------------------------------------------
 
+    def _generate_trajectories_batched(
+        self,
+        keys: PRNGKeyArray,
+        n_steps: int,
+        dt: float,
+        simulation_mode: str,
+    ) -> Dict[str, Array]:
+        """Generate a batch of trajectories using simulator batch hooks."""
+        split_keys = jax.vmap(lambda k: jax.random.split(k, 4))(keys)
+        key_ctrl = split_keys[:, 0]
+        key_dist = split_keys[:, 1]
+        key_ic = split_keys[:, 2]
+        key_params = split_keys[:, 3]
+
+        controls = self._generate_control_trajectories(key_ctrl, n_steps, dt)
+        disturbances = self._generate_disturbance_trajectories(key_dist, n_steps, dt)
+        params = jnp.stack([self._sample_params(key) for key in key_params], axis=0)
+
+        mean_controls = jnp.mean(controls, axis=1)
+        mean_disturbances = jnp.mean(disturbances, axis=1)
+        default_initial = jnp.tile(self.spec.default_initial_state_array()[None, :], (keys.shape[0], 1))
+
+        try:
+            initial_states = self.simulator.steady_state_batch_for_data_generation(
+                mean_controls,
+                mean_disturbances,
+                initial_guesses=default_initial,
+            )
+        except Exception:
+            initial_states = default_initial
+
+        t_end = n_steps * dt
+        if simulation_mode == "dataset":
+            result = self.simulator.simulate_batch_for_data_generation(
+                initial_states,
+                controls,
+                disturbances,
+                (0.0, t_end),
+                dt=dt,
+                n_steps=n_steps,
+            )
+        elif simulation_mode == "reference":
+            results = [
+                self.simulator.simulate(
+                    initial_states[idx],
+                    controls[idx],
+                    disturbances[idx],
+                    (0.0, t_end),
+                    dt=dt,
+                    n_steps=n_steps,
+                )
+                for idx in range(keys.shape[0])
+            ]
+            result = {
+                "time": jnp.stack([item["time"] for item in results]),
+                "states": jnp.stack([item["states"] for item in results]),
+                "controls": jnp.stack([item["controls"] for item in results]),
+            }
+        else:
+            raise ValueError(f"Unknown simulation_mode: {simulation_mode}")
+
+        return {
+            "states": result["states"],
+            "controls": controls,
+            "disturbances": disturbances,
+            "params": params,
+            "time": result["time"],
+        }
+
     def generate_dataset_to_hdf5(
         self,
         key: PRNGKeyArray,
@@ -220,6 +313,7 @@ class GenericDataGenerator:
         Returns a summary dict compatible with the CSTR DataGenerator summary.
         """
         dt = self.config.get("simulation", {}).get("dt", 0.1)
+        batch_size_eff = batch_size or self.recommend_batch_size(jax.default_backend())
 
         all_states = []
         all_controls = []
@@ -230,30 +324,70 @@ class GenericDataGenerator:
         t_start = time.perf_counter()
         invalid = 0
         exceptions = 0
+        signal_seconds = 0.0
+        steady_state_seconds = 0.0
+        rollout_seconds = 0.0
+        validation_seconds = 0.0
 
         pbar = tqdm(total=n_trajectories, desc="Generating trajectories")
         generated = 0
+        attempts = 0
 
         while generated < n_trajectories:
-            key, subkey = jax.random.split(key)
             try:
-                traj = self._generate_trajectory(subkey, n_steps, dt, simulation_mode)
-            except Exception as e:
-                exceptions += 1
+                current_batch_size = min(batch_size_eff, n_trajectories - generated)
+                batch_keys = jax.random.split(key, current_batch_size + 1)
+                key = batch_keys[0]
+                traj_keys = batch_keys[1:]
+                attempts += current_batch_size
+
+                if current_batch_size == 1:
+                    signal_start = time.perf_counter()
+                    traj = self._generate_trajectory(traj_keys[0], n_steps, dt, simulation_mode)
+                    elapsed = time.perf_counter() - signal_start
+                    rollout_seconds += elapsed
+                    if traj is None:
+                        invalid += 1
+                        continue
+                    valid_trajs = [traj]
+                else:
+                    batch_start = time.perf_counter()
+                    batch = self._generate_trajectories_batched(
+                        traj_keys,
+                        n_steps,
+                        dt,
+                        simulation_mode,
+                    )
+                    batch_elapsed = time.perf_counter() - batch_start
+                    rollout_seconds += batch_elapsed
+
+                    validation_start = time.perf_counter()
+                    valid_mask = jnp.all(jnp.isfinite(batch["states"]), axis=(1, 2))
+                    validation_seconds += time.perf_counter() - validation_start
+                    valid_indices = np.asarray(jnp.where(valid_mask)[0])
+                    invalid += current_batch_size - int(valid_mask.sum())
+                    valid_trajs = [
+                        {
+                            "states": np.array(batch["states"][idx]),
+                            "controls": np.array(batch["controls"][idx]),
+                            "disturbances": np.array(batch["disturbances"][idx]),
+                            "params": np.array(batch["params"][idx]),
+                            "t": np.array(batch["time"][idx]),
+                        }
+                        for idx in valid_indices.tolist()
+                    ]
+            except Exception:
+                exceptions += current_batch_size
                 continue
 
-            if traj is None:
-                invalid += 1
-                continue
-
-            all_states.append(np.array(traj["states"]))
-            all_controls.append(np.array(traj["controls"]))
-            all_disturbances.append(np.array(traj["disturbances"]))
-            all_params.append(np.array(traj["params"]))
-            all_times.append(np.array(traj["t"]))
-
-            generated += 1
-            pbar.update(1)
+            for traj in valid_trajs:
+                all_states.append(np.array(traj["states"]))
+                all_controls.append(np.array(traj["controls"]))
+                all_disturbances.append(np.array(traj["disturbances"]))
+                all_params.append(np.array(traj["params"]))
+                all_times.append(np.array(traj["t"]))
+                generated += 1
+                pbar.update(1)
 
         pbar.close()
 
@@ -291,14 +425,15 @@ class GenericDataGenerator:
         elapsed = time.perf_counter() - t_start
         self.last_profile = {
             "total_generation_seconds": elapsed,
-            "signal_generation_seconds": 0.0,
-            "steady_state_seconds": 0.0,
-            "rollout_seconds": elapsed,
+            "signal_generation_seconds": signal_seconds,
+            "steady_state_seconds": steady_state_seconds,
+            "rollout_seconds": rollout_seconds,
             "measurement_noise_seconds": 0.0,
-            "validation_seconds": 0.0,
-            "attempts": n_trajectories + invalid + exceptions,
+            "validation_seconds": validation_seconds,
+            "attempts": attempts,
             "invalid_trajectories": invalid,
             "exceptions": exceptions,
+            "batch_size": batch_size_eff,
         }
 
         return {
