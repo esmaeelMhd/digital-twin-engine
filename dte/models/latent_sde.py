@@ -99,6 +99,8 @@ class LatentDiffusion(eqx.Module):
 
     layers: list
     output_layer: eqx.nn.Linear
+    correction_layers: list
+    correction_output_layer: eqx.nn.Linear
     scale: Float[Array, ""]
 
     control_center: Float[Array, "control_dim"]
@@ -124,16 +126,24 @@ class LatentDiffusion(eqx.Module):
         *,
         key: PRNGKeyArray,
     ):
-        keys = jax.random.split(key, n_layers + 1)
+        keys = jax.random.split(key, n_layers * 2 + 2)
 
         input_dim = latent_dim + control_dim + disturbance_dim + param_dim
 
         self.layers = []
+        self.correction_layers = []
         for i in range(n_layers):
             in_dim = input_dim if i == 0 else hidden_dim
             self.layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[i]))
+            self.correction_layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=keys[n_layers + i]))
 
-        self.output_layer = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys[-1])
+        self.output_layer = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys[-2])
+        corr_out = eqx.nn.Linear(hidden_dim + input_dim, latent_dim, key=keys[-1])
+        self.correction_output_layer = eqx.tree_at(
+            lambda l: (l.weight, l.bias),
+            corr_out,
+            (corr_out.weight * 0.001, corr_out.bias * 0.001)
+        )
         self.scale = jnp.array(initial_scale)
 
         self.control_center = jnp.array(
@@ -171,13 +181,23 @@ class LatentDiffusion(eqx.Module):
         x = jnp.concatenate(parts)
         x_in = x
 
+        x_base = x
         for i, layer in enumerate(self.layers):
-            h = layer(x)
+            h = layer(x_base)
             h = jax.nn.gelu(h)
-            x = x + h if i > 0 else h
+            x_base = x_base + h if i > 0 else h
+
+        x_corr = x
+        for i, layer in enumerate(self.correction_layers):
+            h = layer(x_corr)
+            h = jax.nn.gelu(h)
+            x_corr = x_corr + h if i > 0 else h
+
+        base_diff = jax.nn.sigmoid(self.output_layer(jnp.concatenate([x_base, x_in])))
+        corr_diff = self.correction_output_layer(jnp.concatenate([x_corr, x_in]))
 
         # Reparameterise diffusion with a floor to prevent uncertainty collapse
-        return self.scale * (0.01 + 0.99 * jax.nn.sigmoid(self.output_layer(jnp.concatenate([x, x_in]))))
+        return self.scale * (0.01 + 0.99 * base_diff) * jnp.exp(corr_diff)
 
 
 class LatentSDE(eqx.Module):
