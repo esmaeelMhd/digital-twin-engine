@@ -1,0 +1,54 @@
+ideas:
+  - id: trainer_teacher_forcing_confidence_gate
+    priority: 10
+    target_file: dte/training/trainer.py
+    title: Replace fixed teacher-forcing mixing with a confidence-aware gate that reduces forcing only when rollout predictions remain self-consistent.
+    rationale: The current annealing is schedule-driven; a confidence-aware transition may reduce exposure bias without abruptly destabilizing training.
+    instructions:
+      - Keep the change inside the training loop.
+      - Use signals already available during rollout rather than adding new config plumbing.
+
+  - id: trainer_multi_horizon_rollout_sampling
+    priority: 20
+    target_file: dte/training/trainer.py
+    title: Sample both short and medium rollout horizons within each training step to stabilize local learning while still rewarding long-horizon consistency.
+    rationale: A single rollout horizon can overemphasize either local fit or long-horizon drift; mixed horizons may give a better training signal.
+    instructions:
+      - Reuse the same batch when possible.
+      - Avoid doubling runtime with fully duplicated passes.
+
+  - id: trainer_scheduled_mean_sample_agreement
+    priority: 30
+    target_file: dte/training/trainer.py
+    title: Add a scheduled agreement loss between mean-path and sampled-path rollouts after warmup, instead of applying a hard dual-path penalty from the start.
+    rationale: Mean-vs-sampled consistency still looks promising, but the previous attempts did not get a clean run.
+    instructions:
+      - Warm the agreement term in gradually.
+      - Preserve stochasticity rather than collapsing directly to deterministic behavior.
+
+  - id: trainer_masked_observation_reconstruction
+    priority: 40
+    target_file: dte/training/trainer.py
+    title: Train on partially masked state observations and require the model to infer consistent latents and future rollouts from incomplete inputs.
+    rationale: This is a foundation-model-style robustness idea that was not properly tested in the overnight run.
+    instructions:
+      - Mask only a subset of channels or timesteps per batch.
+      - Keep masking logic lightweight and generic across systems.
+
+  - id: trainer_rollout_restart_consistency
+    priority: 50
+    target_file: dte/training/trainer.py
+    title: Add restart consistency by re-encoding an intermediate predicted state and forcing the resumed rollout to stay close to the original continuation.
+    rationale: Industrial rollouts should remain stable if forecasting restarts from their own intermediate states.
+    instructions:
+      - Use one intermediate restart point first.
+      - Keep the extra computation bounded.
+
+  - id: trainer_stochasticity_curriculum
+    priority: 60
+    target_file: dte/training/trainer.py
+    title: Introduce a curriculum that gradually increases stochastic rollout usage instead of switching sharply once warmup ends.
+    rationale: SDE training may benefit from smoother activation of uncertainty rather than a binary warmup threshold.
+    instructions:
+      - Use a simple smooth schedule.
+      - Avoid changing unrelated optimizer or config behavior.
