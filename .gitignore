@@ -51,6 +51,7 @@ agent_state.json
 # OS
 .DS_Store
 Thumbs.db
+.codex
 
 # Environment
 .env
