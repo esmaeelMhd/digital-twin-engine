@@ -138,7 +138,9 @@ class DigitalTwin(eqx.Module):
         z_mean, z_logvar = self.encoder.encode(state, params, control)
 
         if key is not None:
-            z = self.encoder.sample(z_mean, z_logvar, key)
+            z_sampled = self.encoder.sample(z_mean, z_logvar, key)
+            # Blend deterministic mean and stochastic sample to stabilize rollout
+            z = 0.5 * z_mean + 0.5 * z_sampled
         else:
             z = z_mean
 
