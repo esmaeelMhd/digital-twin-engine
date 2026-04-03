@@ -101,7 +101,7 @@ class LatentDiffusion(eqx.Module):
     output_layer: eqx.nn.Linear
     correction_layers: list
     correction_output_layer: eqx.nn.Linear
-    scale: Float[Array, ""]
+    scale: Float[Array, "latent_dim"]
 
     control_center: Float[Array, "control_dim"]
     control_scale: Float[Array, "control_dim"]
@@ -144,7 +144,7 @@ class LatentDiffusion(eqx.Module):
             corr_out,
             (corr_out.weight * 0.001, corr_out.bias * 0.001)
         )
-        self.scale = jnp.array(initial_scale)
+        self.scale = jnp.ones(latent_dim) * initial_scale
 
         self.control_center = jnp.array(
             control_center if control_center is not None else [0.0] * control_dim
