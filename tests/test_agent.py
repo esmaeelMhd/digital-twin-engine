@@ -8,10 +8,14 @@ from scripts.agent import (
     _is_gemini_cache_miss_error,
     _normalize_gemini_thinking_level,
     annotate_description_with_idea,
+    count_resolved_structured_ideas,
+    effective_run_target,
+    enforce_selected_idea_on_proposal,
     FatalAPIError,
     build_dynamic_prompt,
     build_prompt,
     build_static_prompt_context,
+    get_eligible_structured_ideas,
     get_current_reference_loss,
     load_structured_ideas,
     rollback_experiment_change,
@@ -203,6 +207,57 @@ def test_select_next_structured_idea_skips_history_attempts():
     selected = select_next_structured_idea(ideas, history, ["foo.py"], None)
 
     assert selected["id"] == "idea-2"
+
+
+def test_select_next_structured_idea_retries_crashed_idea():
+    ideas = [
+        {"id": "idea-1", "title": "First idea", "target_file": "foo.py", "priority": 1},
+        {"id": "idea-2", "title": "Second idea", "target_file": "foo.py", "priority": 2},
+    ]
+    history = [
+        {"description": "[idea:idea-1] First idea", "file": "foo.py", "status": "crash", "val_loss": 999.0},
+    ]
+
+    selected = select_next_structured_idea(ideas, history, ["foo.py"], None)
+
+    assert selected["id"] == "idea-1"
+
+
+def test_count_resolved_structured_ideas_counts_only_keep_discard():
+    ideas = [
+        {"id": "idea-1", "title": "First idea", "target_file": "foo.py", "priority": 1},
+        {"id": "idea-2", "title": "Second idea", "target_file": "foo.py", "priority": 2},
+    ]
+    history = [
+        {"description": "[idea:idea-1] First idea", "file": "foo.py", "status": "crash", "val_loss": 999.0},
+        {"description": "[idea:idea-2] Second idea", "file": "foo.py", "status": "discard", "val_loss": 1.0},
+    ]
+
+    eligible = get_eligible_structured_ideas(ideas, ["foo.py"], None)
+
+    assert count_resolved_structured_ideas(history, eligible) == 1
+
+
+def test_enforce_selected_idea_on_proposal_pins_file_and_id():
+    proposal = {"idea_id": "invented", "file": "bar.py", "description": "Change something", "changes": []}
+    selected = {"id": "idea-1", "target_file": "foo.py", "title": "First idea"}
+
+    coerced = enforce_selected_idea_on_proposal(proposal, selected)
+
+    assert coerced["idea_id"] == "idea-1"
+    assert coerced["file"] == "foo.py"
+
+
+def test_effective_run_target_uses_structured_idea_count():
+    ideas = [
+        {"id": "idea-1", "title": "First idea", "target_file": "foo.py", "priority": 1},
+        {"id": "idea-2", "title": "Second idea", "target_file": "foo.py", "priority": 2},
+        {"id": "idea-3", "title": "Third idea", "target_file": "bar.py", "priority": 3},
+    ]
+
+    count = effective_run_target(99, [], ideas, ["foo.py"], None)
+
+    assert count == 2
 
 
 def test_load_structured_ideas_reads_yaml(tmp_path):

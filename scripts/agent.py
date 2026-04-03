@@ -1831,18 +1831,59 @@ def annotate_description_with_idea(description: str, idea_id: str | None) -> str
     return f"[idea:{clean_idea_id}] {clean_description}"
 
 
-def _history_has_attempted_idea(history: list[dict], idea: dict) -> bool:
+def _row_matches_structured_idea(row: dict, idea: dict) -> bool:
     target_id = str(idea.get("id", "")).strip().lower()
     target_title = str(idea.get("title", "")).strip().lower()
     target_file = str(idea.get("target_file", "")).strip()
-    for row in history:
-        description = str(row.get("description", ""))
-        if target_id and _extract_idea_id_from_description(description) == target_id:
+    description = str(row.get("description", ""))
+    if target_id and _extract_idea_id_from_description(description) == target_id:
+        return True
+    if target_title and target_title in description.lower():
+        if not target_file or row.get("file", "") == target_file:
             return True
-        if target_title and target_title in description.lower():
-            if not target_file or row.get("file", "") == target_file:
-                return True
     return False
+
+
+def _history_has_attempted_idea(
+    history: list[dict],
+    idea: dict,
+    *,
+    resolved_only: bool = False,
+) -> bool:
+    for row in history:
+        if resolved_only and row.get("status") not in ("keep", "discard"):
+            continue
+        if _row_matches_structured_idea(row, idea):
+            return True
+    return False
+
+
+def get_eligible_structured_ideas(
+    ideas: list[dict],
+    modifiable_files: list[str],
+    forced_file: str | None,
+) -> list[dict]:
+    eligible: list[dict] = []
+    for idea in ideas:
+        idea_copy = dict(idea)
+        target_file = str(idea_copy.get("target_file", "")).strip()
+        if forced_file and target_file and target_file != forced_file:
+            continue
+        if forced_file and not target_file:
+            idea_copy["target_file"] = forced_file
+            target_file = forced_file
+        if target_file and target_file not in modifiable_files:
+            continue
+        eligible.append(idea_copy)
+    return eligible
+
+
+def count_resolved_structured_ideas(history: list[dict], eligible_ideas: list[dict]) -> int:
+    return sum(
+        1
+        for idea in eligible_ideas
+        if _history_has_attempted_idea(history, idea, resolved_only=True)
+    )
 
 
 def select_next_structured_idea(
@@ -1854,16 +1895,8 @@ def select_next_structured_idea(
     """Pick the next pending idea from the backlog."""
 
     candidates: list[dict] = []
-    for idea in ideas:
-        target_file = str(idea.get("target_file", "")).strip()
-        if forced_file and target_file and target_file != forced_file:
-            continue
-        if forced_file and not target_file:
-            idea = dict(idea)
-            idea["target_file"] = forced_file
-        if target_file and target_file not in modifiable_files:
-            continue
-        if _history_has_attempted_idea(history, idea):
+    for idea in get_eligible_structured_ideas(ideas, modifiable_files, forced_file):
+        if _history_has_attempted_idea(history, idea, resolved_only=True):
             continue
         candidates.append(idea)
     return candidates[0] if candidates else None
@@ -1907,10 +1940,41 @@ def build_structured_ideas_section(ideas: list[dict], selected_idea: dict | None
             for instruction in instructions:
                 lines.append(f"  - {instruction}")
         lines.append(
-            "- You should attempt this queued idea now. Only deviate if the file contents make it impossible; if you do, stay very close to the same concept."
+            "- You must attempt this exact queued idea now."
+        )
+        lines.append(
+            "- Use exactly this idea_id in the response. Do not invent a different backlog item or a new idea_id."
+        )
+        lines.append(
+            "- Stay on this target file and keep the implementation aligned with the queued title/rationale."
         )
 
     return "\n".join(lines) + "\n"
+
+
+def enforce_selected_idea_on_proposal(proposal: dict, selected_idea: dict | None) -> dict:
+    if not selected_idea:
+        return proposal
+
+    coerced = dict(proposal)
+    coerced["idea_id"] = selected_idea["id"]
+    target_file = str(selected_idea.get("target_file", "")).strip()
+    if target_file:
+        coerced["file"] = target_file
+    return coerced
+
+
+def effective_run_target(
+    requested_max_runs: int,
+    history: list[dict],
+    structured_ideas: list[dict],
+    modifiable_files: list[str],
+    forced_file: str | None,
+) -> int:
+    eligible_ideas = get_eligible_structured_ideas(structured_ideas, modifiable_files, forced_file)
+    if eligible_ideas:
+        return len(eligible_ideas)
+    return requested_max_runs
 
 
 def _count_recent_failures(history: list[dict]) -> int:
@@ -2990,6 +3054,17 @@ def _run_text_mode(
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
     consecutive_parse_failures = 0
+    eligible_structured_ideas = get_eligible_structured_ideas(
+        structured_ideas,
+        modifiable_files,
+        args.file,
+    )
+    strict_structured_ideas = bool(eligible_structured_ideas)
+    display_max_runs = (
+        len(eligible_structured_ideas)
+        if strict_structured_ideas
+        else max_runs
+    )
 
     def update_text_state(
         exp_num: int,
@@ -3001,7 +3076,7 @@ def _run_text_mode(
         extra: dict | None = None,
     ) -> None:
         payload = {
-            "max_runs": max_runs,
+            "max_runs": display_max_runs,
             "best_loss": None if best_loss >= 999.0 else best_loss,
             "llm_name": args.llm_name,
             "branch": branch,
@@ -3015,15 +3090,28 @@ def _run_text_mode(
         write_state(exp_num, description, phase, payload)
 
     try:
-        for i in range(max_runs - prior_count):
+        idea_iteration = 0
+        while True:
+            history = get_results_history()
+            resolved_idea_count = count_resolved_structured_ideas(history, eligible_structured_ideas)
+            if strict_structured_ideas:
+                if resolved_idea_count >= len(eligible_structured_ideas):
+                    print("All queued structured ideas have resolved keep/discard results.")
+                    break
+                exp_num = resolved_idea_count + 1
+            else:
+                if idea_iteration >= max(0, max_runs - prior_count):
+                    break
+                exp_num = prior_count + idea_iteration + 1
+                idea_iteration += 1
+
             proposed_file = ""
             original: str | None = None
             experiment_committed = False
             experiment_commit_sha: str | None = None
-            exp_num = prior_count + i + 1
 
             try:
-                print(f"\n[Exp {exp_num}/{max_runs}] Asking {args.llm_name}...")
+                print(f"\n[Exp {exp_num}/{display_max_runs}] Asking {args.llm_name}...")
                 update_text_state(exp_num, "querying LLM", "THINKING")
                 recent_run_context = build_recent_run_context()
 
@@ -3033,6 +3121,9 @@ def _run_text_mode(
                     modifiable_files,
                     args.file,
                 )
+                if strict_structured_ideas and not selected_idea:
+                    print("  No pending structured ideas remain. Stopping.")
+                    break
                 target_file = _choose_file(
                     history,
                     modifiable_files,
@@ -3095,14 +3186,16 @@ def _run_text_mode(
                 if not proposal or "changes" not in proposal:
                     print("  LLM gave unparseable response. Skipping.")
                     consecutive_parse_failures += 1
-                    if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                    if (
+                        consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES
+                        and not strict_structured_ideas
+                    ):
                         print("  Too many consecutive malformed LLM responses. Stopping cleanly.")
                         break
                     continue
                 consecutive_parse_failures = 0
 
-                if selected_idea and not proposal.get("idea_id"):
-                    proposal["idea_id"] = selected_idea["id"]
+                proposal = enforce_selected_idea_on_proposal(proposal, selected_idea)
 
                 proposed_file = proposal.get("file", target_file)
                 if proposed_file not in modifiable_files:
@@ -3162,6 +3255,10 @@ def _run_text_mode(
                         continue
 
                     if repaired_proposal and "changes" in repaired_proposal:
+                        repaired_proposal = enforce_selected_idea_on_proposal(
+                            repaired_proposal,
+                            selected_idea,
+                        )
                         repaired_file = repaired_proposal.get("file", proposed_file)
                         if repaired_file == proposed_file:
                             repaired_modified, repaired_error = apply_changes(
@@ -3170,8 +3267,6 @@ def _run_text_mode(
                             )
                             if repaired_modified is not None:
                                 proposal = repaired_proposal
-                                if selected_idea and not proposal.get("idea_id"):
-                                    proposal["idea_id"] = selected_idea["id"]
                                 description = annotate_description_with_idea(
                                     proposal.get("description", description),
                                     proposal.get("idea_id"),
@@ -3615,6 +3710,14 @@ def main() -> None:
     else:
         modifiable_files_active = modifiable_files
 
+    effective_max_runs = effective_run_target(
+        args.max_runs,
+        history=[],
+        structured_ideas=structured_ideas,
+        modifiable_files=modifiable_files_active,
+        forced_file=args.file,
+    )
+
     static_prompt = build_static_prompt_context(
         modifiable_files_active,
         agent_context=agent_context,
@@ -3657,7 +3760,7 @@ def main() -> None:
 
     log_to_file(
         f"Agent started: llm={llm_name} apply_llm={apply_llm_name} "
-        f"cache={'on' if reason_cached_content else 'off'} max_runs={args.max_runs} "
+        f"cache={'on' if reason_cached_content else 'off'} max_runs={effective_max_runs} "
         f"branch={branch} prior={prior_count} config={active_config_path}"
     )
 
@@ -3670,7 +3773,7 @@ def main() -> None:
                 "baseline",
                 "TRAINING",
                 {
-                    "max_runs": args.max_runs,
+                    "max_runs": effective_max_runs,
                     "best_loss": None if best_loss >= 999.0 else best_loss,
                     "llm_name": args.llm_name,
                     "branch": branch,
@@ -3705,7 +3808,7 @@ def main() -> None:
             best_loss,
             call_llm,
             modifiable_files_active,
-            args.max_runs,
+            effective_max_runs,
             train_cfg,
             eval_settings,
             agent_context,
@@ -3724,7 +3827,7 @@ def main() -> None:
     state: dict = {
         "phase": "STARTING",
         "experiment_num": prior_count,
-        "max_runs": args.max_runs,
+        "max_runs": effective_max_runs,
         "best_loss": best_loss,
         "llm_name": args.llm_name,
         "branch": branch,
@@ -3776,6 +3879,13 @@ def main() -> None:
                     pass
         if line.strip():
             state["log_lines"].append(f"  {line[:110]}")
+
+    eligible_structured_ideas = get_eligible_structured_ideas(
+        structured_ideas,
+        modifiable_files_active,
+        args.file,
+    )
+    strict_structured_ideas = bool(eligible_structured_ideas)
 
     with Live(build_dashboard(state), console=console, refresh_per_second=4) as live:
 
@@ -3876,23 +3986,36 @@ def main() -> None:
         refresh()
 
         # ---- Main loop ----
-        remaining = max(0, args.max_runs - len(history))
         consecutive_parse_failures = 0
+        non_idea_iteration = 0
 
-        for i in range(remaining):
+        while True:
+            history = get_results_history()
+            state["history"] = history
+            if strict_structured_ideas:
+                resolved_idea_count = count_resolved_structured_ideas(history, eligible_structured_ideas)
+                if resolved_idea_count >= len(eligible_structured_ideas):
+                    add_log("All queued structured ideas have resolved keep/discard results.")
+                    break
+                exp_num = resolved_idea_count + 1
+            else:
+                if non_idea_iteration >= max(0, args.max_runs - prior_count):
+                    break
+                exp_num = prior_count + non_idea_iteration + 1
+                non_idea_iteration += 1
+
             proposed_file = ""
             original: str | None = None
             experiment_committed = False
             experiment_commit_sha: str | None = None
             try:
-                exp_num = len(history) + 1
                 state["experiment_num"] = exp_num
                 state["metrics"] = None
 
                 # ---- THINK ----
                 set_phase("THINKING")
                 state["current_idea"] = ""
-                add_log(f"Exp {exp_num}/{args.max_runs}: querying {llm_name}...")
+                add_log(f"Exp {exp_num}/{effective_max_runs}: querying {llm_name}...")
                 write_state(exp_num, "querying LLM", "THINKING")
                 refresh()
 
@@ -3902,6 +4025,9 @@ def main() -> None:
                     modifiable_files_active,
                     args.file,
                 )
+                if strict_structured_ideas and not selected_idea:
+                    add_log("No pending structured ideas remain. Stopping.")
+                    break
                 target_file = _choose_file(
                     history,
                     modifiable_files_active,
@@ -3982,7 +4108,10 @@ def main() -> None:
                     add_log("LLM gave unparseable response. Skipping.")
                     log_to_file(f"RAW: {(llm_response or '')[:500]}")
                     consecutive_parse_failures += 1
-                    if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                    if (
+                        consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES
+                        and not strict_structured_ideas
+                    ):
                         add_log("Too many consecutive malformed LLM responses. Stopping cleanly.")
                         clear_state()
                         set_phase("DONE")
@@ -3994,8 +4123,7 @@ def main() -> None:
                     continue
                 consecutive_parse_failures = 0
 
-                if selected_idea and not proposal.get("idea_id"):
-                    proposal["idea_id"] = selected_idea["id"]
+                proposal = enforce_selected_idea_on_proposal(proposal, selected_idea)
 
                 proposed_file = proposal.get("file", target_file)
                 description = annotate_description_with_idea(
@@ -4059,6 +4187,10 @@ def main() -> None:
                         continue
 
                     if repaired_proposal and "changes" in repaired_proposal:
+                        repaired_proposal = enforce_selected_idea_on_proposal(
+                            repaired_proposal,
+                            selected_idea,
+                        )
                         repaired_file = repaired_proposal.get("file", proposed_file)
                         if repaired_file == proposed_file:
                             repaired_modified, repaired_error = apply_changes(
@@ -4067,8 +4199,6 @@ def main() -> None:
                             )
                             if repaired_modified is not None:
                                 proposal = repaired_proposal
-                                if selected_idea and not proposal.get("idea_id"):
-                                    proposal["idea_id"] = selected_idea["id"]
                                 description = annotate_description_with_idea(
                                     proposal.get("description", description).replace("\t", " "),
                                     proposal.get("idea_id"),
