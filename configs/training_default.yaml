@@ -6,6 +6,10 @@ model:
   diffusion_layers: 2
   diffusion_hidden_dim: 64
   initial_diffusion_scale: 0.1
+  simulator_prior:
+    enabled: true
+    weight: 1.0
+    residual_weight: 0.35
   state_dim: 4
   param_dim: 6
   control_dim: 2

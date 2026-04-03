@@ -148,21 +148,23 @@ class Trainer:
 
             # Roll out latent SDE -- stochastic or deterministic
             if sde_active:
-                z_traj = model.latent_sde(
+                z_traj = model.rollout_latent(
                     ts[idx],
                     z0,
                     controls[idx],
                     params_batch[idx],
-                    key_sde,
                     disturbances=disturbances[idx],
+                    key=key_sde,
+                    stochastic=True,
                 )
             else:
-                z_traj = model.latent_sde.mean_trajectory(
+                z_traj = model.rollout_latent(
                     ts[idx],
                     z_mean,
                     controls[idx],
                     params_batch[idx],
                     disturbances=disturbances[idx],
+                    stochastic=False,
                 )
 
             # Decode all timesteps
@@ -188,19 +190,20 @@ class Trainer:
                     None,
                 )
                 step_dt = t_tp1 - t_t
-                k1 = model.latent_sde.drift(
+                k1 = model.latent_drift(
                     z_mean_t, control_t, disturbance_t, params_batch[idx]
+                    , step_dt
                 )
                 control_mid = 0.5 * (control_t + control_tp1)
                 dist_mid = 0.5 * (disturbance_t + disturbance_tp1)
-                k2 = model.latent_sde.drift(
-                    z_mean_t + 0.5 * step_dt * k1, control_mid, dist_mid, params_batch[idx]
+                k2 = model.latent_drift(
+                    z_mean_t + 0.5 * step_dt * k1, control_mid, dist_mid, params_batch[idx], step_dt
                 )
-                k3 = model.latent_sde.drift(
-                    z_mean_t + 0.5 * step_dt * k2, control_mid, dist_mid, params_batch[idx]
+                k3 = model.latent_drift(
+                    z_mean_t + 0.5 * step_dt * k2, control_mid, dist_mid, params_batch[idx], step_dt
                 )
-                k4 = model.latent_sde.drift(
-                    z_mean_t + step_dt * k3, control_tp1, disturbance_tp1, params_batch[idx]
+                k4 = model.latent_drift(
+                    z_mean_t + step_dt * k3, control_tp1, disturbance_tp1, params_batch[idx], step_dt
                 )
                 z_next = z_mean_t + (step_dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
                 return model.decode(z_next, params_batch[idx], control_tp1)
@@ -245,9 +248,10 @@ class Trainer:
                     states[idx, 0], params_batch[idx], controls[idx, 0], k
                 )
                 # Mean trajectory: shape (seq_len, latent_dim)
-                z_traj_i = model.latent_sde.mean_trajectory(
+                z_traj_i = model.rollout_latent(
                     ts[idx], z_mean_i, controls[idx], params_batch[idx],
                     disturbances=disturbances[idx],
+                    stochastic=False,
                 )
                 sigma_fn = jax.vmap(
                     lambda z, u, d: model.latent_sde.diffusion(z, u, d, params_batch[idx]),

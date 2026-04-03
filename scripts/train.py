@@ -233,11 +233,21 @@ def main():
     if is_finetune:
         from dte.training.transfer import apply_finetune_mask
         print(f"Fine-tune mode: loading checkpoint from {args.finetune}")
-        model = DigitalTwin.load(args.finetune, config, system_spec=system_spec)
+        model = DigitalTwin.load(
+            args.finetune,
+            config,
+            system_spec=system_spec,
+            system_config=system_config,
+        )
         model = apply_finetune_mask(model, part=args.finetune_part)
         print(f"Fine-tune part: {args.finetune_part} (other components frozen)")
     else:
-        model = DigitalTwin.from_config(config, key_model, system_spec=system_spec)
+        model = DigitalTwin.from_config(
+            config,
+            key_model,
+            system_spec=system_spec,
+            system_config=system_config,
+        )
 
     param_counts = model.get_parameter_count()
     print(f"Parameter counts:")

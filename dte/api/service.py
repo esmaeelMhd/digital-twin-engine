@@ -79,7 +79,12 @@ def _load_system(system_config_path: str, model_path: Optional[str], training_co
     _specs[spec.name] = spec
 
     if model_path and os.path.exists(model_path):
-        model = DigitalTwin.load(model_path, train_cfg, system_spec=spec)
+        model = DigitalTwin.load(
+            model_path,
+            train_cfg,
+            system_spec=spec,
+            system_config=sys_cfg,
+        )
         _models[spec.name] = model
         print(f"[DTE API] Loaded model for system '{spec.name}' from {model_path}")
     else:
@@ -221,8 +226,8 @@ async def predict(req: PredictRequest):
 
     key = jax.random.PRNGKey(0)
     _, z_mean, _ = model.encode(initial_state, params, controls[0], key)
-    z_traj = model.latent_sde.mean_trajectory(
-        ts, z_mean, controls, params, disturbances=disturbances
+    z_traj = model.rollout_latent(
+        ts, z_mean, controls, params, disturbances=disturbances, stochastic=False
     )
 
     import equinox as eqx
@@ -276,7 +281,15 @@ async def ensemble(req: EnsembleRequest):
     _, z_mean, _ = model.encode(initial_state, params, controls[0], enc_key)
 
     def _one_sample(sde_key):
-        z_traj = model.latent_sde(ts, z_mean, controls, params, sde_key, disturbances=disturbances)
+        z_traj = model.rollout_latent(
+            ts,
+            z_mean,
+            controls,
+            params,
+            disturbances=disturbances,
+            key=sde_key,
+            stochastic=True,
+        )
         decode_fn = jax.vmap(lambda z, u: model.decode(z, params, u), in_axes=(0, 0))
         return decode_fn(z_traj, controls)
 

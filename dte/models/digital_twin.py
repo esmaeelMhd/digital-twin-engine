@@ -1,14 +1,17 @@
-"""Full Digital Twin model integrating encoder, decoder, and latent SDE."""
+"""Full Digital Twin model integrating encoder, decoder, latent SDE, and optional simulator prior."""
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
+import diffrax
 
 from dte.models.encoder import Encoder
 from dte.models.decoder import Decoder
 from dte.models.latent_sde import LatentSDE
+from dte.simulators.base import ProcessSimulator
+from dte.simulators.registry import get_simulator
 
 
 class DigitalTwin(eqx.Module):
@@ -17,19 +20,37 @@ class DigitalTwin(eqx.Module):
     encoder: Encoder
     decoder: Decoder
     latent_sde: LatentSDE
+    simulator: Optional[ProcessSimulator] = eqx.field(static=True)
+    simulator_prior_enabled: bool = eqx.field(static=True)
+    simulator_prior_weight: float = eqx.field(static=True)
+    residual_prior_weight: float = eqx.field(static=True)
 
     def __init__(
         self,
         encoder: Encoder,
         decoder: Decoder,
         latent_sde: LatentSDE,
+        simulator: Optional[ProcessSimulator] = None,
+        simulator_prior_enabled: bool = False,
+        simulator_prior_weight: float = 1.0,
+        residual_prior_weight: float = 1.0,
     ):
         self.encoder = encoder
         self.decoder = decoder
         self.latent_sde = latent_sde
+        self.simulator = simulator
+        self.simulator_prior_enabled = simulator_prior_enabled
+        self.simulator_prior_weight = simulator_prior_weight
+        self.residual_prior_weight = residual_prior_weight
 
     @classmethod
-    def from_config(cls, config: dict, key: PRNGKeyArray, system_spec) -> "DigitalTwin":
+    def from_config(
+        cls,
+        config: dict,
+        key: PRNGKeyArray,
+        system_spec,
+        system_config: dict | None = None,
+    ) -> "DigitalTwin":
         """Create model from config dict.
 
         Args:
@@ -37,6 +58,8 @@ class DigitalTwin(eqx.Module):
             key: PRNG key.
             system_spec: :class:`~dte.simulators.base.SystemSpec` providing
                 dimensions, normalization arrays, and decoder constraints.
+            system_config: Parsed system YAML used to reconstruct a simulator
+                when simulator-prior rollout is enabled.
         """
         key_enc, key_dec, key_sde = jax.random.split(key, 3)
 
@@ -120,12 +143,129 @@ class DigitalTwin(eqx.Module):
             key=key_sde,
         )
 
-        model = cls(encoder, decoder, latent_sde)
+        simulator_prior_cfg = model_config.get("simulator_prior", {})
+        simulator_prior_enabled = bool(simulator_prior_cfg.get("enabled", False))
+        simulator = None
+        if simulator_prior_enabled and system_config is not None:
+            simulator = get_simulator(system_spec.name, system_config)
+
+        model = cls(
+            encoder,
+            decoder,
+            latent_sde,
+            simulator=simulator,
+            simulator_prior_enabled=simulator_prior_enabled,
+            simulator_prior_weight=float(simulator_prior_cfg.get("weight", 1.0)),
+            residual_prior_weight=float(simulator_prior_cfg.get("residual_weight", 1.0)),
+        )
 
         param_count = sum(x.size for x in jax.tree.leaves(eqx.filter(model, eqx.is_array)))
         print(f"Digital Twin initialized with {param_count:,} parameters")
 
         return model
+
+    def latent_drift(
+        self,
+        z: Float[Array, "latent_dim"],
+        control: Float[Array, "control_dim"],
+        disturbance: Float[Array, "disturbance_dim"],
+        params: Float[Array, "param_dim"],
+        dt,
+    ) -> Float[Array, "latent_dim"]:
+        """Return drift with an optional simulator-informed physical prior."""
+
+        residual_drift = self.latent_sde.drift(z, control, disturbance, params)
+
+        if not self.simulator_prior_enabled or self.simulator is None:
+            return residual_drift
+
+        state = self.decode(z, params, control)
+        state_dot = self.simulator.dynamics(0.0, state, control, disturbance)
+        safe_dt = jnp.maximum(jnp.asarray(dt, dtype=state.dtype), jnp.asarray(1e-6, dtype=state.dtype))
+        prior_state = state + safe_dt * state_dot
+        z_prior_mean, _ = self.encoder.encode(prior_state, params, control)
+        physical_drift = (z_prior_mean - z) / safe_dt
+
+        return (
+            self.simulator_prior_weight * physical_drift
+            + self.residual_prior_weight * residual_drift
+        )
+
+    def rollout_latent(
+        self,
+        ts: Float[Array, "n_steps"],
+        z0: Float[Array, "latent_dim"],
+        controls: Float[Array, "n_steps control_dim"],
+        params: Float[Array, "param_dim"],
+        *,
+        disturbances: Float[Array, "n_steps disturbance_dim"] | None = None,
+        key: PRNGKeyArray | None = None,
+        stochastic: bool = False,
+    ) -> Float[Array, "n_steps latent_dim"]:
+        """Roll out latent states with optional simulator-informed drift."""
+
+        disturbances = self.latent_sde._get_disturbances(ts, disturbances, z0.dtype)
+        control_interp = diffrax.LinearInterpolation(ts, controls)
+
+        if self.latent_sde.disturbance_dim > 0:
+            disturbance_interp = diffrax.LinearInterpolation(ts, disturbances)
+            disturbance_at_time = disturbance_interp.evaluate
+        else:
+            disturbance_at_time = lambda t: jnp.zeros((0,), dtype=z0.dtype)  # noqa: E731
+
+        base_dt = ts[1] - ts[0]
+
+        def drift_fn(t, z, args):
+            u = control_interp.evaluate(t)
+            d = disturbance_at_time(t)
+            return self.latent_drift(z, u, d, params, base_dt)
+
+        saveat = diffrax.SaveAt(ts=ts)
+
+        if stochastic:
+            if key is None:
+                raise ValueError("rollout_latent(stochastic=True) requires a PRNG key.")
+
+            def diffusion_fn(t, z, args):
+                u = control_interp.evaluate(t)
+                d = disturbance_at_time(t)
+                return jnp.diag(self.latent_sde.diffusion(z, u, d, params))
+
+            dt0 = base_dt / 2.0
+            brownian_motion = diffrax.VirtualBrownianTree(
+                t0=ts[0],
+                t1=ts[-1],
+                tol=dt0 / 2.0,
+                shape=(self.latent_sde.latent_dim,),
+                key=key,
+            )
+            drift_term = diffrax.ODETerm(drift_fn)
+            diffusion_term = diffrax.ControlTerm(diffusion_fn, brownian_motion)
+            terms = diffrax.MultiTerm(drift_term, diffusion_term)
+            solution = diffrax.diffeqsolve(
+                terms,
+                diffrax.Euler(),
+                t0=ts[0],
+                t1=ts[-1],
+                dt0=dt0,
+                y0=z0,
+                saveat=saveat,
+                max_steps=len(ts) * 10,
+            )
+            return solution.ys
+
+        solution = diffrax.diffeqsolve(
+            diffrax.ODETerm(drift_fn),
+            diffrax.Tsit5(),
+            t0=ts[0],
+            t1=ts[-1],
+            dt0=base_dt,
+            y0=z0,
+            saveat=saveat,
+            stepsize_controller=diffrax.PIDController(rtol=1e-3, atol=1e-4),
+            max_steps=4096,
+        )
+        return solution.ys
 
     def encode(
         self,
@@ -169,8 +309,14 @@ class DigitalTwin(eqx.Module):
 
         z0, z_mean, z_logvar = self.encode(initial_state, params, controls[0], key_enc)
 
-        z_trajectory = self.latent_sde(
-            ts, z0, controls, params, key_sde, disturbances=disturbances
+        z_trajectory = self.rollout_latent(
+            ts,
+            z0,
+            controls,
+            params,
+            disturbances=disturbances,
+            key=key_sde,
+            stochastic=True,
         )
 
         decode_fn = jax.vmap(
@@ -217,12 +363,23 @@ class DigitalTwin(eqx.Module):
         print(f"Model saved to {path}")
 
     @classmethod
-    def load(cls, path: str, config: dict, system_spec) -> "DigitalTwin":
+    def load(
+        cls,
+        path: str,
+        config: dict,
+        system_spec,
+        system_config: dict | None = None,
+    ) -> "DigitalTwin":
         """Load model using equinox deserialization."""
         if system_spec is None:
             raise ValueError("DigitalTwin.load requires a system_spec.")
         key = jax.random.PRNGKey(0)
-        template = cls.from_config(config, key, system_spec=system_spec)
+        template = cls.from_config(
+            config,
+            key,
+            system_spec=system_spec,
+            system_config=system_config,
+        )
 
         with open(path, "rb") as f:
             model = eqx.tree_deserialise_leaves(f, template)
