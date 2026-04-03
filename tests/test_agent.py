@@ -5,11 +5,14 @@ from scripts.agent import (
     _choose_file,
     _is_gemini_cache_miss_error,
     _normalize_gemini_thinking_level,
+    annotate_description_with_idea,
     FatalAPIError,
     build_dynamic_prompt,
     build_prompt,
     build_static_prompt_context,
+    load_structured_ideas,
     rollback_experiment_change,
+    select_next_structured_idea,
 )
 
 
@@ -98,6 +101,8 @@ def test_build_prompt_is_static_plus_dynamic_sections():
         [],
         1.2345,
         recent_run_context="recent runs",
+        ideas=[],
+        selected_idea=None,
     )
 
     full_prompt = build_prompt(
@@ -108,9 +113,45 @@ def test_build_prompt_is_static_plus_dynamic_sections():
         ["foo.py"],
         agent_context="repo ctx",
         recent_run_context="recent runs",
+        ideas=[],
+        selected_idea=None,
     )
 
     assert full_prompt == static_prompt + dynamic_prompt
+
+
+def test_build_dynamic_prompt_includes_selected_structured_idea():
+    prompt = build_dynamic_prompt(
+        "foo.py",
+        "print('hello')\n",
+        [],
+        1.2345,
+        recent_run_context="recent runs",
+        ideas=[
+            {
+                "id": "idea-1",
+                "title": "Try a better residual path",
+                "target_file": "foo.py",
+                "priority": 1,
+                "rationale": "Test rationale",
+                "instructions": ["Keep it small"],
+                "tags": ["residual"],
+            }
+        ],
+        selected_idea={
+            "id": "idea-1",
+            "title": "Try a better residual path",
+            "target_file": "foo.py",
+            "priority": 1,
+            "rationale": "Test rationale",
+            "instructions": ["Keep it small"],
+            "tags": ["residual"],
+        },
+    )
+
+    assert "Structured idea backlog" in prompt
+    assert "Required next idea" in prompt
+    assert '"idea_id": "optional structured idea identifier' in prompt
 
 
 def test_choose_file_prefers_clean_candidates(monkeypatch):
@@ -131,6 +172,63 @@ def test_choose_file_prefers_code_over_config_when_counts_tie(monkeypatch):
     chosen = _choose_file([], ["configs/training_default.yaml", "dte/training/trainer.py"], None)
 
     assert chosen == "dte/training/trainer.py"
+
+
+def test_choose_file_prefers_structured_idea_target(monkeypatch):
+    monkeypatch.setattr(agent_module, "git_file_is_dirty", lambda path: False)
+
+    chosen = _choose_file(
+        [],
+        ["dte/models/encoder.py", "dte/training/trainer.py"],
+        None,
+        preferred_file="dte/models/encoder.py",
+    )
+
+    assert chosen == "dte/models/encoder.py"
+
+
+def test_select_next_structured_idea_skips_history_attempts():
+    ideas = [
+        {"id": "idea-1", "title": "First idea", "target_file": "foo.py", "priority": 1},
+        {"id": "idea-2", "title": "Second idea", "target_file": "foo.py", "priority": 2},
+    ]
+    history = [
+        {"description": "[idea:idea-1] First idea", "file": "foo.py", "status": "discard", "val_loss": 1.0},
+    ]
+
+    selected = select_next_structured_idea(ideas, history, ["foo.py"], None)
+
+    assert selected["id"] == "idea-2"
+
+
+def test_load_structured_ideas_reads_yaml(tmp_path):
+    ideas_path = tmp_path / "ideas.yaml"
+    ideas_path.write_text(
+        "ideas:\n"
+        "  - id: custom_one\n"
+        "    title: First custom idea\n"
+        "    target_file: foo.py\n"
+        "    priority: 2\n"
+        "    instructions:\n"
+        "      - Keep it surgical\n",
+        encoding="utf-8",
+    )
+
+    ideas = load_structured_ideas(override_path=str(ideas_path))
+
+    assert ideas[0]["id"] == "custom_one"
+    assert ideas[0]["target_file"] == "foo.py"
+    assert ideas[0]["instructions"] == ["Keep it surgical"]
+
+
+def test_annotate_description_with_idea_is_idempotent():
+    description = annotate_description_with_idea("Add diffusion floor", "latent_diffusion_floor")
+
+    assert description == "[idea:latent_diffusion_floor] Add diffusion floor"
+    assert (
+        annotate_description_with_idea(description, "latent_diffusion_floor")
+        == description
+    )
 
 
 def test_rollback_experiment_change_restores_original_content(tmp_path, monkeypatch):
@@ -167,4 +265,21 @@ def test_rollback_experiment_change_resets_commit_before_restore(tmp_path, monke
     rollback_experiment_change("demo.py", "original\n", committed=True)
 
     assert sequence[0] == "reset"
+    assert target.read_text(encoding="utf-8") == "original\n"
+
+
+def test_rollback_experiment_change_reverts_non_head_experiment_commit(tmp_path, monkeypatch):
+    target = tmp_path / "demo.py"
+    target.write_text("modified\n", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(agent_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(agent_module, "git_head_sha", lambda: "head999")
+    monkeypatch.setattr(agent_module, "git_is_ancestor", lambda ancestor, descendant="HEAD": True)
+    monkeypatch.setattr(agent_module, "git_revert_commit", lambda sha: calls.append(("revert", sha)))
+    monkeypatch.setattr(agent_module, "git", lambda *args: calls.append(("git", args)) or ("", 0))
+
+    rollback_experiment_change("demo.py", "original\n", committed=True, commit_sha="abc1234")
+
+    assert ("revert", "abc1234") in calls
     assert target.read_text(encoding="utf-8") == "original\n"

@@ -326,6 +326,87 @@ def load_agent_context(config: dict | None = None) -> str:
     return text
 
 
+def _normalize_text_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if text:
+                items.append(text)
+        return items
+    return [str(value).strip()]
+
+
+def _sanitize_idea_id(raw_value: str, fallback: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "-", (raw_value or "").strip()).strip("-").lower()
+    return cleaned or fallback
+
+
+def load_structured_ideas(
+    config: dict | None = None,
+    override_path: str | None = None,
+) -> list[dict]:
+    """Load an ordered idea backlog from YAML/JSON."""
+
+    agent_cfg = (config or {}).get("agent", {})
+    ideas_file = override_path or agent_cfg.get("ideas_file")
+    if not ideas_file:
+        return []
+
+    ideas_path = resolve_repo_path(str(ideas_file))
+    try:
+        raw = yaml.safe_load(ideas_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        log_to_file(f"WARNING ideas load failed: {ideas_path} ({exc})")
+        return []
+
+    if isinstance(raw, dict):
+        raw_items = raw.get("ideas", [])
+    elif isinstance(raw, list):
+        raw_items = raw
+    else:
+        return []
+
+    ideas: list[dict] = []
+    for index, item in enumerate(raw_items, start=1):
+        if not isinstance(item, dict):
+            continue
+        if item.get("enabled", True) is False:
+            continue
+
+        title = str(item.get("title") or item.get("description") or "").strip()
+        fallback_id = f"idea-{index}"
+        idea_id = _sanitize_idea_id(str(item.get("id") or title), fallback_id)
+        target_file = str(item.get("target_file") or item.get("file") or "").strip()
+        priority = item.get("priority", index)
+        try:
+            priority_value = int(priority)
+        except Exception:
+            priority_value = index
+
+        ideas.append(
+            {
+                "id": idea_id,
+                "title": title or idea_id,
+                "target_file": target_file,
+                "priority": priority_value,
+                "rationale": str(item.get("rationale") or "").strip(),
+                "instructions": _normalize_text_list(item.get("instructions") or item.get("steps")),
+                "tags": _normalize_text_list(item.get("tags")),
+            }
+        )
+
+    ideas.sort(key=lambda idea: (idea["priority"], idea["id"]))
+    return ideas
+
+
 def load_autoresearch_config() -> dict:
     """Load the active autoresearch config."""
 
@@ -1035,6 +1116,10 @@ GEMINI_CACHE_MIN_TOKENS = 2048
 PATCH_RESPONSE_JSON_SCHEMA = {
     "type": "object",
     "properties": {
+        "idea_id": {
+            "type": "string",
+            "description": "Optional structured idea identifier when following an ideas backlog.",
+        },
         "file": {
             "type": "string",
             "description": "Repo-relative path to the single file to modify.",
@@ -1683,6 +1768,106 @@ def _categorize(desc: str) -> str:
     return "other"
 
 
+_IDEA_MARKER_RE = re.compile(r"\[idea:([a-zA-Z0-9_.-]+)\]")
+
+
+def _extract_idea_id_from_description(description: str) -> str:
+    match = _IDEA_MARKER_RE.search(description or "")
+    return match.group(1).strip().lower() if match else ""
+
+
+def annotate_description_with_idea(description: str, idea_id: str | None) -> str:
+    clean_description = (description or "").strip()
+    clean_idea_id = (idea_id or "").strip().lower()
+    if not clean_idea_id:
+        return clean_description
+    if _extract_idea_id_from_description(clean_description) == clean_idea_id:
+        return clean_description
+    return f"[idea:{clean_idea_id}] {clean_description}"
+
+
+def _history_has_attempted_idea(history: list[dict], idea: dict) -> bool:
+    target_id = str(idea.get("id", "")).strip().lower()
+    target_title = str(idea.get("title", "")).strip().lower()
+    target_file = str(idea.get("target_file", "")).strip()
+    for row in history:
+        description = str(row.get("description", ""))
+        if target_id and _extract_idea_id_from_description(description) == target_id:
+            return True
+        if target_title and target_title in description.lower():
+            if not target_file or row.get("file", "") == target_file:
+                return True
+    return False
+
+
+def select_next_structured_idea(
+    ideas: list[dict],
+    history: list[dict],
+    modifiable_files: list[str],
+    forced_file: str | None,
+) -> dict | None:
+    """Pick the next pending idea from the backlog."""
+
+    candidates: list[dict] = []
+    for idea in ideas:
+        target_file = str(idea.get("target_file", "")).strip()
+        if forced_file and target_file and target_file != forced_file:
+            continue
+        if forced_file and not target_file:
+            idea = dict(idea)
+            idea["target_file"] = forced_file
+        if target_file and target_file not in modifiable_files:
+            continue
+        if _history_has_attempted_idea(history, idea):
+            continue
+        candidates.append(idea)
+    return candidates[0] if candidates else None
+
+
+def build_structured_ideas_section(ideas: list[dict], selected_idea: dict | None) -> str:
+    if not ideas:
+        return ""
+
+    lines = ["## Structured idea backlog:"]
+    for index, idea in enumerate(ideas[:8], start=1):
+        idea_bits = [f"{index}. {idea['id']}"]
+        target_file = str(idea.get("target_file", "")).strip()
+        if target_file:
+            idea_bits.append(f"file={target_file}")
+        if selected_idea and idea.get("id") == selected_idea.get("id"):
+            idea_bits.append("STATUS=NEXT")
+        lines.append("  " + " | ".join(idea_bits))
+        lines.append(f"     title: {idea['title']}")
+        rationale = str(idea.get("rationale", "")).strip()
+        if rationale:
+            lines.append(f"     rationale: {rationale}")
+        instructions = idea.get("instructions", []) or []
+        for instruction in instructions[:3]:
+            lines.append(f"     - {instruction}")
+
+    if selected_idea:
+        lines.append("")
+        lines.append("## Required next idea")
+        lines.append(f"- idea_id: {selected_idea['id']}")
+        lines.append(f"- title: {selected_idea['title']}")
+        target_file = str(selected_idea.get("target_file", "")).strip()
+        if target_file:
+            lines.append(f"- target_file: {target_file}")
+        rationale = str(selected_idea.get("rationale", "")).strip()
+        if rationale:
+            lines.append(f"- rationale: {rationale}")
+        instructions = selected_idea.get("instructions", []) or []
+        if instructions:
+            lines.append("- implementation guidance:")
+            for instruction in instructions:
+                lines.append(f"  - {instruction}")
+        lines.append(
+            "- You should attempt this queued idea now. Only deviate if the file contents make it impossible; if you do, stay very close to the same concept."
+        )
+
+    return "\n".join(lines) + "\n"
+
+
 def _count_recent_failures(history: list[dict]) -> int:
     count = 0
     for r in reversed(history):
@@ -1729,6 +1914,8 @@ def build_dynamic_prompt(
     history: list[dict],
     best_loss: float,
     recent_run_context: str = "",
+    ideas: list[dict] | None = None,
+    selected_idea: dict | None = None,
 ) -> str:
     history_section = ""
     near_misses_str = ""
@@ -1789,8 +1976,12 @@ Look at category summary - avoid exhausted categories. Try a different file or a
     if recent_run_context:
         recent_runs_section = f"\n{recent_run_context}\n"
 
+    ideas_section = ""
+    if ideas:
+        ideas_section = "\n" + build_structured_ideas_section(ideas, selected_idea)
+
     return f"""## Current best_val_loss: {best_loss:.6f}
-{streak_str}{history_section}{recent_runs_section}
+{streak_str}{history_section}{recent_runs_section}{ideas_section}
 ## Currently showing: {file_path}
 ```
 {file_source}
@@ -1802,6 +1993,7 @@ Think creatively about what hasn't been attempted yet.
 
 Respond with ONLY a JSON object (no markdown fences, no explanation):
 {{
+  "idea_id": "optional structured idea identifier when following a queued idea",
   "file": "repo-relative path to the file you want to modify (must be from the allowed list)",
   "description": "short description of the change (no tabs)",
   "changes": [
@@ -1824,6 +2016,8 @@ def build_prompt(
     modifiable_files: list[str],
     agent_context: str = "",
     recent_run_context: str = "",
+    ideas: list[dict] | None = None,
+    selected_idea: dict | None = None,
 ) -> str:
     return build_static_prompt_context(
         modifiable_files,
@@ -1834,6 +2028,8 @@ def build_prompt(
         history,
         best_loss,
         recent_run_context=recent_run_context,
+        ideas=ideas,
+        selected_idea=selected_idea,
     )
 
 
@@ -2630,10 +2826,17 @@ def build_dashboard(state: dict) -> Layout:
 # Main loop helpers
 # ---------------------------------------------------------------------------
 
-def _choose_file(history: list[dict], modifiable_files: list[str], forced_file: str | None) -> str:
+def _choose_file(
+    history: list[dict],
+    modifiable_files: list[str],
+    forced_file: str | None,
+    preferred_file: str | None = None,
+) -> str:
     """Pick the file to show in the prompt. Rotates through modifiable files."""
     if forced_file:
         return forced_file
+    if preferred_file and preferred_file in modifiable_files:
+        return preferred_file
     clean_files = [f for f in modifiable_files if not git_file_is_dirty(f)]
     candidates = clean_files or modifiable_files
 
@@ -2671,6 +2874,7 @@ def _run_text_mode(
     static_prompt: str,
     reason_cached_content: str | None,
     branch: str,
+    structured_ideas: list[dict],
 ) -> None:
     """Simple text output mode when Rich is not desired."""
     prior_count = len(history)
@@ -2712,7 +2916,18 @@ def _run_text_mode(
                 update_text_state(exp_num, "querying LLM", "THINKING")
                 recent_run_context = build_recent_run_context()
 
-                target_file = _choose_file(history, modifiable_files, args.file)
+                selected_idea = select_next_structured_idea(
+                    structured_ideas,
+                    history,
+                    modifiable_files,
+                    args.file,
+                )
+                target_file = _choose_file(
+                    history,
+                    modifiable_files,
+                    args.file,
+                    preferred_file=selected_idea.get("target_file") if selected_idea else None,
+                )
                 try:
                     file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
                 except FileNotFoundError:
@@ -2726,6 +2941,8 @@ def _run_text_mode(
                     history,
                     best_loss,
                     recent_run_context=recent_run_context,
+                    ideas=structured_ideas,
+                    selected_idea=selected_idea,
                 )
                 prompt = dynamic_prompt if reason_cached_content else static_prompt + dynamic_prompt
 
@@ -2773,6 +2990,9 @@ def _run_text_mode(
                     continue
                 consecutive_parse_failures = 0
 
+                if selected_idea and not proposal.get("idea_id"):
+                    proposal["idea_id"] = selected_idea["id"]
+
                 proposed_file = proposal.get("file", target_file)
                 if proposed_file not in modifiable_files:
                     print(f"  LLM chose disallowed file {proposed_file}. Skipping.")
@@ -2781,7 +3001,10 @@ def _run_text_mode(
                     print(f"  Skipping dirty file {proposed_file} to avoid clobbering existing changes.")
                     continue
 
-                description = proposal.get("description", "unknown")
+                description = annotate_description_with_idea(
+                    proposal.get("description", "unknown"),
+                    proposal.get("idea_id"),
+                )
                 current_idea = f"[{proposed_file}] {description}"
                 print(f"  Idea: {description}")
                 print(f"  File: {proposed_file}")
@@ -2836,7 +3059,12 @@ def _run_text_mode(
                             )
                             if repaired_modified is not None:
                                 proposal = repaired_proposal
-                                description = proposal.get("description", description)
+                                if selected_idea and not proposal.get("idea_id"):
+                                    proposal["idea_id"] = selected_idea["id"]
+                                description = annotate_description_with_idea(
+                                    proposal.get("description", description),
+                                    proposal.get("idea_id"),
+                                )
                                 current_idea = f"[{proposed_file}] {description}"
                                 modified = repaired_modified
                                 print("  Recovered apply-fail with repair prompt.")
@@ -3043,6 +3271,7 @@ def main() -> None:
     parser.add_argument("--tag",         type=str,  default=None, help="Branch tag (default: date)")
     parser.add_argument("--no-dashboard", action="store_true", help="Text-only output")
     parser.add_argument("--file",        type=str,  default=None, help="Restrict to one modifiable file")
+    parser.add_argument("--ideas-file",  type=str,  default=None, help="Structured YAML/JSON ideas backlog to prioritize")
     # LLM provider flags (default comes from autoresearch config)
     parser.add_argument("--gemini",  type=str, nargs="?", const=DEFAULT_GEMINI_MODEL, default=None,
                         help=f"Use Google Gemini model (default: {DEFAULT_GEMINI_MODEL})")
@@ -3081,6 +3310,7 @@ def main() -> None:
     train_cfg = ar_cfg.get("train", {})
     eval_settings = get_eval_settings(ar_cfg)
     agent_context = load_agent_context(ar_cfg)
+    structured_ideas = load_structured_ideas(ar_cfg, override_path=args.ideas_file)
     recent_run_context = build_recent_run_context()
 
     default_model = str(agent_cfg.get("default_llm", DEFAULT_GEMINI_MODEL))
@@ -3366,6 +3596,7 @@ def main() -> None:
             static_prompt,
             reason_cached_content,
             branch,
+            structured_ideas,
         )
         return
 
@@ -3536,7 +3767,18 @@ def main() -> None:
                 write_state(exp_num, "querying LLM", "THINKING")
                 refresh()
 
-                target_file = _choose_file(history, modifiable_files_active, args.file)
+                selected_idea = select_next_structured_idea(
+                    structured_ideas,
+                    history,
+                    modifiable_files_active,
+                    args.file,
+                )
+                target_file = _choose_file(
+                    history,
+                    modifiable_files_active,
+                    args.file,
+                    preferred_file=selected_idea.get("target_file") if selected_idea else None,
+                )
                 try:
                     file_source = (PROJECT_ROOT / target_file).read_text(encoding="utf-8")
                 except FileNotFoundError:
@@ -3556,6 +3798,8 @@ def main() -> None:
                     history,
                     best_loss,
                     recent_run_context=recent_run_context,
+                    ideas=structured_ideas,
+                    selected_idea=selected_idea,
                 )
                 prompt = dynamic_prompt if reason_cached_content else static_prompt + dynamic_prompt
 
@@ -3621,8 +3865,14 @@ def main() -> None:
                     continue
                 consecutive_parse_failures = 0
 
+                if selected_idea and not proposal.get("idea_id"):
+                    proposal["idea_id"] = selected_idea["id"]
+
                 proposed_file = proposal.get("file", target_file)
-                description = proposal.get("description", "unknown").replace("\t", " ")
+                description = annotate_description_with_idea(
+                    proposal.get("description", "unknown").replace("\t", " "),
+                    proposal.get("idea_id"),
+                )
                 state["current_idea"] = f"[{proposed_file}] {description}"
                 add_log(f"Idea: {description}")
                 add_log(f"File: {proposed_file}")
@@ -3688,7 +3938,12 @@ def main() -> None:
                             )
                             if repaired_modified is not None:
                                 proposal = repaired_proposal
-                                description = proposal.get("description", description).replace("\t", " ")
+                                if selected_idea and not proposal.get("idea_id"):
+                                    proposal["idea_id"] = selected_idea["id"]
+                                description = annotate_description_with_idea(
+                                    proposal.get("description", description).replace("\t", " "),
+                                    proposal.get("idea_id"),
+                                )
                                 state["current_idea"] = f"[{proposed_file}] {description}"
                                 modified = repaired_modified
                                 add_log("Recovered apply-fail with repair prompt.")
