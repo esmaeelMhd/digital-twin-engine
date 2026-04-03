@@ -167,7 +167,13 @@ class LossComputer:
         diff = predicted_trajectory - true_trajectory
         state_weights = self.state_loss_weights[None, None, :]
         weighted_huber = self._huber_loss(diff) * weights[None, :, None] * state_weights
-        return jnp.mean(weighted_huber)
+
+        pred_diff = predicted_trajectory[:, 1:] - predicted_trajectory[:, :-1]
+        true_diff = true_trajectory[:, 1:] - true_trajectory[:, :-1]
+        deriv_diff = pred_diff - true_diff
+        deriv_huber = self._huber_loss(deriv_diff) * weights[None, 1:, None] * state_weights
+
+        return jnp.mean(weighted_huber) + 0.5 * jnp.mean(deriv_huber)
 
     def one_step_loss(
         self,
