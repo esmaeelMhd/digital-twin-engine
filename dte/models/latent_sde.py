@@ -197,7 +197,7 @@ class LatentDiffusion(eqx.Module):
         corr_diff = self.correction_output_layer(jnp.concatenate([x_corr, x_in]))
 
         # Reparameterise diffusion with a floor to prevent uncertainty collapse
-        return self.scale * (0.01 + 0.99 * base_diff) * jnp.exp(corr_diff)
+        return self.scale * (0.01 + 0.99 * base_diff) * jnp.exp(jnp.tanh(corr_diff))
 
 
 class LatentSDE(eqx.Module):
