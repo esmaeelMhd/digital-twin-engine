@@ -25,6 +25,7 @@ class LatentDrift(eqx.Module):
     disturbance_center: Float[Array, "disturbance_dim"]
     disturbance_scale: Float[Array, "disturbance_dim"]
     param_scale: float = eqx.field(static=True)
+    linear_prior_enabled: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -39,6 +40,7 @@ class LatentDrift(eqx.Module):
         disturbance_center: list | None = None,
         disturbance_scale: list | None = None,
         param_scale: float = 0.1,
+        linear_prior_enabled: bool = True,
         *,
         key: PRNGKeyArray,
     ):
@@ -77,6 +79,7 @@ class LatentDrift(eqx.Module):
             disturbance_scale if disturbance_scale is not None else [1.0] * dist_dim_eff
         )
         self.param_scale = param_scale
+        self.linear_prior_enabled = linear_prior_enabled
 
     def __call__(
         self,
@@ -114,9 +117,12 @@ class LatentDrift(eqx.Module):
             x2 = x2 + h if i > 0 else h
         out2 = self.expert2_out(jnp.concatenate([x2, x_in]))
 
-        physics_drift = self.physics_prior_z(z) + self.physics_prior_u(u_norm)
         residual_drift = gate * out1 + (1.0 - gate) * out2
 
+        if not self.linear_prior_enabled:
+            return residual_drift
+
+        physics_drift = self.physics_prior_z(z) + self.physics_prior_u(u_norm)
         return physics_drift + residual_drift
 
 
@@ -256,6 +262,7 @@ class LatentSDE(eqx.Module):
         disturbance_scale: list | None = None,
         param_scale: float = 0.1,
         nominal_disturbance: list | None = None,
+        linear_prior_enabled: bool = True,
         *,
         key: PRNGKeyArray,
     ):
@@ -273,6 +280,7 @@ class LatentSDE(eqx.Module):
             disturbance_center=disturbance_center,
             disturbance_scale=disturbance_scale,
             param_scale=param_scale,
+            linear_prior_enabled=linear_prior_enabled,
             key=key_drift,
         )
 

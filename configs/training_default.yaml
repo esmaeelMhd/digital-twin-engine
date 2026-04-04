@@ -9,7 +9,8 @@ model:
   simulator_prior:
     enabled: true
     weight: 1.0
-    residual_weight: 0.35
+    residual_weight: 0.25
+    hard_residual_only: true
   state_dim: 4
   param_dim: 6
   control_dim: 2

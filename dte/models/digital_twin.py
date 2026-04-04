@@ -124,6 +124,10 @@ class DigitalTwin(eqx.Module):
             key=key_dec,
         )
 
+        simulator_prior_cfg = model_config.get("simulator_prior", {})
+        simulator_prior_enabled = bool(simulator_prior_cfg.get("enabled", False))
+        hard_residual_only = bool(simulator_prior_cfg.get("hard_residual_only", False))
+
         latent_sde = LatentSDE(
             latent_dim=latent_dim,
             control_dim=control_dim,
@@ -140,11 +144,10 @@ class DigitalTwin(eqx.Module):
             disturbance_scale=disturbance_scale,
             param_scale=param_scale,
             nominal_disturbance=nominal_disturbance,
+            linear_prior_enabled=not (simulator_prior_enabled and hard_residual_only),
             key=key_sde,
         )
 
-        simulator_prior_cfg = model_config.get("simulator_prior", {})
-        simulator_prior_enabled = bool(simulator_prior_cfg.get("enabled", False))
         simulator = None
         if simulator_prior_enabled and system_config is not None:
             simulator = get_simulator(system_spec.name, system_config)
