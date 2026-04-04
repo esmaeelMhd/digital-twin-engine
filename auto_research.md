@@ -134,17 +134,23 @@ for curriculum training (truncates to shorter subsequences when set).
 
 ## What Is Actually Optimised
 
-Primary metric for autoresearch: `best_val_loss` — lower is better.
+Primary autoresearch metric is config-driven via `configs/autoresearch_default.yaml`.
+
+Default multi-target metric:
+- `aggregate_relative_best_val_loss`
+- lower is better
+- computed as a weighted geometric mean of per-system `best_val_loss / reference_best_val_loss`
+- the first successful run in a workspace establishes the fixed reference metrics for later runs
 
 Bounded-run interpretation:
-- `timed_out: true` with finite `best_val_loss` = valid result
-- `best_val_loss: null` = real failure signal
-- early stable progress > ambitious edits that collapse numerically
+- `timed_out: true` with a finite metric for a target is still a valid bounded run
+- missing or non-finite target metrics are the real failure signal
+- early stable progress across systems beats ambitious edits that collapse numerically
 
 Advisory context available to the agent:
-- recent kept runs may also include lightweight deterministic eval summaries
+- recent kept runs may also include lightweight deterministic eval summaries for single-target runs
 - `rmse_per_state` / `nrmse_per_state` help expose state-specific regressions
-- these eval metrics are context only; they do not replace `best_val_loss` as the promotion rule
+- these eval metrics are context only; they do not replace the configured promotion metric
 
 ---
 
@@ -167,6 +173,8 @@ The agent may only modify files listed in
 `configs/autoresearch_default.yaml → agent.modifiable_files`. Defaults:
 
 - `configs/training_default.yaml`
+- `configs/heat_exchanger_training.yaml`
+- `configs/two_tank_training.yaml`
 - `scripts/train.py`
 - `dte/models/encoder.py`, `decoder.py`, `latent_sde.py`, `digital_twin.py`
 - `dte/training/trainer.py`, `losses.py`
@@ -208,7 +216,7 @@ direct dependency on any specific system.
 
 Prefer experiments that:
 - improve stability early in training
-- improve `best_val_loss` within the bounded budget
+- improve the configured promotion metric within the bounded budget
 - make minimal single-file changes
 - preserve physically plausible outputs
 
@@ -234,7 +242,8 @@ Be cautious with:
 
 ## Current Search Context
 
-- Default autoresearch config currently targets the CSTR benchmark (`data/cstr/` +
-  `configs/cstr_default.yaml`)
+- Default autoresearch config benchmarks `cstr` and `heat_exchanger` together
+- `two_tank` can be added to `train.targets` once `data/two_tank/train_data.h5` exists
+- This is a cross-system shared-code benchmark, not a single universal checkpoint
 - Search is based on bounded runs, not full-convergence comparisons
 - Stable partial training > ambitious edits that collapse numerically

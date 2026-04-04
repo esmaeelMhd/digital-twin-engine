@@ -2,6 +2,7 @@
 
 from typing import Dict
 
+import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
@@ -9,14 +10,21 @@ from dte.physics.base import PhysicsLoss
 from dte.simulators.two_tank import TwoTankParams
 
 
-def mass_balance_residual(
+def _two_tank_param_vector(
+    params: TwoTankParams,
+) -> Float[Array, "5"]:
+    return jnp.array([params.A1, params.A2, params.k12, params.kout, params.h_max])
+
+
+def mass_balance_residual_with_params(
     states: Float[Array, "n_steps 2"],
     controls: Float[Array, "n_steps 2"],
     disturbances: Float[Array, "n_steps 2"],
-    params: TwoTankParams,
+    params: Float[Array, "5"],
     dt: float,
 ) -> Float[Array, "n_steps-1"]:
-    """Mass-balance residual averaged across both tank equations."""
+    """Mass-balance residual using a raw per-trajectory parameter vector."""
+    A1, A2, k12, kout, _ = params
     h1 = states[:, 0]
     h2 = states[:, 1]
     q_in = controls[:, 0]
@@ -27,15 +35,32 @@ def mass_balance_residual(
     dh1_dt = jnp.diff(h1) / dt
     dh2_dt = jnp.diff(h2) / dt
 
-    interflow = params.k12 * jnp.sqrt(jnp.maximum(h1[:-1] - h2[:-1], 0.0) + 1e-8)
-    outflow = valve[:-1] * params.kout * jnp.sqrt(jnp.maximum(h2[:-1], 0.0) + 1e-8)
+    interflow = k12 * jnp.sqrt(jnp.maximum(h1[:-1] - h2[:-1], 0.0) + 1e-8)
+    outflow = valve[:-1] * kout * jnp.sqrt(jnp.maximum(h2[:-1], 0.0) + 1e-8)
 
-    expected_dh1_dt = (q_in[:-1] + d1[:-1] - interflow) / params.A1
-    expected_dh2_dt = (interflow + d2[:-1] - outflow) / params.A2
+    expected_dh1_dt = (q_in[:-1] + d1[:-1] - interflow) / A1
+    expected_dh2_dt = (interflow + d2[:-1] - outflow) / A2
 
     res1 = jnp.abs(dh1_dt - expected_dh1_dt)
     res2 = jnp.abs(dh2_dt - expected_dh2_dt)
     return 0.5 * (res1 + res2)
+
+
+def mass_balance_residual(
+    states: Float[Array, "n_steps 2"],
+    controls: Float[Array, "n_steps 2"],
+    disturbances: Float[Array, "n_steps 2"],
+    params: TwoTankParams,
+    dt: float,
+) -> Float[Array, "n_steps-1"]:
+    """Mass-balance residual averaged across both tank equations."""
+    return mass_balance_residual_with_params(
+        states,
+        controls,
+        disturbances,
+        _two_tank_param_vector(params),
+        dt,
+    )
 
 
 class TwoTankPhysicsLoss(PhysicsLoss):
@@ -50,21 +75,18 @@ class TwoTankPhysicsLoss(PhysicsLoss):
         controls: Float[Array, "batch seq_len control_dim"],
         disturbances: Float[Array, "batch seq_len disturbance_dim"],
         dt,
+        params_batch=None,
     ) -> Dict[str, Float[Array, ""]]:
-        mass_vals = []
-        for idx in range(states.shape[0]):
-            mass_vals.append(
-                jnp.mean(
-                    mass_balance_residual(
-                        states[idx],
-                        controls[idx],
-                        disturbances[idx],
-                        self.params,
-                        dt,
-                    )
-                )
+        if params_batch is None:
+            nominal_params = _two_tank_param_vector(self.params)
+            params_batch = jnp.broadcast_to(nominal_params, (states.shape[0], nominal_params.shape[0]))
+
+        mass_vals = jax.vmap(
+            lambda s, u, d, p: jnp.mean(
+                mass_balance_residual_with_params(s, u, d, p, dt)
             )
-        return {"mass": jnp.mean(jnp.array(mass_vals))}
+        )(states, controls, disturbances, params_batch)
+        return {"mass": jnp.mean(mass_vals)}
 
     def residual_names(self) -> list:
         return ["mass"]

@@ -271,7 +271,11 @@ class Trainer:
         # Compute physics losses via generic PhysicsLoss interface
         dt = ts[0, 1] - ts[0, 0]  # Keep as JAX array, don't convert to float
         total_physics_loss, physics_residuals = self.loss_computer.physics_losses(
-            pred_states_phys, controls_phys, disturbances_phys, dt
+            pred_states_phys,
+            controls_phys,
+            disturbances_phys,
+            dt,
+            params_batch=params_batch,
         )
 
         # Total loss

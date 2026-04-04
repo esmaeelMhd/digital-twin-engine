@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from dte.simulators.cstr import CSTRSimulator, CSTRParams
+from dte.physics.cstr import CSTRPhysicsLoss
 from dte.physics.conservation import (
     mass_balance_residual,
     energy_balance_residual,
@@ -115,7 +116,11 @@ def test_reconstruction_loss():
         "disturbance_std": jnp.array([0.5, 15.0]),
     }
     
-    loss_computer = LossComputer(train_config, norm_stats, params)
+    loss_computer = LossComputer(
+        train_config,
+        norm_stats,
+        physics_loss=CSTRPhysicsLoss(params),
+    )
     
     # Create identical predictions
     states = jax.random.normal(jax.random.PRNGKey(0), shape=(32, 50, 4))
@@ -146,7 +151,11 @@ def test_kl_divergence_loss():
         "disturbance_std": jnp.ones(2),
     }
     
-    loss_computer = LossComputer(train_config, norm_stats, params)
+    loss_computer = LossComputer(
+        train_config,
+        norm_stats,
+        physics_loss=CSTRPhysicsLoss(params),
+    )
     
     # Standard normal (mean=0, logvar=0 => var=1)
     # KL(N(0,1) || N(0,1)) = 0
@@ -178,7 +187,11 @@ def test_kl_annealing():
         "disturbance_std": jnp.ones(2),
     }
     
-    loss_computer = LossComputer(train_config, norm_stats, params)
+    loss_computer = LossComputer(
+        train_config,
+        norm_stats,
+        physics_loss=CSTRPhysicsLoss(params),
+    )
     
     # Check weights at different steps
     weights_0 = loss_computer.get_loss_weights(step=0)

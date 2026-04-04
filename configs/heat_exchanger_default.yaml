@@ -28,6 +28,22 @@ simulation:
   dt: 0.1
   t_span: [0.0, 100.0]
 
+data_generation:
+  control_signals:
+    F_hot:
+      type: prbs
+      switch_prob: 0.05
+    F_cold:
+      type: prbs
+      switch_prob: 0.05
+  disturbance_signals:
+    T_hot_in:
+      type: multistep
+      n_changes: 5
+    T_cold_in:
+      type: multistep
+      n_changes: 5
+
 initial_conditions:
   T_hot: 350.0
   T_cold: 300.0

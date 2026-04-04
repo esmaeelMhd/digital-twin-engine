@@ -194,29 +194,9 @@ class HeatExchangerSimulator(ProcessSimulator):
         disturbance: Float[Array, "2"],
         initial_guess: Optional[Float[Array, "2"]] = None,
     ) -> Float[Array, "2"]:
-        """Compute steady state analytically or via fixed-point iteration.
-
-        For the heat exchanger the steady state has a closed-form solution
-        when operating at constant inputs:
-
-            T_hot_ss  = T_hot_in  - (UA/...)*Delta_T_ss
-            T_cold_ss = T_cold_in + (UA/...)*Delta_T_ss
-
-        We use 5 seconds of simulation to approximate it.
-        """
-        if initial_guess is None:
-            initial_guess = disturbance  # T_hot, T_cold ≈ inlet temps
-
-        t_end = 200.0
-        n_steps = 2000
-        controls_traj = jnp.tile(control[None, :], (n_steps, 1))
-        disturbances_traj = jnp.tile(disturbance[None, :], (n_steps, 1))
-
-        result = self.simulate(
-            initial_guess, controls_traj, disturbances_traj,
-            t_span=(0.0, t_end), dt=0.1, n_steps=n_steps
-        )
-        return result["states"][-1]
+        """Compute the exact steady state for constant inputs via the 2x2 closed form."""
+        del initial_guess
+        return self.steady_state_for_data_generation(control, disturbance)
 
     def steady_state_for_data_generation(
         self,

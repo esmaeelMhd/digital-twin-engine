@@ -74,12 +74,8 @@ def main():
     system_name = system_spec.name
 
     simulator = get_simulator(system_name, config)
-    if system_name == "cstr":
-        from dte.data.generation import UnifiedCSTRDataGenerator
-        generator = UnifiedCSTRDataGenerator(simulator, config)
-    else:
-        from dte.data.generation_generic import GenericDataGenerator
-        generator = GenericDataGenerator(simulator, config, system_spec)
+    from dte.data.generation_generic import GenericDataGenerator
+    generator = GenericDataGenerator(simulator, config, system_spec)
     batch_size = (
         args.batch_size
         if args.batch_size is not None

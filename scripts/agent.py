@@ -553,6 +553,91 @@ def load_autoresearch_config() -> dict:
         return {}
 
 
+def _slugged_target_name(raw_name: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", str(raw_name).strip().lower()).strip("-")
+    return text or "target"
+
+
+def _derive_benchmark_name(target_cfg: dict, index: int) -> str:
+    explicit_name = str(target_cfg.get("name", "")).strip()
+    if explicit_name:
+        return _slugged_target_name(explicit_name)
+
+    system_config = str(
+        target_cfg.get("system_config")
+        or target_cfg.get("cstr_config")
+        or f"target-{index + 1}"
+    )
+    stem = Path(system_config).stem
+    for suffix in ("_default", "_training", "_config"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    return _slugged_target_name(stem)
+
+
+def get_active_metric_name(config: dict | None = None) -> str:
+    cfg = config or load_autoresearch_config()
+    research_cfg = cfg.get("research", {}) if isinstance(cfg, dict) else {}
+    train_cfg = cfg.get("train", {}) if isinstance(cfg, dict) else {}
+    raw_targets = train_cfg.get("targets") if isinstance(train_cfg, dict) else None
+    default_metric_name = "aggregate_relative_best_val_loss"
+    if not isinstance(raw_targets, list) or len(raw_targets) <= 1:
+        default_metric_name = "best_val_loss"
+    return str(research_cfg.get("metric_name", default_metric_name))
+
+
+def get_active_metric_mode(config: dict | None = None) -> str:
+    cfg = config or load_autoresearch_config()
+    research_cfg = cfg.get("research", {}) if isinstance(cfg, dict) else {}
+    return str(research_cfg.get("metric_mode", "min")).strip().lower()
+
+
+def get_benchmark_target_names(config: dict | None = None) -> list[str]:
+    cfg = config or load_autoresearch_config()
+    train_cfg = cfg.get("train", {}) if isinstance(cfg, dict) else {}
+    raw_targets = train_cfg.get("targets") if isinstance(train_cfg, dict) else None
+
+    if isinstance(raw_targets, list) and raw_targets:
+        names: list[str] = []
+        seen: set[str] = set()
+        for index, raw_target in enumerate(raw_targets):
+            if not isinstance(raw_target, dict):
+                continue
+            candidate = _derive_benchmark_name(raw_target, index)
+            unique_name = candidate
+            suffix = 2
+            while unique_name in seen:
+                unique_name = f"{candidate}-{suffix}"
+                suffix += 1
+            seen.add(unique_name)
+            names.append(unique_name)
+        if names:
+            return names
+
+    system_config = str(train_cfg.get("system_config") or train_cfg.get("cstr_config") or "").strip()
+    if system_config:
+        return [_derive_benchmark_name({"system_config": system_config}, 0)]
+    return ["configured-system"]
+
+
+def get_objective_prompt_context(config: dict | None = None) -> tuple[str, str]:
+    cfg = config or load_autoresearch_config()
+    metric_name = get_active_metric_name(cfg)
+    benchmark_names = get_benchmark_target_names(cfg)
+    if len(benchmark_names) > 1:
+        benchmark_text = ", ".join(benchmark_names)
+        objective_text = (
+            f"minimise {metric_name} across the benchmark targets ({benchmark_text}). "
+            "This is a cross-system score aggregated over separate per-system training runs."
+        )
+    else:
+        objective_text = (
+            f"minimise {metric_name} for the configured benchmark target ({benchmark_names[0]})."
+        )
+    return metric_name, objective_text
+
+
 # ---------------------------------------------------------------------------
 # Results ledger
 # ---------------------------------------------------------------------------
@@ -568,13 +653,14 @@ def log_result(commit: str, val_loss: float, status: str, file_changed: str, des
         clean_description = f"[{file_changed}] {clean_description}"
 
     has_metric = status != "crash" and val_loss > 0.0
+    metric_name = get_active_metric_name() if has_metric else ""
     append_result_row(
         get_results_tsv_path(),
         {
             "timestamp": now.strftime("%Y%m%d-%H%M%S"),
             "run_id": make_run_id(clean_description or status, now=now),
             "commit": commit,
-            "metric_name": "best_val_loss" if has_metric else "",
+            "metric_name": metric_name,
             "metric_value": f"{val_loss:.6f}" if has_metric else "",
             "baseline_before": "",
             "training_seconds": "",
@@ -583,7 +669,8 @@ def log_result(commit: str, val_loss: float, status: str, file_changed: str, des
         },
     )
     metric_str = f"{val_loss:.6f}" if has_metric else "n/a"
-    log_to_file(f"RESULT: {status} | val_loss={metric_str} | {file_changed} | {description}")
+    metric_label = metric_name or "metric"
+    log_to_file(f"RESULT: {status} | {metric_label}={metric_str} | {file_changed} | {description}")
 
 
 def _parse_logged_metric(raw_value: str) -> float:
@@ -609,6 +696,7 @@ def get_results_history() -> list[dict]:
     results_tsv = get_results_tsv_path()
     if not results_tsv.exists():
         return []
+    current_metric_name = get_active_metric_name()
     rows = []
     with results_tsv.open("r", encoding="utf-8") as f:
         header = f.readline().rstrip("\n").split("\t")
@@ -630,23 +718,39 @@ def get_results_history() -> list[dict]:
                         return default
                     return parts[idx]
 
+                status = get_col("status", "crash") or "crash"
+                metric_name = get_col("metric_name", "")
+                if (
+                    status != "crash"
+                    and current_metric_name
+                    and metric_name
+                    and metric_name != current_metric_name
+                ):
+                    continue
+                if status != "crash" and current_metric_name and not metric_name and current_metric_name != "best_val_loss":
+                    continue
+
                 file_changed, description = _decode_history_description(get_col("description"))
                 rows.append({
                     "commit": get_col("commit", "-------") or "-------",
                     "val_loss": _parse_logged_metric(get_col("metric_value")),
-                    "status": get_col("status", "crash") or "crash",
+                    "status": status,
                     "file": file_changed,
                     "description": description,
+                    "metric_name": metric_name,
                 })
                 continue
 
             if len(parts) >= 5:
+                if current_metric_name != "best_val_loss":
+                    continue
                 rows.append({
                     "commit": parts[0],
                     "val_loss": _parse_logged_metric(parts[1]),
                     "status": parts[2],
                     "file": parts[3],
                     "description": parts[4],
+                    "metric_name": "best_val_loss",
                 })
     return rows
 
@@ -692,7 +796,11 @@ def get_current_reference_loss(history: list[dict] | None = None) -> float:
 
     history = history if history is not None else get_results_history()
     valid_losses = [r["val_loss"] for r in history if r.get("val_loss", 999.0) < 999.0]
-    return min(valid_losses) if valid_losses else 999.0
+    if not valid_losses:
+        return 999.0
+    if get_active_metric_mode() == "max":
+        return max(valid_losses)
+    return min(valid_losses)
 
 
 def get_runs_dir() -> Path:
@@ -2299,13 +2407,13 @@ def build_static_prompt_context(
     modifiable_files: list[str],
     agent_context: str = "",
 ) -> str:
+    _, objective_text = get_objective_prompt_context()
     files_list = "\n".join(f"  - {f}" for f in modifiable_files)
     context_section = ""
     if agent_context:
         context_section = f"\n## Repo context\n{agent_context}\n"
 
-    return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
-physics-informed latent Neural SDE (digital twin) trained on process system data (CSTR, heat exchanger, or other registered systems).
+    return f"""You are an autonomous ML researcher. Your goal: {objective_text}
 
 ## Constraints
 - You MUST only modify ONE of these files per experiment:
@@ -2332,6 +2440,7 @@ def build_multi_file_static_prompt_context(
     forbidden_paths: list[str],
     agent_context: str = "",
 ) -> str:
+    _, objective_text = get_objective_prompt_context()
     targets_list = "\n".join(f"  - {path}" for path in editable_targets)
     forbidden_list = "\n".join(f"  - {path}" for path in forbidden_paths)
     inventory_list = "\n".join(f"  - {path}" for path in editable_file_inventory)
@@ -2339,8 +2448,7 @@ def build_multi_file_static_prompt_context(
     if agent_context:
         context_section = f"\n## Repo context\n{agent_context}\n"
 
-    return f"""You are an autonomous ML researcher. Your goal: minimise best_val_loss for a \
-physics-informed latent Neural SDE (digital twin) trained on process system data (CSTR, heat exchanger, or other registered systems).
+    return f"""You are an autonomous ML researcher. Your goal: {objective_text}
 
 ## Constraints
 - You may modify MULTIPLE files per experiment when needed to implement one coherent idea fully.
@@ -2367,6 +2475,7 @@ def build_dynamic_prompt(
     ideas: list[dict] | None = None,
     selected_idea: dict | None = None,
 ) -> str:
+    metric_name = get_active_metric_name()
     history_section = ""
     near_misses_str = ""
 
@@ -2434,7 +2543,7 @@ Look at category summary - avoid exhausted categories. Try a different file or a
             execution_mode="single_file",
         )
 
-    return f"""## Current best_val_loss: {best_loss:.6f}
+    return f"""## Current objective metric ({metric_name}): {best_loss:.6f}
 {streak_str}{history_section}{recent_runs_section}{ideas_section}
 ## Currently showing: {file_path}
 ```
@@ -2442,7 +2551,7 @@ Look at category summary - avoid exhausted categories. Try a different file or a
 ```
 
 ## Your task
-Propose ONE modification to lower best_val_loss. Do NOT repeat or closely variant anything already tried.
+Propose ONE modification to lower the objective metric. Do NOT repeat or closely variant anything already tried.
 Think creatively about what hasn't been attempted yet.
 
 Respond with ONLY a JSON object (no markdown fences, no explanation):
@@ -2515,6 +2624,7 @@ def build_multi_file_selection_prompt(
     ideas: list[dict] | None = None,
     selected_idea: dict | None = None,
 ) -> str:
+    metric_name = get_active_metric_name()
     history_section = _build_history_summary(history, best_loss)
     ideas_section = ""
     if ideas:
@@ -2525,7 +2635,7 @@ def build_multi_file_selection_prompt(
         )
     recent_runs_section = f"\n{recent_run_context}\n" if recent_run_context else ""
 
-    return f"""## Current best_val_loss: {best_loss:.6f}
+    return f"""## Current objective metric ({metric_name}): {best_loss:.6f}
 {history_section}{recent_runs_section}{ideas_section}
 ## Your task
 Choose the existing repository files you need to inspect or modify to implement one coherent experiment fully.
@@ -3166,6 +3276,13 @@ def maybe_run_lightweight_eval(
     if not should_run_lightweight_eval(result, run_number, eval_settings):
         return None
 
+    benchmark_results = result.get("benchmarks") if isinstance(result, dict) else None
+    if isinstance(benchmark_results, list) and len(benchmark_results) > 1:
+        log_to_file("EVAL SKIP: lightweight eval disabled for multi-target autoresearch runs")
+        if on_line:
+            on_line("Lightweight eval skipped for multi-target benchmark runs.")
+        return None
+
     run_dir = _resolve_run_dir_from_result(result or {})
     if run_dir is None:
         log_to_file("EVAL SKIP: could not resolve run directory")
@@ -3200,6 +3317,8 @@ def maybe_run_lightweight_eval(
         command.append("--skip_ensemble")
 
     data_dir = train_cfg.get("data_dir")
+    if not data_dir and isinstance(benchmark_results, list) and len(benchmark_results) == 1:
+        data_dir = benchmark_results[0].get("data_dir")
     if data_dir:
         command.extend(["--data_dir", str(resolve_repo_path(str(data_dir)))])
 
@@ -3264,9 +3383,23 @@ def get_train_timeout_seconds() -> int:
         with ACTIVE_AUTORESEARCH_CONFIG.open("r", encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
         research = config.get("research", {})
+        train_cfg = config.get("train", {})
         minutes = float(research.get("time_budget_minutes", 30))
         buffer_minutes = float(research.get("hard_timeout_buffer_minutes", 5))
-        return max(60, int((minutes + buffer_minutes + 1.0) * 60))
+        raw_targets = train_cfg.get("targets") if isinstance(train_cfg, dict) else None
+        target_count = len(raw_targets) if isinstance(raw_targets, list) and raw_targets else 1
+        time_budget_mode = str(
+            research.get("time_budget_mode", "split_total" if target_count > 1 else "per_target")
+        ).strip().lower()
+
+        if target_count <= 1:
+            total_minutes = minutes + buffer_minutes
+        elif time_budget_mode == "per_target":
+            total_minutes = target_count * (minutes + buffer_minutes)
+        else:
+            total_minutes = minutes + (target_count * buffer_minutes)
+
+        return max(60, int((total_minutes + 1.0) * 60))
     except Exception:
         return DEFAULT_TRAIN_TIMEOUT_SECONDS
 
@@ -3371,11 +3504,31 @@ def run_experiment(
                 pass
 
     # Fallback: scan stdout for metric
+    metric_pattern = re.compile(
+        r"Metric \((?P<metric_name>[^)]+)\):\s*(?P<metric_value>[-+0-9.eE]+)"
+    )
     for line in reversed(all_lines):
+        metric_match = metric_pattern.search(line)
+        if metric_match:
+            try:
+                val = float(metric_match.group("metric_value"))
+                return {
+                    "metric_name": metric_match.group("metric_name"),
+                    "metric_value": val,
+                    "status": "keep",
+                    "description": description,
+                }
+            except ValueError:
+                pass
         if "best_val_loss:" in line:
             try:
                 val = float(line.split("best_val_loss:")[-1].strip())
-                return {"metric_value": val, "status": "keep", "description": description}
+                return {
+                    "metric_name": "best_val_loss",
+                    "metric_value": val,
+                    "status": "keep",
+                    "description": description,
+                }
             except ValueError:
                 pass
 

@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import pytest
 
 from dte.data.generation import DataGenerator
+from dte.data.generation_generic import GenericDataGenerator
 from dte.simulators.cstr import CSTRParams, CSTRSimulator
 
 
@@ -198,3 +199,48 @@ def test_recommend_batch_size_uses_backend_specific_defaults():
     assert DataGenerator.recommend_batch_size("cpu") == 4
     assert DataGenerator.recommend_batch_size("gpu") == 8
     assert DataGenerator.recommend_batch_size("tpu") == 16
+
+
+def test_generic_generator_uses_cstr_signal_policies_and_param_formatting():
+    """The shared generic generator should cover the CSTR fast path directly."""
+    simulator = CSTRSimulator(CSTRParams())
+    config = {
+        "operating_ranges": {
+            "F_in": [40.0, 60.0],
+            "Tc_in": [290.0, 310.0],
+            "Ca_in": [0.8, 1.2],
+            "T_in": [315.0, 325.0],
+        },
+        "simulation": {"dt": 0.1},
+        "data_generation": {
+            "control_signals": {
+                "F_in": {"type": "mixed", "switch_prob": 0.05, "n_changes": 5},
+                "Tc_in": {"type": "mixed", "switch_prob": 0.05, "n_changes": 5},
+            },
+            "disturbance_signals": {
+                "Ca_in": {"type": "prbs", "switch_prob": 0.01},
+                "T_in": {"type": "prbs", "switch_prob": 0.01},
+            },
+        },
+    }
+    generator = GenericDataGenerator(simulator, config, simulator.spec)
+    keys = jax.random.split(jax.random.PRNGKey(7), 3)
+
+    batched_controls = generator._generate_control_trajectories(keys, n_steps=12, dt=0.1)
+    single_controls = jnp.stack(
+        [generator._generate_control_trajectory(key, n_steps=12, dt=0.1) for key in keys]
+    )
+    batched_disturbances = generator._generate_disturbance_trajectories(keys, n_steps=12, dt=0.1)
+    single_disturbances = jnp.stack(
+        [generator._generate_disturbance_trajectory(key, n_steps=12, dt=0.1) for key in keys]
+    )
+
+    assert batched_controls.shape == (3, 12, 2)
+    assert batched_disturbances.shape == (3, 12, 2)
+    assert jnp.allclose(batched_controls, single_controls, atol=1e-6, rtol=1e-6)
+    assert jnp.allclose(batched_disturbances, single_disturbances, atol=1e-6, rtol=1e-6)
+
+    stored_params = simulator.format_data_generation_params_batch(
+        simulator.sample_data_generation_params_batch(keys)
+    )
+    assert stored_params.shape == (3, 6)

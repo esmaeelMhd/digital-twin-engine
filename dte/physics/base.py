@@ -22,12 +22,15 @@ class PhysicsLoss(ABC):
         controls: Float[Array, "batch seq_len control_dim"],
         disturbances: Float[Array, "batch seq_len disturbance_dim"],
         dt: float,
+        params_batch=None,
     ) -> Dict[str, Float[Array, ""]]:
         """Return a dict of named scalar residuals.
 
         Each value should already be reduced to a scalar (e.g. mean over
         the batch and time dimensions). Typical keys: ``"mass"``,
-        ``"energy"``, ``"species_mass"``.
+        ``"energy"``, ``"species_mass"``. ``params_batch`` contains one
+        physical-parameter vector per trajectory when the dataset was
+        generated with per-trajectory parameter randomization.
         """
 
     def residual_names(self) -> list:
@@ -43,7 +46,8 @@ class PhysicsLoss(ABC):
 class NullPhysicsLoss(PhysicsLoss):
     """A no-op physics loss for systems that have no implemented constraints."""
 
-    def compute_residuals(self, states, controls, disturbances, dt):
+    def compute_residuals(self, states, controls, disturbances, dt, params_batch=None):
+        del states, controls, disturbances, dt, params_batch
         return {}
 
     def residual_names(self):

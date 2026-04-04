@@ -297,23 +297,34 @@ def steady_state_two_tank_jit(
     disturbance: Float[Array, "2"],
     params: Float[Array, "5"],
 ) -> Float[Array, "2"]:
-    """Closed-form steady state for constant inputs."""
+    """Closed-form steady state for constant inputs.
+
+    Returns NaNs when the requested operating point is infeasible under the
+    no-overflow model instead of clipping to a non-steady state.
+    """
     q_in, valve = control
     d1, d2 = disturbance
     A1, A2, k12, kout, h_max = params
     del A1, A2
 
-    q12 = jnp.maximum(q_in + d1, 1e-6)
-    qout = jnp.maximum(q12 + d2, 1e-6)
-    safe_valve = jnp.maximum(valve, 0.05)
+    q12 = q_in + d1
+    qout = q12 + d2
     safe_k12 = jnp.maximum(k12, 1e-6)
     safe_kout = jnp.maximum(kout, 1e-6)
+    safe_valve = jnp.maximum(valve, 1e-6)
 
-    h2 = (qout / (safe_valve * safe_kout)) ** 2
-    h1 = h2 + (q12 / safe_k12) ** 2
-    h1 = jnp.clip(h1, 0.0, h_max)
-    h2 = jnp.clip(h2, 0.0, h_max)
-    return jnp.array([h1, h2])
+    h2 = jnp.where(qout > 0.0, (qout / (safe_valve * safe_kout)) ** 2, 0.0)
+    h1 = h2 + jnp.where(q12 > 0.0, (q12 / safe_k12) ** 2, 0.0)
+
+    feasible = (
+        (q12 >= 0.0)
+        & (qout >= 0.0)
+        & ((qout <= 1e-8) | (valve > 0.0))
+        & (h2 <= h_max)
+        & (h1 <= h_max)
+    )
+    infeasible_state = jnp.full((2,), jnp.nan)
+    return jnp.where(feasible, jnp.array([h1, h2]), infeasible_state)
 
 
 @jax.jit

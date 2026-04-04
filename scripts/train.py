@@ -3,6 +3,7 @@
 import argparse
 import math
 import os
+from pathlib import Path
 
 from dte.utils.runtime import configure_runtime_logging
 
@@ -309,6 +310,7 @@ def main():
         "output_dir": args.output_dir,
     }
     summary_path = args.summary_path or os.path.join(args.output_dir, "training_summary.json")
+    Path(summary_path).parent.mkdir(parents=True, exist_ok=True)
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"✓ Training summary saved to {summary_path}")

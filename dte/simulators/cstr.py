@@ -484,6 +484,20 @@ class CSTRSimulator(ProcessSimulator):
         """Sample packed simulator parameters for offline data generation."""
         return _pack_params(sample_random_params(key))
 
+    def format_data_generation_params(
+        self,
+        params: Float[Array, "11"],
+    ) -> Float[Array, "6"]:
+        """Store the historic 6D CSTR training parameter vector in datasets."""
+        return packed_params_to_training_params(params)
+
+    def format_data_generation_params_batch(
+        self,
+        params_batch: Float[Array, "batch 11"],
+    ) -> Float[Array, "batch 6"]:
+        """Vectorized dataset-parameter formatting for offline generation."""
+        return jax.vmap(packed_params_to_training_params)(params_batch)
+
     def apply_measurement_noise(
         self,
         key: PRNGKeyArray,
@@ -524,16 +538,20 @@ class CSTRSimulator(ProcessSimulator):
         Ca = states[:, 0]
         Cb = states[:, 1]
         T = states[:, 2]
-        
+        Tc = states[:, 3]
+
         # Total moles (Ca + Cb) - should be conserved modulo flow
         total_mass = Ca + Cb
-        
-        # Total energy (simplified: just temperature for now)
-        total_energy = T
-        
+
+        # Combined reactor + jacket thermal energy inventory (extensive quantity).
+        thermal_energy_inventory = (
+            jnp.asarray(self.params.rho) * jnp.asarray(self.params.Cp) * jnp.asarray(self.params.V) * T
+            + jnp.asarray(self.params.rho_c) * jnp.asarray(self.params.Cp_c) * jnp.asarray(self.params.Vc) * Tc
+        )
+
         return {
             "total_mass": total_mass,
-            "total_energy": total_energy,
+            "thermal_energy_inventory": thermal_energy_inventory,
         }
 
 
@@ -575,6 +593,22 @@ def unpack_params(params: Float[Array, "11"]) -> CSTRParams:
         rho_c=float(params[8]),
         Cp_c=float(params[9]),
         Fc=float(params[10]),
+    )
+
+
+def packed_params_to_training_params(
+    params: Float[Array, "11"],
+) -> Float[Array, "6"]:
+    """Map packed simulator parameters to the historic stored training vector."""
+    return jnp.array(
+        [
+            params[0],
+            params[2] / 1e10,
+            params[3] / 1000.0,
+            params[7] / 1e4,
+            params[10],
+            params[1],
+        ]
     )
 
 

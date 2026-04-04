@@ -37,6 +37,24 @@ simulation:
   dt: 0.1
   t_span: [0.0, 100.0]
 
+data_generation:
+  control_signals:
+    F_in:
+      type: mixed
+      switch_prob: 0.05
+      n_changes: 5
+    Tc_in:
+      type: mixed
+      switch_prob: 0.05
+      n_changes: 5
+  disturbance_signals:
+    Ca_in:
+      type: prbs
+      switch_prob: 0.01
+    T_in:
+      type: prbs
+      switch_prob: 0.01
+
 initial_conditions:
   Ca: 0.5
   Cb: 0.5

@@ -312,6 +312,28 @@ class ProcessSimulator(ABC):
         """Vectorized parameter sampling hook for offline data generation."""
         return jnp.stack([self.sample_data_generation_params(key) for key in keys], axis=0)
 
+    def format_data_generation_params(
+        self,
+        params: Float[Array, "param_dim"],
+    ) -> Float[Array, "stored_param_dim"]:
+        """Transform sampled simulator params into the dataset storage vector.
+
+        Most systems can store the sampled simulator parameters directly. Systems
+        that use an internal packed parameterization for fast rollout can
+        override this to preserve their historic dataset schema.
+        """
+        return params
+
+    def format_data_generation_params_batch(
+        self,
+        params_batch: Float[Array, "batch param_dim"],
+    ) -> Float[Array, "batch stored_param_dim"]:
+        """Vectorized dataset-parameter formatting hook."""
+        return jnp.stack(
+            [self.format_data_generation_params(params_batch[idx]) for idx in range(params_batch.shape[0])],
+            axis=0,
+        )
+
     def apply_measurement_noise(
         self,
         key,

@@ -95,7 +95,7 @@ def _build_heat_exchanger_spec(system_config: dict) -> SystemSpec:
         state_scale=norm_cfg.get("state_scale", [0.01, 0.01]),
         control_center=norm_cfg.get("control_center", [5.0, 5.0]),
         control_scale=norm_cfg.get("control_scale", [0.1, 0.1]),
-        disturbance_center=norm_cfg.get("disturbance_center", [380.0, 280.0]),
+        disturbance_center=norm_cfg.get("disturbance_center", [390.0, 290.0]),
         disturbance_scale=norm_cfg.get("disturbance_scale", [0.01, 0.01]),
         param_scale=norm_cfg.get("param_scale", 0.1),
     )
@@ -158,10 +158,10 @@ def _build_two_tank_spec(system_config: dict) -> SystemSpec:
     normalization = NormalizationSpec(
         state_center=norm_cfg.get("state_center", [1.5, 1.0]),
         state_scale=norm_cfg.get("state_scale", [0.5, 0.5]),
-        control_center=norm_cfg.get("control_center", [1.5, 0.7]),
-        control_scale=norm_cfg.get("control_scale", [0.5, 0.25]),
-        disturbance_center=norm_cfg.get("disturbance_center", [0.1, 0.05]),
-        disturbance_scale=norm_cfg.get("disturbance_scale", [0.1, 0.1]),
+        control_center=norm_cfg.get("control_center", [0.75, 0.825]),
+        control_scale=norm_cfg.get("control_scale", [1.0, 1.5]),
+        disturbance_center=norm_cfg.get("disturbance_center", [0.075, 0.05]),
+        disturbance_scale=norm_cfg.get("disturbance_scale", [2.0, 4.0]),
         param_scale=norm_cfg.get("param_scale", 0.1),
     )
 
