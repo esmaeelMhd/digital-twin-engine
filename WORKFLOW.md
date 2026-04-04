@@ -64,6 +64,11 @@ The `--config` flag selects the system. The script routes to the appropriate gen
 
 ```bash
 python scripts/generate_data.py \
+  --config configs/two_tank_default.yaml \
+  --output_dir data/two_tank/
+
+# Or any future registered system
+python scripts/generate_data.py \
   --config configs/my_system_default.yaml \
   --output_dir data/my_system/
 ```
@@ -143,6 +148,12 @@ python scripts/train.py \
   --system_config configs/heat_exchanger_default.yaml \
   --data_dir data/heat_exchanger/ \
   --output_dir outputs/hx_v1/
+
+python scripts/train.py \
+  --config configs/two_tank_training.yaml \
+  --system_config configs/two_tank_default.yaml \
+  --data_dir data/two_tank/ \
+  --output_dir outputs/two_tank_v1/
 ```
 
 ### 3.3 Few-Shot Transfer Learning (Fine-tune a Pre-trained Model)

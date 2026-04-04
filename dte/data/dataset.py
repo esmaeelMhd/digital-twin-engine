@@ -6,6 +6,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
+from dte.data.generation import load_dataset
+
 
 class TrajectoryDataset:
     """JAX-compatible dataset for trajectory data."""
@@ -25,8 +27,7 @@ class TrajectoryDataset:
         """
         # Load data if path provided
         if isinstance(data, str):
-            from dte.data.generation import DataGenerator
-            data = DataGenerator.load_dataset(data)
+            data = load_dataset(data)
         
         self.data = data
         self.seq_len = seq_len

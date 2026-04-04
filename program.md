@@ -14,15 +14,15 @@ Work with the human to:
    - `scripts/train.py` and `dte/training/trainer.py` for the experiment harness and metric generation.
    - `auto_research.md` for repo-specific agent guidance and recent operating knowledge.
    - `program.md` for the actual autonomous research rules.
-3. Verify the dataset exists. At minimum, the configured `data_dir` must contain `train_data.h5`.
+3. Verify the datasets exist. Every configured benchmark target must have a `data_dir`
+   containing `train_data.h5`.
 4. Confirm the baseline settings in `configs/autoresearch_default.yaml`.
 5. Start with a baseline run before changing anything:
 
    ```bash
    python scripts/autoresearch.py \
      --config configs/autoresearch_default.yaml \
-     --description baseline \
-     --data_dir data/test/
+     --description baseline
    ```
 
 ## Experimentation
@@ -32,22 +32,22 @@ Each experiment runs through the same harness:
 ```bash
 python scripts/autoresearch.py \
   --config configs/autoresearch_default.yaml \
-  --description "short description of the idea" \
-  --data_dir data/test/
+  --description "short description of the idea"
 ```
 
 The harness will:
 
 - run `scripts/train.py` with a fixed wall-clock budget
-- write logs and artifacts to `outputs/autoresearch/runs/<run_id>/`
+- write logs and artifacts to `<workspace_dir>/runs/<run_id>/`
 - compare the configured metric to the current promoted baseline
-- append the result to `outputs/autoresearch/results.tsv`
-- promote the run into `outputs/autoresearch/baseline/` only if it improves the metric
+- append the result to `<workspace_dir>/results.tsv`
+- promote the run into `<workspace_dir>/baseline/` only if it improves the metric
 
 ## Optimization Target
 
-- Primary metric: `best_val_loss`
-- Lower is better
+- Primary metric is `research.metric_name` from `configs/autoresearch_default.yaml`
+- Lower is better for the default setup
+- The default setup uses `aggregate_relative_best_val_loss`, a fixed-reference cross-system score over the configured benchmark targets
 - Validation is forced regularly through the harness so every run produces a comparable summary
 - Lightweight deterministic eval can be run on kept runs, or every N runs, as advisory context only
 - Per-state `rmse_per_state` / `nrmse_per_state` can inform future ideas, but they do not override the keep/discard metric
@@ -55,6 +55,8 @@ The harness will:
 ## What You Can Modify
 
 - `configs/training_default.yaml`
+- `configs/heat_exchanger_training.yaml`
+- `configs/two_tank_training.yaml`
 - `scripts/train.py`
 - `dte/models/*.py`
 - `dte/training/*.py`

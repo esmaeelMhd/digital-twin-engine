@@ -196,17 +196,25 @@ def _record_prediction_metrics(metric_store, true_states, pred_states, state_std
     metric_store["nrmse_per_state"].append(np.asarray(nrmse_per_state))
 
 
-def _record_physics_metrics(metric_store, pred_states, controls, disturbances, physics_diagnostic_fn, dt):
+def _record_physics_metrics(
+    metric_store,
+    pred_states,
+    controls,
+    disturbances,
+    params,
+    physics_diagnostic_fn,
+    dt,
+):
     """Accumulate conservation-law metrics in physical units.
 
     ``physics_diagnostic_fn`` is a callable with the signature
-    ``(states, controls, disturbances, dt) -> dict[str, residual_array]``
+    ``(states, controls, disturbances, dt, params) -> dict[str, residual_array]``
     or ``None`` when no physics diagnostics are available.
     """
     if physics_diagnostic_fn is None:
         residuals = {}
     else:
-        residuals = physics_diagnostic_fn(pred_states, controls, disturbances, dt)
+        residuals = physics_diagnostic_fn(pred_states, controls, disturbances, dt, params)
 
     n = pred_states.shape[0] - 1
     mass_res = residuals.get("mass", zero_residual(n))
@@ -519,6 +527,7 @@ def main():
         true_states = sample["states"]
         controls = sample["controls"]
         disturbances = sample["disturbances"]
+        params = sample["params"]
         ts = sample["t"]
         
         # Predict with selected evaluation mode
@@ -532,10 +541,22 @@ def main():
         # Samples from TrajectoryDataset are already in physical units.
         dt = float(ts[1] - ts[0])
         mass_res, energy_res = _record_physics_metrics(
-            model_metrics, pred_states, controls, disturbances, physics_diagnostic_fn, dt
+            model_metrics,
+            pred_states,
+            controls,
+            disturbances,
+            params,
+            physics_diagnostic_fn,
+            dt,
         )
         _record_physics_metrics(
-            baseline_metrics, baseline_states, controls, disturbances, physics_diagnostic_fn, dt
+            baseline_metrics,
+            baseline_states,
+            controls,
+            disturbances,
+            params,
+            physics_diagnostic_fn,
+            dt,
         )
 
         plot_candidates.append(

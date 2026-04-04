@@ -189,6 +189,7 @@ class LossComputer:
         controls: Float[Array, "batch seq_len control_dim"],
         disturbances: Float[Array, "batch seq_len disturbance_dim"],
         dt,
+        params_batch=None,
     ) -> Tuple[Float[Array, ""], Dict[str, Float[Array, ""]]]:
         """Compute all physics residuals and their weighted sum.
 
@@ -197,7 +198,7 @@ class LossComputer:
             residual_dict: raw (unweighted) residuals keyed by name.
         """
         residuals = self.physics.compute_residuals(
-            predicted_states, controls, disturbances, dt
+            predicted_states, controls, disturbances, dt, params_batch=params_batch
         )
         total = sum(
             self.physics_weights.get(k, 0.0) * v for k, v in residuals.items()

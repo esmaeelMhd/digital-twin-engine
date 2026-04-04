@@ -1,15 +1,32 @@
 research:
   workspace_dir: outputs/autoresearch_exp0
-  metric_name: best_val_loss
+  metric_name: aggregate_relative_best_val_loss
   metric_mode: min
+  aggregate_method: weighted_geometric_mean_ratio
   time_budget_minutes: 10
+  time_budget_mode: split_total
   hard_timeout_buffer_minutes: 5
   promote_if_improved: true
 
 train:
   config: configs/training_default.yaml
-  system_config: configs/cstr_default.yaml
-  data_dir: data/cstr/
+  targets:
+    - name: cstr
+      config: configs/training_default.yaml
+      system_config: configs/cstr_default.yaml
+      data_dir: data/cstr/
+      weight: 1.0
+    - name: heat_exchanger
+      config: configs/heat_exchanger_training.yaml
+      system_config: configs/heat_exchanger_default.yaml
+      data_dir: data/heat_exchanger/
+      weight: 1.0
+  # Enable once a maintained dataset exists at data/two_tank/train_data.h5:
+  #   - name: two_tank
+  #     config: configs/two_tank_training.yaml
+  #     system_config: configs/two_tank_default.yaml
+  #     data_dir: data/two_tank/
+  #     weight: 1.0
   n_epochs: 15
   batch_size: null
   val_every: 1
@@ -39,6 +56,8 @@ agent:
   context_file: auto_research.md
   modifiable_files:
     - configs/training_default.yaml
+    - configs/heat_exchanger_training.yaml
+    - configs/two_tank_training.yaml
     - scripts/train.py
     - dte/models/encoder.py
     - dte/models/decoder.py

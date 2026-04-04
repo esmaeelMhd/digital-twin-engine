@@ -58,6 +58,12 @@ python scripts/generate_data.py \
   --output_dir data/test/
 ```
 
+Alternative built-in systems:
+```bash
+python scripts/generate_data.py --config configs/heat_exchanger_default.yaml --output_dir data/heat_exchanger/
+python scripts/generate_data.py --config configs/two_tank_default.yaml --output_dir data/two_tank/
+```
+
 ### 3. Train the Digital Twin (2-4 hours on GPU)
 
 Train the physics-informed neural SDE:

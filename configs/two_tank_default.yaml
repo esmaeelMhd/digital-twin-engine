@@ -1,0 +1,57 @@
+system:
+  name: two_tank
+  state_names: [h1, h2]
+  control_names: [q_in, valve]
+  disturbance_names: [d1, d2]
+  normalization:
+    state_center: [1.5, 1.0]
+    state_scale: [0.5, 0.5]
+    control_center: [0.75, 0.825]
+    control_scale: [1.0, 1.5]
+    disturbance_center: [0.075, 0.05]
+    disturbance_scale: [2.0, 4.0]
+    param_scale: 0.1
+  decoder_constraints:
+    - type: sigmoid_range
+      indices: [0, 1]
+      low: 0.0
+      high: 5.0
+
+two_tank:
+  A1: 1.5
+  A2: 1.2
+  k12: 0.9
+  kout: 1.0
+  h_max: 5.0
+
+simulation:
+  dt: 0.1
+  t_span: [0.0, 100.0]
+
+data_generation:
+  control_signals:
+    q_in:
+      type: prbs
+      switch_prob: 0.05
+    valve:
+      type: prbs
+      switch_prob: 0.05
+  disturbance_signals:
+    d1:
+      type: multistep
+      n_changes: 5
+    d2:
+      type: multistep
+      n_changes: 5
+
+initial_conditions:
+  h1: 1.8
+  h2: 1.1
+
+operating_ranges:
+  # Keep the sampled operating envelope inside the no-overflow steady-state
+  # region so long dataset rollouts do not spend most of their time rejected.
+  q_in: [0.3, 1.2]
+  valve: [0.65, 1.0]
+  d1: [0.0, 0.15]
+  d2: [0.0, 0.1]
