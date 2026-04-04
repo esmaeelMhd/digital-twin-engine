@@ -145,6 +145,9 @@ class DigitalTwin(eqx.Module):
             param_scale=param_scale,
             nominal_disturbance=nominal_disturbance,
             linear_prior_enabled=not (simulator_prior_enabled and hard_residual_only),
+            learned_solver_enabled=bool(model_config.get("learned_solver", {}).get("enabled", False)),
+            solver_hidden_dim=int(model_config.get("learned_solver", {}).get("hidden_dim", 64)),
+            solver_layers=int(model_config.get("learned_solver", {}).get("n_layers", 2)),
             key=key_sde,
         )
 
@@ -256,6 +259,32 @@ class DigitalTwin(eqx.Module):
                 max_steps=len(ts) * 10,
             )
             return solution.ys
+
+        if self.latent_sde.learned_solver_enabled:
+            dt_steps = ts[1:] - ts[:-1]
+
+            def step_fn(z_prev, step_inputs):
+                u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
+                k1 = self.latent_drift(z_prev, u_t, d_t, params, step_dt)
+                z_euler = z_prev + step_dt * k1
+                k2 = self.latent_drift(z_euler, u_tp1, d_tp1, params, step_dt)
+                z_heun = z_prev + 0.5 * step_dt * (k1 + k2)
+                alpha = self.latent_sde.solver_gate(
+                    z_prev,
+                    0.5 * (u_t + u_tp1),
+                    0.5 * (d_t + d_tp1),
+                    params,
+                    step_dt,
+                )
+                z_next = alpha * z_heun + (1.0 - alpha) * z_euler
+                return z_next, z_next
+
+            _, z_hist = jax.lax.scan(
+                step_fn,
+                z0,
+                (controls[:-1], controls[1:], disturbances[:-1], disturbances[1:], dt_steps),
+            )
+            return jnp.concatenate([z0[None, :], z_hist], axis=0)
 
         solution = diffrax.diffeqsolve(
             diffrax.ODETerm(drift_fn),

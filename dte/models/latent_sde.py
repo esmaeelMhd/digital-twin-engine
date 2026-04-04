@@ -237,10 +237,13 @@ class LatentSDE(eqx.Module):
 
     drift: LatentDrift
     diffusion: LatentDiffusion
+    solver_gate_layers: list
+    solver_gate_out: eqx.nn.Linear
     latent_dim: int = eqx.field(static=True)
     control_dim: int = eqx.field(static=True)
     disturbance_dim: int = eqx.field(static=True)
     param_dim: int = eqx.field(static=True)
+    learned_solver_enabled: bool = eqx.field(static=True)
 
     # Store nominal disturbance for fallback (when no disturbance is provided)
     nominal_disturbance: Float[Array, "disturbance_dim"]
@@ -263,10 +266,13 @@ class LatentSDE(eqx.Module):
         param_scale: float = 0.1,
         nominal_disturbance: list | None = None,
         linear_prior_enabled: bool = True,
+        learned_solver_enabled: bool = False,
+        solver_hidden_dim: int = 64,
+        solver_layers: int = 2,
         *,
         key: PRNGKeyArray,
     ):
-        key_drift, key_diff = jax.random.split(key)
+        key_drift, key_diff, key_solver = jax.random.split(key, 3)
 
         self.drift = LatentDrift(
             latent_dim=latent_dim,
@@ -304,6 +310,21 @@ class LatentSDE(eqx.Module):
         self.control_dim = control_dim
         self.disturbance_dim = disturbance_dim
         self.param_dim = param_dim
+        self.learned_solver_enabled = learned_solver_enabled
+
+        solver_input_dim = latent_dim + control_dim + disturbance_dim + param_dim + 1
+        solver_keys = jax.random.split(key_solver, solver_layers + 1)
+        self.solver_gate_layers = []
+        for i in range(solver_layers):
+            in_dim = solver_input_dim if i == 0 else solver_hidden_dim
+            self.solver_gate_layers.append(
+                eqx.nn.Linear(in_dim, solver_hidden_dim, key=solver_keys[i])
+            )
+        self.solver_gate_out = eqx.nn.Linear(
+            solver_hidden_dim if solver_layers > 0 else solver_input_dim,
+            1,
+            key=solver_keys[-1],
+        )
 
         if nominal_disturbance is not None:
             self.nominal_disturbance = jnp.array(nominal_disturbance)
@@ -324,6 +345,35 @@ class LatentSDE(eqx.Module):
         if disturbances is None:
             return jnp.tile(self.nominal_disturbance[None, :].astype(dtype), (ts.shape[0], 1))
         return disturbances
+
+    def solver_gate(
+        self,
+        z: Float[Array, "latent_dim"],
+        u: Float[Array, "control_dim"],
+        d: Float[Array, "disturbance_dim"],
+        c: Float[Array, "param_dim"],
+        dt,
+    ) -> Float[Array, ""]:
+        """Blend Euler and Heun updates for the learned deterministic solver."""
+        if not self.learned_solver_enabled:
+            return jnp.array(1.0, dtype=z.dtype)
+
+        u_norm = (u - self.drift.control_center) * self.drift.control_scale
+        c_norm = c * self.drift.param_scale
+        parts = [z, u_norm]
+        if d.shape[-1] > 0:
+            d_norm = (
+                d - self.drift.disturbance_center[: d.shape[-1]]
+            ) * self.drift.disturbance_scale[: d.shape[-1]]
+            parts.append(d_norm)
+        parts.append(c_norm)
+        parts.append(jnp.array([dt], dtype=z.dtype))
+        x = jnp.concatenate(parts)
+
+        for i, layer in enumerate(self.solver_gate_layers):
+            h = jax.nn.gelu(layer(x))
+            x = x + h if i > 0 else h
+        return jax.nn.sigmoid(self.solver_gate_out(x)).reshape(())
 
     def __call__(
         self,
