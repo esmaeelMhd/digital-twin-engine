@@ -239,11 +239,15 @@ class LatentSDE(eqx.Module):
     diffusion: LatentDiffusion
     solver_gate_layers: list
     solver_gate_out: eqx.nn.Linear
+    correction_layers: list
+    correction_out: eqx.nn.Linear
     latent_dim: int = eqx.field(static=True)
     control_dim: int = eqx.field(static=True)
     disturbance_dim: int = eqx.field(static=True)
     param_dim: int = eqx.field(static=True)
     learned_solver_enabled: bool = eqx.field(static=True)
+    self_correcting_enabled: bool = eqx.field(static=True)
+    self_correcting_weight: float = eqx.field(static=True)
 
     # Store nominal disturbance for fallback (when no disturbance is provided)
     nominal_disturbance: Float[Array, "disturbance_dim"]
@@ -269,10 +273,14 @@ class LatentSDE(eqx.Module):
         learned_solver_enabled: bool = False,
         solver_hidden_dim: int = 64,
         solver_layers: int = 2,
+        self_correcting_enabled: bool = False,
+        self_correcting_weight: float = 0.05,
+        correction_hidden_dim: int = 64,
+        correction_layers: int = 2,
         *,
         key: PRNGKeyArray,
     ):
-        key_drift, key_diff, key_solver = jax.random.split(key, 3)
+        key_drift, key_diff, key_solver, key_correction = jax.random.split(key, 4)
 
         self.drift = LatentDrift(
             latent_dim=latent_dim,
@@ -311,6 +319,8 @@ class LatentSDE(eqx.Module):
         self.disturbance_dim = disturbance_dim
         self.param_dim = param_dim
         self.learned_solver_enabled = learned_solver_enabled
+        self.self_correcting_enabled = self_correcting_enabled
+        self.self_correcting_weight = self_correcting_weight
 
         solver_input_dim = latent_dim + control_dim + disturbance_dim + param_dim + 1
         solver_keys = jax.random.split(key_solver, solver_layers + 1)
@@ -324,6 +334,32 @@ class LatentSDE(eqx.Module):
             solver_hidden_dim if solver_layers > 0 else solver_input_dim,
             1,
             key=solver_keys[-1],
+        )
+
+        correction_input_dim = (
+            latent_dim
+            + latent_dim
+            + control_dim
+            + disturbance_dim
+            + param_dim
+            + 1
+        )
+        correction_keys = jax.random.split(key_correction, correction_layers + 1)
+        self.correction_layers = []
+        for i in range(correction_layers):
+            in_dim = correction_input_dim if i == 0 else correction_hidden_dim
+            self.correction_layers.append(
+                eqx.nn.Linear(in_dim, correction_hidden_dim, key=correction_keys[i])
+            )
+        corr_out = eqx.nn.Linear(
+            correction_hidden_dim if correction_layers > 0 else correction_input_dim,
+            latent_dim,
+            key=correction_keys[-1],
+        )
+        self.correction_out = eqx.tree_at(
+            lambda l: (l.weight, l.bias),
+            corr_out,
+            (corr_out.weight * 0.01, corr_out.bias * 0.01),
         )
 
         if nominal_disturbance is not None:
@@ -374,6 +410,37 @@ class LatentSDE(eqx.Module):
             h = jax.nn.gelu(layer(x))
             x = x + h if i > 0 else h
         return jax.nn.sigmoid(self.solver_gate_out(x)).reshape(())
+
+    def self_correction(
+        self,
+        z: Float[Array, "latent_dim"],
+        local_error: Float[Array, "latent_dim"],
+        u: Float[Array, "control_dim"],
+        d: Float[Array, "disturbance_dim"],
+        c: Float[Array, "param_dim"],
+        dt,
+    ) -> Float[Array, "latent_dim"]:
+        """Predict a small learned correction from local solver disagreement."""
+        if not self.self_correcting_enabled:
+            return jnp.zeros_like(z)
+
+        u_norm = (u - self.drift.control_center) * self.drift.control_scale
+        c_norm = c * self.drift.param_scale
+        parts = [z, local_error, u_norm]
+        if d.shape[-1] > 0:
+            d_norm = (
+                d - self.drift.disturbance_center[: d.shape[-1]]
+            ) * self.drift.disturbance_scale[: d.shape[-1]]
+            parts.append(d_norm)
+        parts.append(c_norm)
+        parts.append(jnp.array([dt], dtype=z.dtype))
+        x = jnp.concatenate(parts)
+
+        for i, layer in enumerate(self.correction_layers):
+            h = jax.nn.gelu(layer(x))
+            x = x + h if i > 0 else h
+        raw_correction = self.correction_out(x)
+        return self.self_correcting_weight * jnp.tanh(raw_correction)
 
     def __call__(
         self,
