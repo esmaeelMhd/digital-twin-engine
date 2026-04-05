@@ -8,6 +8,7 @@ Usage:
     python scripts/agent.py                    # Provider from autoresearch config
     python scripts/agent.py --config configs/autoresearch_stage1.yaml
     python scripts/agent.py --rebaseline       # Refresh workspace baseline from current code
+    python scripts/agent.py --codex gpt-5.4    # Codex CLI via ChatGPT login
     python scripts/agent.py --deepseek         # DeepSeek reasoning model
     python scripts/agent.py --claude           # Claude Sonnet 4.6
     python scripts/agent.py --opus             # Claude Opus 4.6 with 32k thinking
@@ -21,6 +22,7 @@ Usage:
     python scripts/agent.py --file dte/training/trainer.py  # Restrict to one file
 
 Required environment variables (for the chosen provider):
+    none                 -- Codex CLI can use `codex login` / ChatGPT account auth
     DEEPSEEK_API_KEY    -- DeepSeek
     GEMINI_API_KEY      -- Google Gemini
     ANTHROPIC_API_KEY   -- Claude
@@ -42,6 +44,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -1440,6 +1443,9 @@ class FatalAPIError(Exception):
     pass
 
 
+_CODEX_LOGIN_STATUS: tuple[bool, str] | None = None
+
+
 # ---------------------------------------------------------------------------
 # LLM providers
 # ---------------------------------------------------------------------------
@@ -1448,6 +1454,7 @@ DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-reasoner"
 DEFAULT_GROK_MODEL = "grok-3"
+DEFAULT_CODEX_MODEL = "gpt-5.4"
 DEFAULT_DEEPSEEK_MAX_TOKENS = 64000
 GEMINI_CACHE_MIN_TOKENS = 2048
 DEFAULT_EXECUTION_MODE = "single_file"
@@ -1867,6 +1874,158 @@ def call_grok(
         return None
 
 
+def _split_provider_model_spec(model_name: str) -> tuple[str | None, str]:
+    raw = (model_name or "").strip()
+    lower = raw.lower()
+    for provider in ("codex", "openai", "gemini", "claude", "deepseek", "grok", "local"):
+        for sep in (":", "/"):
+            prefix = f"{provider}{sep}"
+            if lower.startswith(prefix):
+                return provider, raw[len(prefix):].strip()
+    return None, raw
+
+
+def _normalize_codex_reasoning_effort(thinking_level: str | None) -> str | None:
+    if thinking_level is None:
+        return None
+    normalized = str(thinking_level).strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"low", "medium", "high", "xhigh"}:
+        return normalized
+    log_to_file(
+        f"WARNING Codex CLI: unsupported reasoning effort={thinking_level}; "
+        "supported values are low, medium, high, xhigh"
+    )
+    return None
+
+
+def _ensure_codex_login() -> tuple[bool, str]:
+    global _CODEX_LOGIN_STATUS
+
+    if _CODEX_LOGIN_STATUS is not None:
+        return _CODEX_LOGIN_STATUS
+
+    codex_bin = shutil.which("codex")
+    if not codex_bin:
+        _CODEX_LOGIN_STATUS = (False, "codex CLI not found on PATH")
+        return _CODEX_LOGIN_STATUS
+
+    try:
+        completed = subprocess.run(
+            [codex_bin, "login", "status"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception as exc:
+        _CODEX_LOGIN_STATUS = (False, f"failed to check codex login status: {exc}")
+        return _CODEX_LOGIN_STATUS
+
+    status_text = (completed.stdout or completed.stderr or "").strip()
+    logged_in = completed.returncode == 0 and "logged in" in status_text.lower()
+    _CODEX_LOGIN_STATUS = (logged_in, status_text or "unknown codex login status")
+    return _CODEX_LOGIN_STATUS
+
+
+def call_codex(
+    prompt: str,
+    temperature: float | None = None,
+    thinking_level: str | None = None,
+    model: str = DEFAULT_CODEX_MODEL,
+    response_schema: dict | None = None,
+) -> str | None:
+    del temperature  # Codex CLI does not expose a stable temperature flag here.
+
+    codex_bin = shutil.which("codex")
+    if not codex_bin:
+        log_to_file("ERROR Codex CLI: codex executable not found on PATH")
+        return None
+
+    logged_in, status_text = _ensure_codex_login()
+    if not logged_in:
+        raise FatalAPIError(
+            "Codex CLI is not logged in. Run `codex login` or `codex login --device-auth` first. "
+            f"Status: {status_text}"
+        )
+
+    reasoning_effort = _normalize_codex_reasoning_effort(thinking_level)
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="dte-codex-") as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            output_path = tmpdir_path / "final_message.txt"
+            schema_path = tmpdir_path / "schema.json"
+
+            cmd = [
+                codex_bin,
+                "exec",
+                "-C",
+                str(PROJECT_ROOT),
+                "-s",
+                "read-only",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "-m",
+                model,
+                "-o",
+                str(output_path),
+            ]
+            if reasoning_effort is not None:
+                cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
+            if response_schema is not None:
+                schema_path.write_text(json.dumps(response_schema), encoding="utf-8")
+                cmd.extend(["--output-schema", str(schema_path)])
+            cmd.append("-")
+
+            completed = subprocess.run(
+                cmd,
+                cwd=PROJECT_ROOT,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=max(30, LLM_REQUEST_TIMEOUT_SECONDS - 5),
+                check=False,
+            )
+            combined_output = "\n".join(
+                part.strip() for part in (completed.stdout, completed.stderr) if part and part.strip()
+            )
+            if completed.returncode != 0:
+                log_to_file(
+                    f"ERROR Codex CLI ({model}) rc={completed.returncode}: "
+                    f"{combined_output[:500]}"
+                )
+                lower = combined_output.lower()
+                if any(
+                    token in lower
+                    for token in ("not logged in", "login", "authentication", "rate limit", "quota", "billing")
+                ):
+                    raise FatalAPIError(combined_output[:500] or "Codex CLI authentication failed")
+                return None
+
+            if completed.stderr:
+                stderr_tail = "\n".join(completed.stderr.splitlines()[-5:]).strip()
+                if stderr_tail:
+                    log_to_file(f"Codex CLI stderr ({model}): {stderr_tail}")
+
+            if output_path.exists():
+                return output_path.read_text(encoding="utf-8").strip()
+
+            if completed.stdout:
+                return completed.stdout.strip()
+            return None
+    except subprocess.TimeoutExpired:
+        log_to_file(f"ERROR Codex CLI ({model}): timed out")
+        return None
+    except FatalAPIError:
+        raise
+    except Exception as exc:
+        log_to_file(f"ERROR Codex CLI ({model}): {exc}")
+        return None
+
+
 def call_local(
     prompt: str,
     temperature: float | None = None,
@@ -1895,6 +2054,18 @@ def _build_llm_backend(provider_name: str, provider_model: str):
 
     if provider_name == "local":
         return call_local, "LM Studio (local)"
+    if provider_name == "codex":
+        model_name = provider_model or DEFAULT_CODEX_MODEL
+        return (
+            lambda prompt, temperature=None, thinking_level=None, response_schema=None: call_codex(
+                prompt,
+                temperature=temperature,
+                thinking_level=thinking_level,
+                model=model_name,
+                response_schema=response_schema,
+            ),
+            f"Codex CLI {model_name}",
+        )
     if provider_name == "opus":
         return call_claude_opus, "Claude Opus 4.6"
     if provider_name == "claude":
@@ -1960,11 +2131,17 @@ def _build_llm_backend(provider_name: str, provider_model: str):
 def _infer_provider_from_model(model_name: str) -> str:
     """Infer the provider from a configured default model name."""
 
-    name = (model_name or "").strip().lower()
+    explicit_provider, normalized_name = _split_provider_model_spec(model_name)
+    if explicit_provider:
+        return explicit_provider
+
+    name = normalized_name.lower()
     if not name:
         return "deepseek"
     if name == "local":
         return "local"
+    if name == "codex":
+        return "codex"
     if name.startswith("deepseek"):
         return "deepseek"
     if name.startswith("gemini"):
@@ -1981,10 +2158,13 @@ def _infer_provider_from_model(model_name: str) -> str:
 
 
 def _default_model_for_provider(provider_name: str, configured_model: str | None = None) -> str:
+    _, normalized_model = _split_provider_model_spec(configured_model or "")
     if configured_model:
-        return configured_model
+        return normalized_model or configured_model
     if provider_name == "local":
         return "local"
+    if provider_name == "codex":
+        return DEFAULT_CODEX_MODEL
     if provider_name == "deepseek":
         return DEFAULT_DEEPSEEK_MODEL
     if provider_name == "claude":
@@ -2003,6 +2183,8 @@ def _provider_supports_temperature(provider: str, model_name: str) -> bool:
 
     if provider == "local":
         return True
+    if provider == "codex":
+        return False
     if provider == "deepseek" and model_name == DEFAULT_DEEPSEEK_MODEL:
         return False
     if provider == "openai" and model_name.startswith("o"):
@@ -2015,7 +2197,7 @@ def _provider_supports_temperature(provider: str, model_name: str) -> bool:
 def _provider_supports_thinking_level(provider: str) -> bool:
     """Return whether a provider exposes a configurable thinking level here."""
 
-    return provider == "gemini"
+    return provider in {"gemini", "codex"}
 
 
 # ---------------------------------------------------------------------------
@@ -4588,6 +4770,8 @@ def main() -> None:
                         help=f"Use Google Gemini model (default: {DEFAULT_GEMINI_MODEL})")
     parser.add_argument("--deepseek", type=str, nargs="?", const=DEFAULT_DEEPSEEK_MODEL, default=None,
                         help=f"Use DeepSeek model (default: {DEFAULT_DEEPSEEK_MODEL})")
+    parser.add_argument("--codex",   type=str, nargs="?", const=DEFAULT_CODEX_MODEL, default=None,
+                        help=f"Use Codex CLI via ChatGPT login (default: {DEFAULT_CODEX_MODEL})")
     parser.add_argument("--claude",  action="store_true", help="Use Claude Sonnet 4.6")
     parser.add_argument("--opus",    action="store_true", help="Use Claude Opus 4.6 (32k thinking)")
     parser.add_argument("--sonnet4", action="store_true", help="Use Claude Sonnet 4 (legacy)")
@@ -4598,7 +4782,7 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=None,
                         help="Override sampling temperature when the selected model supports it")
     parser.add_argument("--thinking-level", type=str, default=None,
-                        help="Provider-specific thinking level (currently used for Gemini when set)")
+                        help="Provider-specific thinking level (used for Gemini and Codex when set)")
     parser.add_argument("--apply-llm", type=str, default=None,
                         help="Separate model for JSON repair / patch repair calls (defaults to primary model)")
     parser.add_argument("--apply-temperature", type=float, default=None,
@@ -4631,6 +4815,9 @@ def main() -> None:
     if args.local:
         provider_name = "local"
         provider_model = "local"
+    elif args.codex:
+        provider_name = "codex"
+        provider_model = args.codex
     elif args.opus:
         provider_name = "opus"
         provider_model = "claude-opus-4-6"
@@ -4703,7 +4890,7 @@ def main() -> None:
         configured_thinking_level = str(configured_thinking_level)
 
     configured_apply_thinking_level = args.apply_thinking_level or agent_cfg.get("apply_thinking_level")
-    if configured_apply_thinking_level is None and apply_provider_name == "gemini":
+    if configured_apply_thinking_level is None and apply_provider_name in {"gemini", "codex"}:
         configured_apply_thinking_level = "low"
     if configured_apply_thinking_level is not None:
         configured_apply_thinking_level = str(configured_apply_thinking_level)
@@ -4801,6 +4988,14 @@ def main() -> None:
                 kwargs=kwargs,
                 refresh_cache=refresh_cache,
             )
+
+        if active_provider_name == "codex":
+            kwargs: dict = {}
+            if thinking_level is not None:
+                kwargs["thinking_level"] = thinking_level
+            if response_schema is not None:
+                kwargs["response_schema"] = response_schema
+            return active_call_fn(prompt, **kwargs)
 
         if active_supports_temperature:
             return active_call_fn(prompt, temperature=temperature, thinking_level=thinking_level)
