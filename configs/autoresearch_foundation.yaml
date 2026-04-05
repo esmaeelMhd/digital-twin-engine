@@ -3,7 +3,7 @@ research:
   metric_name: aggregate_relative_best_val_loss
   metric_mode: min
   aggregate_method: weighted_geometric_mean_ratio
-  time_budget_minutes: 10
+  time_budget_minutes: 15
   time_budget_mode: split_total
   hard_timeout_buffer_minutes: 5
   promote_if_improved: true
