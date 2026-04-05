@@ -67,7 +67,7 @@ sde_training:
   sde_kl_weight: 0.00001
 
 curriculum:
-  enabled: true
+  enabled: false
   initial_seq_len: 5
   final_seq_len: 25
   warmup_epochs: 20
