@@ -1,5 +1,5 @@
 research:
-  workspace_dir: outputs/autoresearch_exp0
+  workspace_dir: outputs/autoresearch_foundation
   metric_name: aggregate_relative_best_val_loss
   metric_mode: min
   aggregate_method: weighted_geometric_mean_ratio

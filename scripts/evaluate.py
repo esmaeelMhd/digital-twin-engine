@@ -161,12 +161,13 @@ def _predict_states(
     if predict_mode == "deterministic":
         # Match the training/validation rollout path: use z_mean and mean_trajectory.
         _, z_mean, _ = model.encode(initial_state, params, controls[0], None)
-        z_traj = model.latent_sde.mean_trajectory(
+        z_traj = model.rollout_latent(
             ts,
             z_mean,
             controls,
             params,
             disturbances=disturbances,
+            stochastic=False,
         )
         return jax.vmap(lambda z, u: model.decode(z, params, u))(z_traj, controls)
 
@@ -482,7 +483,12 @@ def main():
 
     # Load model
     print("\nLoading model...")
-    model = DigitalTwin.load(args.model_path, config, system_spec=system_spec)
+    model = DigitalTwin.load(
+        args.model_path,
+        config,
+        system_spec=system_spec,
+        system_config=system_config,
+    )
     param_counts = model.get_parameter_count()
     print(f"Model parameters: {param_counts['total']:,}")
     

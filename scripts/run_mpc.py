@@ -150,7 +150,12 @@ def main():
 
     # Load digital twin
     print("\nLoading digital twin...")
-    model = DigitalTwin.load(args.model_path, model_config, system_spec=system_spec)
+    model = DigitalTwin.load(
+        args.model_path,
+        model_config,
+        system_spec=system_spec,
+        system_config=system_config,
+    )
 
     # Create ground truth simulator
     simulator = get_simulator(system_spec.name, system_config)

@@ -6,6 +6,20 @@ model:
   diffusion_layers: 2
   diffusion_hidden_dim: 64
   initial_diffusion_scale: 0.1
+  simulator_prior:
+    enabled: true
+    weight: 1.0
+    residual_weight: 0.25
+    hard_residual_only: true
+  learned_solver:
+    enabled: true
+    hidden_dim: 64
+    n_layers: 2
+  self_correcting_policy:
+    enabled: true
+    weight: 0.05
+    hidden_dim: 64
+    n_layers: 2
   state_dim: 4
   param_dim: 6
   control_dim: 2
