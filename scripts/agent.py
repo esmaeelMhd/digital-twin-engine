@@ -1900,6 +1900,51 @@ def _normalize_codex_reasoning_effort(thinking_level: str | None) -> str | None:
     return None
 
 
+def _make_codex_schema_optional(schema: dict) -> dict:
+    return {
+        "anyOf": [
+            schema,
+            {"type": "null"},
+        ]
+    }
+
+
+def _to_codex_response_schema(schema: dict | None) -> dict | None:
+    """Convert our permissive JSON schema into Codex/OpenAI structured-output form.
+
+    Codex requires every object property to appear in `required`. Optional fields
+    must therefore be represented as nullable and still listed as required.
+    """
+
+    if not isinstance(schema, dict):
+        return schema
+
+    converted = dict(schema)
+    schema_type = converted.get("type")
+
+    if schema_type == "object" and isinstance(converted.get("properties"), dict):
+        original_required = set(converted.get("required", []) or [])
+        properties: dict[str, dict] = {}
+        required: list[str] = []
+        for key, value in converted["properties"].items():
+            child = _to_codex_response_schema(value if isinstance(value, dict) else {"type": "string"})
+            if key not in original_required:
+                child = _make_codex_schema_optional(child)
+            properties[key] = child
+            required.append(key)
+        converted["properties"] = properties
+        converted["required"] = required
+        if "additionalProperties" not in converted:
+            converted["additionalProperties"] = False
+        return converted
+
+    if schema_type == "array" and isinstance(converted.get("items"), dict):
+        converted["items"] = _to_codex_response_schema(converted["items"])
+        return converted
+
+    return converted
+
+
 def _ensure_codex_login() -> tuple[bool, str]:
     global _CODEX_LOGIN_STATUS
 
@@ -1976,7 +2021,8 @@ def call_codex(
             if reasoning_effort is not None:
                 cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
             if response_schema is not None:
-                schema_path.write_text(json.dumps(response_schema), encoding="utf-8")
+                codex_schema = _to_codex_response_schema(response_schema)
+                schema_path.write_text(json.dumps(codex_schema), encoding="utf-8")
                 cmd.extend(["--output-schema", str(schema_path)])
             cmd.append("-")
 
