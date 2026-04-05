@@ -1900,6 +1900,37 @@ def _normalize_codex_reasoning_effort(thinking_level: str | None) -> str | None:
     return None
 
 
+def _find_codex_bin() -> str | None:
+    """Locate the Codex CLI binary.
+
+    Priority:
+    1. `CODEX_BIN` env override
+    2. `codex` on PATH
+    3. VS Code ChatGPT extension install under ~/.vscode-server/extensions
+    """
+
+    env_override = os.environ.get("CODEX_BIN", "").strip()
+    if env_override:
+        candidate = Path(env_override).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+
+    path_hit = shutil.which("codex")
+    if path_hit:
+        return path_hit
+
+    extension_root = Path.home() / ".vscode-server" / "extensions"
+    candidates = sorted(
+        extension_root.glob("openai.chatgpt-*/bin/*/codex"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def _make_codex_schema_optional(schema: dict) -> dict:
     return {
         "anyOf": [
@@ -1951,7 +1982,7 @@ def _ensure_codex_login() -> tuple[bool, str]:
     if _CODEX_LOGIN_STATUS is not None:
         return _CODEX_LOGIN_STATUS
 
-    codex_bin = shutil.which("codex")
+    codex_bin = _find_codex_bin()
     if not codex_bin:
         _CODEX_LOGIN_STATUS = (False, "codex CLI not found on PATH")
         return _CODEX_LOGIN_STATUS
@@ -1984,10 +2015,11 @@ def call_codex(
 ) -> str | None:
     del temperature  # Codex CLI does not expose a stable temperature flag here.
 
-    codex_bin = shutil.which("codex")
+    codex_bin = _find_codex_bin()
     if not codex_bin:
-        log_to_file("ERROR Codex CLI: codex executable not found on PATH")
-        return None
+        raise FatalAPIError(
+            "Codex CLI executable not found. Set CODEX_BIN or install/login through the VS Code ChatGPT extension."
+        )
 
     logged_in, status_text = _ensure_codex_login()
     if not logged_in:
