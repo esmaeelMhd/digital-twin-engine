@@ -4392,7 +4392,7 @@ def _run_text_mode(
                             call_llm,
                             patch_input,
                             fail_streak=fail_streak,
-                            phase="reason",
+                            phase="apply",
                             response_schema=MULTI_FILE_PATCH_RESPONSE_JSON_SCHEMA,
                             cached_content=reason_cached_content,
                         )
