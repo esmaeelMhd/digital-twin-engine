@@ -1,0 +1,53 @@
+# Scaffold config for future shared-checkpoint universal training.
+# This is not consumed by the current single-system trainer.
+
+model:
+  family: universal_backbone
+  latent_dim: 32
+  shared_hidden_dim: 128
+  adapter_hidden_dim: 64
+  system_embedding_dim: 32
+  use_system_spec_embedding: true
+  masked_io: true
+  input_adapter: padded_linear
+  output_adapter: masked_head
+  neural_cde:
+    enabled: true
+    hidden_dim: 64
+    n_layers: 2
+
+training:
+  batch_size: 128
+  seq_len: 50
+  stride: 10
+  val_split: 0.2
+  n_epochs: 20
+  mixed_batching: weighted
+  curriculum:
+    enabled: false
+
+loss_weights:
+  reconstruction: 1.0
+  trajectory: 1.0
+  one_step: 0.5
+  kl: 0.0
+  cross_system_alignment: 0.0
+
+data:
+  systems:
+    - name: cstr
+      system_config: configs/cstr_default.yaml
+      data_dir: data/cstr/
+      weight: 1.0
+    - name: heat_exchanger
+      system_config: configs/heat_exchanger_default.yaml
+      data_dir: data/heat_exchanger/
+      weight: 1.0
+    - name: two_tank
+      system_config: configs/two_tank_default.yaml
+      data_dir: data/two_tank/
+      weight: 1.0
+
+evaluation:
+  aggregate_method: weighted_geometric_mean_ratio
+  metric_name: aggregate_relative_best_val_loss
