@@ -252,6 +252,7 @@ class LatentSDE(eqx.Module):
     self_correcting_weight: float = eqx.field(static=True)
     neural_cde_enabled: bool = eqx.field(static=True)
     path_dim: int = eqx.field(static=True)
+    path_representation: str = eqx.field(static=True)
 
     # Store nominal disturbance for fallback (when no disturbance is provided)
     nominal_disturbance: Float[Array, "disturbance_dim"]
@@ -282,6 +283,7 @@ class LatentSDE(eqx.Module):
         self_correcting_weight: float = 0.05,
         correction_hidden_dim: int = 64,
         correction_layers: int = 2,
+        path_representation: str = "delta",
         *,
         key: PRNGKeyArray,
     ):
@@ -328,6 +330,7 @@ class LatentSDE(eqx.Module):
         self.self_correcting_weight = self_correcting_weight
         self.neural_cde_enabled = neural_cde_enabled
         self.path_dim = 1 + control_dim + disturbance_dim
+        self.path_representation = path_representation
 
         cde_input_dim = latent_dim + control_dim + disturbance_dim + param_dim
         if self.neural_cde_enabled:
@@ -396,6 +399,33 @@ class LatentSDE(eqx.Module):
             self.nominal_disturbance = jnp.zeros(disturbance_dim)
         else:
             self.nominal_disturbance = jnp.zeros(0)
+
+    def build_path_features(
+        self,
+        u_t: Float[Array, "control_dim"],
+        u_tp1: Float[Array, "control_dim"],
+        d_t: Float[Array, "disturbance_dim"],
+        d_tp1: Float[Array, "disturbance_dim"],
+        step_dt,
+        dtype,
+    ) -> Float[Array, "path_dim"]:
+        """Build path features for the Neural CDE correction."""
+        safe_dt = jnp.maximum(step_dt, jnp.asarray(1e-6, dtype=step_dt.dtype))
+        if self.path_representation == "delta":
+            path_terms = [
+                jnp.array([step_dt], dtype=dtype),
+                u_tp1 - u_t,
+            ]
+            if self.disturbance_dim > 0:
+                path_terms.append(d_tp1 - d_t)
+        else:
+            path_terms = [
+                jnp.array([1.0], dtype=dtype),
+                (u_tp1 - u_t) / safe_dt,
+            ]
+            if self.disturbance_dim > 0:
+                path_terms.append((d_tp1 - d_t) / safe_dt)
+        return jnp.concatenate(path_terms)
 
     def control_path_term(
         self,
@@ -592,20 +622,15 @@ class LatentSDE(eqx.Module):
 
             def step_fn(z_prev, step_inputs):
                 u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
-                safe_dt = jnp.maximum(step_dt, jnp.asarray(1e-6, dtype=step_dt.dtype))
                 u_mid = 0.5 * (u_t + u_tp1)
                 d_mid = 0.5 * (d_t + d_tp1)
-                path_terms = [
-                    jnp.array([1.0], dtype=z_prev.dtype),
-                    (u_tp1 - u_t) / safe_dt,
-                ]
-                if self.disturbance_dim > 0:
-                    path_terms.append((d_tp1 - d_t) / safe_dt)
-                path_derivative = jnp.concatenate(path_terms)
+                path_features = self.build_path_features(
+                    u_t, u_tp1, d_t, d_tp1, step_dt, z_prev.dtype
+                )
 
                 def total_drift(z_curr):
                     return self.drift(z_curr, u_mid, d_mid, params) + self.control_path_term(
-                        z_curr, u_mid, d_mid, params, path_derivative
+                        z_curr, u_mid, d_mid, params, path_features
                     )
 
                 k1 = total_drift(z_prev)

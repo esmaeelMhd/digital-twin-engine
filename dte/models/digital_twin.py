@@ -155,6 +155,7 @@ class DigitalTwin(eqx.Module):
             self_correcting_weight=float(correction_cfg.get("weight", 0.05)),
             correction_hidden_dim=int(correction_cfg.get("hidden_dim", 64)),
             correction_layers=int(correction_cfg.get("n_layers", 2)),
+            path_representation=str(neural_cde_cfg.get("path_representation", "delta")),
             key=key_sde,
         )
 
@@ -274,19 +275,14 @@ class DigitalTwin(eqx.Module):
                 u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
                 u_mid = 0.5 * (u_t + u_tp1)
                 d_mid = 0.5 * (d_t + d_tp1)
-                safe_dt = jnp.maximum(step_dt, jnp.asarray(1e-6, dtype=step_dt.dtype))
-                path_terms = [
-                    jnp.array([1.0], dtype=z_prev.dtype),
-                    (u_tp1 - u_t) / safe_dt,
-                ]
-                if self.latent_sde.disturbance_dim > 0:
-                    path_terms.append((d_tp1 - d_t) / safe_dt)
-                path_derivative = jnp.concatenate(path_terms)
+                path_features = self.latent_sde.build_path_features(
+                    u_t, u_tp1, d_t, d_tp1, step_dt, z_prev.dtype
+                )
 
                 def total_drift(z_curr):
                     base = self.latent_drift(z_curr, u_mid, d_mid, params, step_dt)
                     return base + self.latent_sde.control_path_term(
-                        z_curr, u_mid, d_mid, params, path_derivative
+                        z_curr, u_mid, d_mid, params, path_features
                     )
 
                 k1 = total_drift(z_prev)
