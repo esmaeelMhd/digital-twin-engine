@@ -1,9 +1,10 @@
-"""Scaffold entrypoint for future universal checkpoint evaluation."""
+"""Evaluate a shared universal digital twin checkpoint."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 
@@ -15,6 +16,20 @@ import jax
 import yaml
 
 from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
+from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.training.universal_trainer import UniversalTrainer
+
+
+def _json_safe_float(value):
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
 
 
 def _load_sources(config: dict) -> list[SystemDatasetSource]:
@@ -32,8 +47,17 @@ def _load_sources(config: dict) -> list[SystemDatasetSource]:
     ]
 
 
+def _aggregate_geometric_mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    product = 1.0
+    for value in values:
+        product *= float(value)
+    return product ** (1.0 / len(values))
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Scaffold universal multi-system evaluation")
+    parser = argparse.ArgumentParser(description="Evaluate a universal digital twin")
     parser.add_argument(
         "--config",
         type=str,
@@ -43,81 +67,77 @@ def main():
     parser.add_argument(
         "--model_path",
         type=str,
-        default=None,
-        help="Optional future universal model checkpoint path",
+        required=True,
+        help="Path to the trained universal checkpoint",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="outputs/universal_eval_scaffold/",
-        help="Directory for scaffold evaluation artifacts",
+        default="outputs/universal_eval/",
+        help="Directory for evaluation artifacts",
     )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for dataset smoke sampling",
-    )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
 
-    training_cfg = config.get("training", {})
-    seq_len = int(training_cfg.get("seq_len", 50))
-    stride = int(training_cfg.get("stride", 10))
-    batch_size = int(training_cfg.get("batch_size", 32))
+    training_cfg = config["training"]
+    seq_len = int(training_cfg["seq_len"])
+    stride = int(training_cfg["stride"])
     val_split = float(training_cfg.get("val_split", 0.2))
 
     sources = _load_sources(config)
     dataset = MultiSystemTrajectoryDataset.from_sources(sources, seq_len=seq_len, stride=stride)
-    _, val_dataset = dataset.split(val_split)
+    train_dataset, val_dataset = dataset.split(val_split)
 
     os.makedirs(args.output_dir, exist_ok=True)
     with open(Path(args.output_dir) / "config.yaml", "w") as f:
-        yaml.safe_dump(config, f)
+        yaml.safe_dump(config, f, sort_keys=False)
+
+    model = UniversalDigitalTwin.load(args.model_path, config, train_dataset.metadata)
+    trainer = UniversalTrainer(model, config, train_dataset, val_dataset)
 
     key = jax.random.PRNGKey(args.seed)
-    batch = val_dataset.sample_batch(
-        key,
-        batch_size=min(batch_size, val_dataset.n_samples),
-        seq_len=seq_len,
+    key_mixed, key_systems = jax.random.split(key)
+    mixed_val = trainer._validate_batches(
+        val_dataset,
+        key_mixed,
+        n_batches=int(config.get("checkpointing", {}).get("max_val_batches", 4)),
     )
+    per_system = trainer.evaluate_per_system(
+        key_systems,
+        n_batches=int(config.get("evaluation", {}).get("per_system_batches", config.get("checkpointing", {}).get("max_val_batches", 4))),
+    )
+    per_system_total = {name: metrics["total"] for name, metrics in per_system.items()}
+    aggregate_total = _aggregate_geometric_mean(list(per_system_total.values()))
 
-    model_path = Path(args.model_path).resolve() if args.model_path else None
     summary = {
-        "status": "scaffold_ready",
-        "message": (
-            "Universal evaluation scaffold is ready. It validates the mixed "
-            "validation dataset shape contract but does not score a universal "
-            "checkpoint yet."
-        ),
+        "status": "ok",
         "config_path": str(Path(args.config).resolve()),
-        "model_path": str(model_path) if model_path else None,
-        "model_exists": bool(model_path and model_path.exists()),
+        "model_path": str(Path(args.model_path).resolve()),
+        "output_dir": str(Path(args.output_dir).resolve()),
+        "mixed_val_losses": mixed_val,
+        "per_system_val_losses": per_system,
+        "aggregate_metric_name": "geometric_mean_per_system_total_loss",
+        "aggregate_metric_value": _json_safe_float(aggregate_total),
         "val_manifest": val_dataset.manifest(),
-        "sample_batch_shapes": {name: list(value.shape) for name, value in batch.items()},
-        "todos": [
-            "Implement checkpoint loading for a shared universal model.",
-            "Evaluate one checkpoint across all systems with masked decoding.",
-            "Report aggregate cross-system metrics from one shared run.",
-        ],
     }
 
-    summary_path = Path(args.output_dir) / "universal_eval_scaffold_summary.json"
+    summary_path = Path(args.output_dir) / "summary.json"
     with summary_path.open("w") as f:
         json.dump(summary, f, indent=2)
 
     print("\n" + "=" * 60)
-    print("UNIVERSAL EVALUATION SCAFFOLD")
+    print("UNIVERSAL DIGITAL TWIN EVALUATION")
     print("=" * 60)
-    print(f"Config: {args.config}")
-    print(f"Model path: {model_path if model_path else 'not provided'}")
-    print(f"Model exists: {summary['model_exists']}")
-    print(f"Systems: {', '.join(val_dataset.system_names)}")
-    print(f"Validation samples: {val_dataset.n_samples}")
-    print(f"Scaffold summary: {summary_path}")
-    print("Status: evaluation scaffold ready, universal checkpoint scoring not implemented yet.")
+    print(f"Model: {args.model_path}")
+    print(f"Mixed validation total loss: {mixed_val['total']:.4f}")
+    for name, metrics in per_system.items():
+        print(f"  {name}: total={metrics['total']:.4f}, traj={metrics['trajectory']:.4f}")
+    if aggregate_total is not None:
+        print(f"Aggregate geometric mean total loss: {aggregate_total:.4f}")
+    print(f"Evaluation summary: {summary_path}")
     print("=" * 60)
 
 

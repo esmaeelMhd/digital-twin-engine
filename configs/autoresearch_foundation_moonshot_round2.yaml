@@ -1,7 +1,9 @@
-# Foundation-style multi-system autoresearch driven through Codex CLI.
-# Use `--ideas-file <yaml>` to select a moonshot backlog such as:
-#   auto_research_claude_ideas.yaml
-#   auto_research_grok_ideas.yaml
+# Round 2 local search around the promoted Neural CDE foundation winner.
+# This config is for a fresh bounded workspace built from the current main-branch
+# baseline, not the original pre-Neural-CDE foundation baseline.
+#
+# Suggested manual backlog:
+#   auto_research_foundation_round2_neural_cde_ideas.yaml
 
 research:
   workspace_dir: outputs/autoresearch_foundation_moonshot_round2
@@ -52,13 +54,23 @@ agent:
   cooldown_between_experiments: 10
   context_file: auto_research_moonshot.md
   modifiable_paths:
-    - dte
-    - configs
-    - scripts/train.py
+    - dte/models/latent_sde.py
+    - dte/models/digital_twin.py
+    - dte/training/trainer.py
+    - configs/training_default.yaml
+    - configs/heat_exchanger_training.yaml
+    - configs/two_tank_training.yaml
   forbidden_paths:
     - scripts/autoresearch.py
     - dte/autoresearch
     - scripts/agent.py
+    - dte/data
+    - dte/physics
+    - dte/simulators
+    - dte/models/universal_digital_twin.py
+    - dte/training/universal_trainer.py
+    - scripts/train_universal.py
+    - scripts/evaluate_universal.py
     - auto_research.md
     - auto_research_moonshot.md
     - program.md

@@ -1,9 +1,8 @@
-"""Universal multi-system dataset scaffolding.
+"""Universal multi-system dataset utilities.
 
-This module provides the data-side plumbing needed for future shared-checkpoint
-training across heterogeneous systems. It pads physical-unit trajectory batches
-to the largest registered dimensions and returns explicit masks so future model
-code can stay dimension-aware without hardcoding CSTR/HX/two-tank assumptions.
+This module pads physical-unit trajectory batches to the largest registered
+dimensions, returns explicit masks, and exposes the per-system normalization
+tables needed for shared-checkpoint universal models.
 """
 
 from __future__ import annotations
@@ -46,6 +45,42 @@ class PreparedSystemDataset:
     dataset: TrajectoryDataset
 
 
+@dataclass(frozen=True)
+class UniversalSystemMetadata:
+    """Padded per-system tables required by a shared universal model."""
+
+    system_names: tuple[str, ...]
+    state_center: Array
+    state_scale: Array
+    control_center: Array
+    control_scale: Array
+    disturbance_center: Array
+    disturbance_scale: Array
+    param_scale: Array
+    state_mask: Array
+    control_mask: Array
+    disturbance_mask: Array
+    param_mask: Array
+    state_dim: Array
+    control_dim: Array
+    disturbance_dim: Array
+    param_dim: Array
+    system_descriptor: Array
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-safe snapshot of the metadata layout."""
+        return {
+            "system_names": list(self.system_names),
+            "shape": {
+                "state_center": list(self.state_center.shape),
+                "control_center": list(self.control_center.shape),
+                "disturbance_center": list(self.disturbance_center.shape),
+                "param_scale": list(self.param_scale.shape),
+                "system_descriptor": list(self.system_descriptor.shape),
+            },
+        }
+
+
 class MultiSystemTrajectoryDataset:
     """Mixed-system padded dataset for universal-model research.
 
@@ -79,6 +114,7 @@ class MultiSystemTrajectoryDataset:
         self.max_disturbance_dim = max(entry.spec.disturbance_dim for entry in self.entries)
         self.max_param_dim = max(entry.spec.param_dim for entry in self.entries)
         self._n_samples = sum(entry.dataset.n_samples for entry in self.entries)
+        self._metadata = self._build_metadata()
 
     @classmethod
     def from_sources(
@@ -104,6 +140,108 @@ class MultiSystemTrajectoryDataset:
     @property
     def n_samples(self) -> int:
         return self._n_samples
+
+    @property
+    def metadata(self) -> UniversalSystemMetadata:
+        return self._metadata
+
+    def _pad(self, values: list[float], size: int, fill: float) -> list[float]:
+        values = list(values)
+        if len(values) > size:
+            raise ValueError(f"Cannot pad length {len(values)} into size {size}.")
+        return values + [fill] * (size - len(values))
+
+    def _descriptor_for_spec(self, spec: SystemSpec) -> list[float]:
+        """Numeric summary used for optional system-spec conditioning."""
+        max_state = max(self.max_state_dim, 1)
+        max_control = max(self.max_control_dim, 1)
+        max_disturbance = max(self.max_disturbance_dim, 1)
+        max_param = max(self.max_param_dim, 1)
+        norm = spec.normalization
+        return [
+            spec.state_dim / max_state,
+            spec.control_dim / max_control,
+            spec.disturbance_dim / max_disturbance,
+            spec.param_dim / max_param,
+            *self._pad(norm.state_center, self.max_state_dim, 0.0),
+            *self._pad(norm.state_scale, self.max_state_dim, 1.0),
+            *self._pad(norm.control_center, self.max_control_dim, 0.0),
+            *self._pad(norm.control_scale, self.max_control_dim, 1.0),
+            *self._pad(norm.disturbance_center, self.max_disturbance_dim, 0.0),
+            *self._pad(norm.disturbance_scale, self.max_disturbance_dim, 1.0),
+            norm.param_scale,
+        ]
+
+    def _build_metadata(self) -> UniversalSystemMetadata:
+        state_center = []
+        state_scale = []
+        control_center = []
+        control_scale = []
+        disturbance_center = []
+        disturbance_scale = []
+        param_scale = []
+        state_mask = []
+        control_mask = []
+        disturbance_mask = []
+        param_mask = []
+        state_dim = []
+        control_dim = []
+        disturbance_dim = []
+        param_dim = []
+        descriptor = []
+
+        for entry in self.entries:
+            spec = entry.spec
+            norm = spec.normalization
+
+            state_center.append(self._pad(norm.state_center, self.max_state_dim, 0.0))
+            state_scale.append(self._pad(norm.state_scale, self.max_state_dim, 1.0))
+            control_center.append(self._pad(norm.control_center, self.max_control_dim, 0.0))
+            control_scale.append(self._pad(norm.control_scale, self.max_control_dim, 1.0))
+            disturbance_center.append(
+                self._pad(norm.disturbance_center, self.max_disturbance_dim, 0.0)
+            )
+            disturbance_scale.append(
+                self._pad(norm.disturbance_scale, self.max_disturbance_dim, 1.0)
+            )
+            param_scale.append(
+                self._pad([norm.param_scale] * spec.param_dim, self.max_param_dim, 0.0)
+            )
+
+            state_mask.append(self._pad([1.0] * spec.state_dim, self.max_state_dim, 0.0))
+            control_mask.append(
+                self._pad([1.0] * spec.control_dim, self.max_control_dim, 0.0)
+            )
+            disturbance_mask.append(
+                self._pad([1.0] * spec.disturbance_dim, self.max_disturbance_dim, 0.0)
+            )
+            param_mask.append(self._pad([1.0] * spec.param_dim, self.max_param_dim, 0.0))
+
+            state_dim.append(spec.state_dim)
+            control_dim.append(spec.control_dim)
+            disturbance_dim.append(spec.disturbance_dim)
+            param_dim.append(spec.param_dim)
+            descriptor.append(self._descriptor_for_spec(spec))
+
+        return UniversalSystemMetadata(
+            system_names=tuple(self.system_names),
+            state_center=jnp.asarray(np.asarray(state_center, dtype=np.float32)),
+            state_scale=jnp.asarray(np.asarray(state_scale, dtype=np.float32)),
+            control_center=jnp.asarray(np.asarray(control_center, dtype=np.float32)),
+            control_scale=jnp.asarray(np.asarray(control_scale, dtype=np.float32)),
+            disturbance_center=jnp.asarray(np.asarray(disturbance_center, dtype=np.float32)),
+            disturbance_scale=jnp.asarray(np.asarray(disturbance_scale, dtype=np.float32)),
+            param_scale=jnp.asarray(np.asarray(param_scale, dtype=np.float32)),
+            state_mask=jnp.asarray(np.asarray(state_mask, dtype=np.float32)),
+            control_mask=jnp.asarray(np.asarray(control_mask, dtype=np.float32)),
+            disturbance_mask=jnp.asarray(np.asarray(disturbance_mask, dtype=np.float32)),
+            param_mask=jnp.asarray(np.asarray(param_mask, dtype=np.float32)),
+            state_dim=jnp.asarray(np.asarray(state_dim, dtype=np.int32)),
+            control_dim=jnp.asarray(np.asarray(control_dim, dtype=np.int32)),
+            disturbance_dim=jnp.asarray(np.asarray(disturbance_dim, dtype=np.int32)),
+            param_dim=jnp.asarray(np.asarray(param_dim, dtype=np.int32)),
+            system_descriptor=jnp.asarray(np.asarray(descriptor, dtype=np.float32)),
+        )
 
     def split(self, val_fraction: float = 0.2) -> tuple["MultiSystemTrajectoryDataset", "MultiSystemTrajectoryDataset"]:
         """Split each constituent system dataset independently."""
@@ -135,6 +273,7 @@ class MultiSystemTrajectoryDataset:
                 "disturbance": self.max_disturbance_dim,
                 "param": self.max_param_dim,
             },
+            "metadata": self.metadata.to_dict(),
             "systems": [
                 {
                     "system_id": self.system_ids[entry.source.name],
