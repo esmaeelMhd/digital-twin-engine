@@ -2447,6 +2447,7 @@ def _categorize(desc: str) -> str:
 
 
 _IDEA_MARKER_RE = re.compile(r"\[idea:([a-zA-Z0-9_.-]+)\]")
+MAX_STRUCTURED_IDEA_CRASH_ATTEMPTS = 2
 
 
 def _extract_idea_id_from_description(description: str) -> str:
@@ -2483,11 +2484,19 @@ def _history_has_attempted_idea(
     *,
     resolved_only: bool = False,
 ) -> bool:
+    crash_count = 0
     for row in history:
-        if resolved_only and row.get("status") not in ("keep", "discard"):
+        if not _row_matches_structured_idea(row, idea):
             continue
-        if _row_matches_structured_idea(row, idea):
+        if not resolved_only:
             return True
+        status = row.get("status")
+        if status in ("keep", "discard"):
+            return True
+        if status == "crash":
+            crash_count += 1
+    if resolved_only and crash_count >= MAX_STRUCTURED_IDEA_CRASH_ATTEMPTS:
+        return True
     return False
 
 
@@ -2627,9 +2636,11 @@ def enforce_selected_idea_on_proposal(
     if target_file and execution_mode != "multi_file":
         coerced["file"] = target_file
     elif target_file and execution_mode == "multi_file":
-        files = _normalize_text_list(coerced.get("files"))
-        if target_file not in files:
-            coerced["files"] = [target_file] + files
+        raw_files = coerced.get("files")
+        if isinstance(raw_files, list) and raw_files and all(isinstance(item, str) for item in raw_files):
+            files = _normalize_text_list(raw_files)
+            if target_file not in files:
+                coerced["files"] = [target_file] + files
     return coerced
 
 
