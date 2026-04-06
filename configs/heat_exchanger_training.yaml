@@ -23,6 +23,8 @@ model:
     weight: 0.05
     hidden_dim: 64
     n_layers: 2
+  neural_cde:
+    enabled: true
   # state_dim, control_dim, disturbance_dim, param_dim are read from system spec
 
 sde:

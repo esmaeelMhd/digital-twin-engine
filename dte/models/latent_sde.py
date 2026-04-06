@@ -237,6 +237,8 @@ class LatentSDE(eqx.Module):
 
     drift: LatentDrift
     diffusion: LatentDiffusion
+    cde_layers: list
+    cde_out: eqx.nn.Linear | None
     solver_gate_layers: list
     solver_gate_out: eqx.nn.Linear
     correction_layers: list
@@ -248,6 +250,8 @@ class LatentSDE(eqx.Module):
     learned_solver_enabled: bool = eqx.field(static=True)
     self_correcting_enabled: bool = eqx.field(static=True)
     self_correcting_weight: float = eqx.field(static=True)
+    neural_cde_enabled: bool = eqx.field(static=True)
+    path_dim: int = eqx.field(static=True)
 
     # Store nominal disturbance for fallback (when no disturbance is provided)
     nominal_disturbance: Float[Array, "disturbance_dim"]
@@ -270,6 +274,7 @@ class LatentSDE(eqx.Module):
         param_scale: float = 0.1,
         nominal_disturbance: list | None = None,
         linear_prior_enabled: bool = True,
+        neural_cde_enabled: bool = False,
         learned_solver_enabled: bool = False,
         solver_hidden_dim: int = 64,
         solver_layers: int = 2,
@@ -280,7 +285,7 @@ class LatentSDE(eqx.Module):
         *,
         key: PRNGKeyArray,
     ):
-        key_drift, key_diff, key_solver, key_correction = jax.random.split(key, 4)
+        key_drift, key_diff, key_cde, key_solver, key_correction = jax.random.split(key, 5)
 
         self.drift = LatentDrift(
             latent_dim=latent_dim,
@@ -321,6 +326,29 @@ class LatentSDE(eqx.Module):
         self.learned_solver_enabled = learned_solver_enabled
         self.self_correcting_enabled = self_correcting_enabled
         self.self_correcting_weight = self_correcting_weight
+        self.neural_cde_enabled = neural_cde_enabled
+        self.path_dim = 1 + control_dim + disturbance_dim
+
+        cde_input_dim = latent_dim + control_dim + disturbance_dim + param_dim
+        if self.neural_cde_enabled:
+            cde_keys = jax.random.split(key_cde, drift_layers + 1)
+            self.cde_layers = []
+            for i in range(drift_layers):
+                in_dim = cde_input_dim if i == 0 else hidden_dim
+                self.cde_layers.append(eqx.nn.Linear(in_dim, hidden_dim, key=cde_keys[i]))
+            cde_out = eqx.nn.Linear(
+                hidden_dim + cde_input_dim,
+                latent_dim * self.path_dim,
+                key=cde_keys[-1],
+            )
+            self.cde_out = eqx.tree_at(
+                lambda l: (l.weight, l.bias),
+                cde_out,
+                (cde_out.weight * 0.01, cde_out.bias * 0.01),
+            )
+        else:
+            self.cde_layers = []
+            self.cde_out = None
 
         solver_input_dim = latent_dim + control_dim + disturbance_dim + param_dim + 1
         solver_keys = jax.random.split(key_solver, solver_layers + 1)
@@ -368,6 +396,39 @@ class LatentSDE(eqx.Module):
             self.nominal_disturbance = jnp.zeros(disturbance_dim)
         else:
             self.nominal_disturbance = jnp.zeros(0)
+
+    def control_path_term(
+        self,
+        z: Float[Array, "latent_dim"],
+        u: Float[Array, "control_dim"],
+        d: Float[Array, "disturbance_dim"],
+        c: Float[Array, "param_dim"],
+        path_derivative: Float[Array, "path_dim"],
+    ) -> Float[Array, "latent_dim"]:
+        """Neural CDE control-path contribution evaluated on a rollout interval."""
+        if not self.neural_cde_enabled or self.cde_out is None:
+            return jnp.zeros_like(z)
+
+        u_norm = (u - self.drift.control_center) * self.drift.control_scale
+        c_norm = c * self.drift.param_scale
+        parts = [z, u_norm]
+        if d.shape[-1] > 0:
+            d_norm = (
+                d - self.drift.disturbance_center[: d.shape[-1]]
+            ) * self.drift.disturbance_scale[: d.shape[-1]]
+            parts.append(d_norm)
+        parts.append(c_norm)
+        x = jnp.concatenate(parts)
+        x_in = x
+
+        for i, layer in enumerate(self.cde_layers):
+            h = jax.nn.gelu(layer(x))
+            x = x + h if i > 0 else h
+
+        matrix = self.cde_out(jnp.concatenate([x, x_in])).reshape(
+            self.latent_dim, self.path_dim
+        )
+        return matrix @ path_derivative
 
     def _get_disturbances(
         self,
@@ -526,6 +587,40 @@ class LatentSDE(eqx.Module):
     ) -> Float[Array, "n_steps latent_dim"]:
         """Deterministic forward pass using only drift (no noise)."""
         disturbances = self._get_disturbances(ts, disturbances, z0.dtype)
+        if self.neural_cde_enabled:
+            dt_steps = ts[1:] - ts[:-1]
+
+            def step_fn(z_prev, step_inputs):
+                u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
+                safe_dt = jnp.maximum(step_dt, jnp.asarray(1e-6, dtype=step_dt.dtype))
+                u_mid = 0.5 * (u_t + u_tp1)
+                d_mid = 0.5 * (d_t + d_tp1)
+                path_terms = [
+                    jnp.array([1.0], dtype=z_prev.dtype),
+                    (u_tp1 - u_t) / safe_dt,
+                ]
+                if self.disturbance_dim > 0:
+                    path_terms.append((d_tp1 - d_t) / safe_dt)
+                path_derivative = jnp.concatenate(path_terms)
+
+                def total_drift(z_curr):
+                    return self.drift(z_curr, u_mid, d_mid, params) + self.control_path_term(
+                        z_curr, u_mid, d_mid, params, path_derivative
+                    )
+
+                k1 = total_drift(z_prev)
+                z_euler = z_prev + step_dt * k1
+                k2 = total_drift(z_euler)
+                z_next = z_prev + 0.5 * step_dt * (k1 + k2)
+                return z_next, z_next
+
+            _, z_hist = jax.lax.scan(
+                step_fn,
+                z0,
+                (controls[:-1], controls[1:], disturbances[:-1], disturbances[1:], dt_steps),
+            )
+            return jnp.concatenate([z0[None, :], z_hist], axis=0)
+
         control_interp = diffrax.LinearInterpolation(ts, controls)
 
         if self.disturbance_dim > 0:

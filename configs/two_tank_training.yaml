@@ -22,6 +22,8 @@ model:
     weight: 0.05
     hidden_dim: 64
     n_layers: 2
+  neural_cde:
+    enabled: true
 
 sde:
   solver: "euler_heun"

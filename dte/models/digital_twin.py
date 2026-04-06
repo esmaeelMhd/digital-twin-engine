@@ -128,6 +128,7 @@ class DigitalTwin(eqx.Module):
         simulator_prior_enabled = bool(simulator_prior_cfg.get("enabled", False))
         hard_residual_only = bool(simulator_prior_cfg.get("hard_residual_only", False))
         correction_cfg = model_config.get("self_correcting_policy", {})
+        neural_cde_cfg = model_config.get("neural_cde", {})
 
         latent_sde = LatentSDE(
             latent_dim=latent_dim,
@@ -146,6 +147,7 @@ class DigitalTwin(eqx.Module):
             param_scale=param_scale,
             nominal_disturbance=nominal_disturbance,
             linear_prior_enabled=not (simulator_prior_enabled and hard_residual_only),
+            neural_cde_enabled=bool(neural_cde_cfg.get("enabled", False)),
             learned_solver_enabled=bool(model_config.get("learned_solver", {}).get("enabled", False)),
             solver_hidden_dim=int(model_config.get("learned_solver", {}).get("hidden_dim", 64)),
             solver_layers=int(model_config.get("learned_solver", {}).get("n_layers", 2)),
@@ -272,9 +274,24 @@ class DigitalTwin(eqx.Module):
                 u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
                 u_mid = 0.5 * (u_t + u_tp1)
                 d_mid = 0.5 * (d_t + d_tp1)
-                k1 = self.latent_drift(z_prev, u_t, d_t, params, step_dt)
+                safe_dt = jnp.maximum(step_dt, jnp.asarray(1e-6, dtype=step_dt.dtype))
+                path_terms = [
+                    jnp.array([1.0], dtype=z_prev.dtype),
+                    (u_tp1 - u_t) / safe_dt,
+                ]
+                if self.latent_sde.disturbance_dim > 0:
+                    path_terms.append((d_tp1 - d_t) / safe_dt)
+                path_derivative = jnp.concatenate(path_terms)
+
+                def total_drift(z_curr):
+                    base = self.latent_drift(z_curr, u_mid, d_mid, params, step_dt)
+                    return base + self.latent_sde.control_path_term(
+                        z_curr, u_mid, d_mid, params, path_derivative
+                    )
+
+                k1 = total_drift(z_prev)
                 z_euler = z_prev + step_dt * k1
-                k2 = self.latent_drift(z_euler, u_tp1, d_tp1, params, step_dt)
+                k2 = total_drift(z_euler)
                 z_heun = z_prev + 0.5 * step_dt * (k1 + k2)
                 local_error = z_heun - z_euler
                 alpha = self.latent_sde.solver_gate(
