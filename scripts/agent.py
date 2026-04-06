@@ -1900,13 +1900,89 @@ def _normalize_codex_reasoning_effort(thinking_level: str | None) -> str | None:
     return None
 
 
+def _find_codex_bin() -> str | None:
+    """Locate the Codex CLI binary.
+
+    Priority:
+    1. `CODEX_BIN` env override
+    2. `codex` on PATH
+    3. VS Code ChatGPT extension install under ~/.vscode-server/extensions
+    """
+
+    env_override = os.environ.get("CODEX_BIN", "").strip()
+    if env_override:
+        candidate = Path(env_override).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+
+    path_hit = shutil.which("codex")
+    if path_hit:
+        return path_hit
+
+    extension_root = Path.home() / ".vscode-server" / "extensions"
+    candidates = sorted(
+        extension_root.glob("openai.chatgpt-*/bin/*/codex"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _make_codex_schema_optional(schema: dict) -> dict:
+    return {
+        "anyOf": [
+            schema,
+            {"type": "null"},
+        ]
+    }
+
+
+def _to_codex_response_schema(schema: dict | None) -> dict | None:
+    """Convert our permissive JSON schema into Codex/OpenAI structured-output form.
+
+    Codex requires every object property to appear in `required`. Optional fields
+    must therefore be represented as nullable and still listed as required.
+    """
+
+    if not isinstance(schema, dict):
+        return schema
+
+    converted = dict(schema)
+    schema_type = converted.get("type")
+
+    if schema_type == "object" and isinstance(converted.get("properties"), dict):
+        original_required = set(converted.get("required", []) or [])
+        properties: dict[str, dict] = {}
+        required: list[str] = []
+        for key, value in converted["properties"].items():
+            child = _to_codex_response_schema(value if isinstance(value, dict) else {"type": "string"})
+            if key not in original_required:
+                child = _make_codex_schema_optional(child)
+            properties[key] = child
+            required.append(key)
+        converted["properties"] = properties
+        converted["required"] = required
+        if "additionalProperties" not in converted:
+            converted["additionalProperties"] = False
+        return converted
+
+    if schema_type == "array" and isinstance(converted.get("items"), dict):
+        converted["items"] = _to_codex_response_schema(converted["items"])
+        return converted
+
+    return converted
+
+
 def _ensure_codex_login() -> tuple[bool, str]:
     global _CODEX_LOGIN_STATUS
 
     if _CODEX_LOGIN_STATUS is not None:
         return _CODEX_LOGIN_STATUS
 
-    codex_bin = shutil.which("codex")
+    codex_bin = _find_codex_bin()
     if not codex_bin:
         _CODEX_LOGIN_STATUS = (False, "codex CLI not found on PATH")
         return _CODEX_LOGIN_STATUS
@@ -1939,10 +2015,11 @@ def call_codex(
 ) -> str | None:
     del temperature  # Codex CLI does not expose a stable temperature flag here.
 
-    codex_bin = shutil.which("codex")
+    codex_bin = _find_codex_bin()
     if not codex_bin:
-        log_to_file("ERROR Codex CLI: codex executable not found on PATH")
-        return None
+        raise FatalAPIError(
+            "Codex CLI executable not found. Set CODEX_BIN or install/login through the VS Code ChatGPT extension."
+        )
 
     logged_in, status_text = _ensure_codex_login()
     if not logged_in:
@@ -1976,7 +2053,8 @@ def call_codex(
             if reasoning_effort is not None:
                 cmd.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
             if response_schema is not None:
-                schema_path.write_text(json.dumps(response_schema), encoding="utf-8")
+                codex_schema = _to_codex_response_schema(response_schema)
+                schema_path.write_text(json.dumps(codex_schema), encoding="utf-8")
                 cmd.extend(["--output-schema", str(schema_path)])
             cmd.append("-")
 
@@ -2369,6 +2447,7 @@ def _categorize(desc: str) -> str:
 
 
 _IDEA_MARKER_RE = re.compile(r"\[idea:([a-zA-Z0-9_.-]+)\]")
+MAX_STRUCTURED_IDEA_CRASH_ATTEMPTS = 2
 
 
 def _extract_idea_id_from_description(description: str) -> str:
@@ -2405,11 +2484,19 @@ def _history_has_attempted_idea(
     *,
     resolved_only: bool = False,
 ) -> bool:
+    crash_count = 0
     for row in history:
-        if resolved_only and row.get("status") not in ("keep", "discard"):
+        if not _row_matches_structured_idea(row, idea):
             continue
-        if _row_matches_structured_idea(row, idea):
+        if not resolved_only:
             return True
+        status = row.get("status")
+        if status in ("keep", "discard"):
+            return True
+        if status == "crash":
+            crash_count += 1
+    if resolved_only and crash_count >= MAX_STRUCTURED_IDEA_CRASH_ATTEMPTS:
+        return True
     return False
 
 
@@ -2549,9 +2636,11 @@ def enforce_selected_idea_on_proposal(
     if target_file and execution_mode != "multi_file":
         coerced["file"] = target_file
     elif target_file and execution_mode == "multi_file":
-        files = _normalize_text_list(coerced.get("files"))
-        if target_file not in files:
-            coerced["files"] = [target_file] + files
+        raw_files = coerced.get("files")
+        if isinstance(raw_files, list) and raw_files and all(isinstance(item, str) for item in raw_files):
+            files = _normalize_text_list(raw_files)
+            if target_file not in files:
+                coerced["files"] = [target_file] + files
     return coerced
 
 
@@ -4314,7 +4403,7 @@ def _run_text_mode(
                             call_llm,
                             patch_input,
                             fail_streak=fail_streak,
-                            phase="reason",
+                            phase="apply",
                             response_schema=MULTI_FILE_PATCH_RESPONSE_JSON_SCHEMA,
                             cached_content=reason_cached_content,
                         )
