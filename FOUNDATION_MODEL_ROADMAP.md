@@ -66,7 +66,22 @@ Do not spend round 2 on the ideas that already lost unless they are combined wit
 
 ## Ideas That Need A New Universal Harness
 
-These are not comparable inside the current bounded moonshot harness because that harness still trains one model per target system.
+This repo now has the first real shared-checkpoint universal baseline:
+- [dte/data/multi_system_dataset.py](dte/data/multi_system_dataset.py)
+- [configs/training_universal.yaml](configs/training_universal.yaml)
+- [scripts/train_universal.py](scripts/train_universal.py)
+- [scripts/evaluate_universal.py](scripts/evaluate_universal.py)
+- [dte/models/universal_digital_twin.py](dte/models/universal_digital_twin.py)
+
+The new universal model also includes typed grouped state semantics:
+- `cstr`: concentration + thermal
+- `heat_exchanger`: thermal
+- `two_tank`: inventory
+
+The bounded `scripts/autoresearch.py` harness still does not operate on one shared
+checkpoint, so universal moonshots remain a manual loop for now.
+
+These ideas are not comparable inside the current single-system bounded moonshot harness because that harness still trains one model per target system.
 
 Ideas in this bucket:
 - `universal_joint_training`
@@ -107,6 +122,23 @@ Build a shared-checkpoint universal training path:
 3. `contrastive_cross_system_latent_alignment`
    - add contrastive loss only after the universal backbone exists
    - positives should be based on operating-regime similarity or augmentations, not random cross-system pairings
+
+### New Round-1 Grouped Universal Search
+
+Before the broader universal ideas above, run a local search around the new grouped
+shared backbone:
+
+- [configs/training_universal_round1.yaml](configs/training_universal_round1.yaml)
+- [configs/autoresearch_universal_grouped_round1.yaml](configs/autoresearch_universal_grouped_round1.yaml)
+- [auto_research_universal_grouped_round1_ideas.yaml](auto_research_universal_grouped_round1_ideas.yaml)
+- [UNIVERSAL_GROUPED_MOONSHOT_ROUND1.md](UNIVERSAL_GROUPED_MOONSHOT_ROUND1.md)
+
+Round-1 focus:
+1. descriptor-conditioned modulation of grouped tokens
+2. better pooling over grouped state tokens
+3. lightweight kind-specific decoder heads
+4. grouped control gating
+5. optional grouped masked pretraining
 
 ### Metric For Universal Runs
 

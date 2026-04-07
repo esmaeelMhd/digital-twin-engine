@@ -1,0 +1,42 @@
+# Manual round-1 grouped-universal moonshot campaign.
+# This is not consumed by scripts/autoresearch.py. It is an operating contract
+# for manual shared-checkpoint experiments using `train_universal.py` and
+# `evaluate_universal.py`.
+
+research:
+  workspace_dir: outputs/autoresearch_universal_grouped_round1
+  metric_name: aggregate_metric_value
+  metric_mode: min
+  aggregate_method: geometric_mean_per_system_total_loss
+  baseline_config: configs/training_universal_round1.yaml
+  baseline_output_dir: outputs/autoresearch_universal_grouped_round1/baseline
+  promote_if_improved: true
+
+universal:
+  train_script: scripts/train_universal.py
+  eval_script: scripts/evaluate_universal.py
+  training_config: configs/training_universal_round1.yaml
+  shared_checkpoint: true
+
+agent:
+  execution_mode: multi_file
+  context_file: auto_research_moonshot.md
+  modifiable_paths:
+    - dte/models/universal_digital_twin.py
+    - dte/training/universal_trainer.py
+    - dte/data/multi_system_dataset.py
+    - configs/training_universal_round1.yaml
+  forbidden_paths:
+    - scripts/autoresearch.py
+    - dte/autoresearch
+    - scripts/agent.py
+    - dte/models/digital_twin.py
+    - dte/models/latent_sde.py
+    - dte/training/trainer.py
+    - dte/physics
+    - dte/simulators
+    - scripts/train.py
+    - scripts/evaluate.py
+    - auto_research.md
+    - auto_research_moonshot.md
+    - program.md

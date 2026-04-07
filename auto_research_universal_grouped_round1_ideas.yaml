@@ -1,0 +1,83 @@
+ideas:
+  - id: grouped_systemspec_film_conditioning
+    priority: 10
+    title: Add FiLM-style conditioning from the SystemSpec descriptor onto grouped state tokens, the group mixer, and the decoder.
+    rationale: >
+      The universal model already has system embeddings and typed state groups, but
+      descriptor information is only added as a flat context vector. A cleaner
+      foundation-model move is to use descriptor-driven modulation inside the group
+      encoder and decoder so shared parameters can specialize by system semantics
+      without hardcoded branches.
+    files:
+      - dte/models/universal_digital_twin.py
+      - configs/training_universal_round1.yaml
+
+  - id: attention_pool_over_state_groups
+    priority: 20
+    title: Replace mean pooling over state-group tokens with learned attention pooling.
+    rationale: >
+      The current grouped universal encoder compresses state groups with a simple
+      average. That treats thermal, concentration, and inventory groups as equally
+      important at every step. Learned attention pooling is a small architectural
+      change that can improve cross-system transfer without rewriting the backbone.
+    files:
+      - dte/models/universal_digital_twin.py
+
+  - id: per_group_kind_decoder_heads
+    priority: 30
+    title: Give each state-group kind a lightweight residual decoder head on top of the shared decoder.
+    rationale: >
+      Thermal, concentration, and inventory quantities should not decode with the
+      exact same bias even when they share the same latent dynamics. A tiny
+      kind-specific residual head preserves sharing while letting reconstruction
+      biases differ where they should.
+    files:
+      - dte/models/universal_digital_twin.py
+      - configs/training_universal_round1.yaml
+
+  - id: control_conditioned_group_gates
+    priority: 40
+    title: Add control-conditioned gates that modulate each state-group token before latent pooling.
+    rationale: >
+      Controls do not affect all physical groups equally. Flow manipulations should
+      amplify inventory or thermal pathways differently depending on the system.
+      Gating group tokens with controls is a targeted way to improve operator-like
+      conditioning without redesigning the rollout core.
+    files:
+      - dte/models/universal_digital_twin.py
+
+  - id: grouped_masked_pretraining
+    priority: 50
+    title: Add a short masked group-reconstruction pretraining phase before the main universal rollout training.
+    rationale: >
+      This is the lowest-risk self-supervised extension that fits the new grouped
+      universal architecture. It can teach the grouped encoder/decoder to recover
+      missing thermal, concentration, and inventory channels before the harder
+      long-horizon mixed-system optimization begins.
+    files:
+      - dte/training/universal_trainer.py
+      - configs/training_universal_round1.yaml
+
+  - id: contrastive_cross_system_latent_alignment
+    priority: 80
+    title: Add a contrastive auxiliary loss over latent summaries, using within-system augmentations as positives and cross-system random pairs as negatives.
+    rationale: >
+      This is the first truly foundation-style alignment objective in the universal
+      path, but it is riskier than the local grouped-model improvements above. Run
+      it only after the simpler grouped universal changes have been tested.
+    files:
+      - dte/training/universal_trainer.py
+      - configs/training_universal_round1.yaml
+
+skipped_for_round1:
+  - universal_joint_training
+  - universal_systemspec_conditioned_backbone
+  - score_based_trajectory_diffusion
+  - latent_trajectory_diffusion_foundation_model
+  - trajectory_level_score_based_diffusion
+  - compositional_process_graph_hypernetwork
+  - manifold_constrained_latent_space
+notes:
+  - Round 1 is intentionally local to the new grouped universal backbone.
+  - Keep single-system model code untouched.
+  - Compare experiments by `aggregate_metric_value` from `summary.json`; lower is better.
