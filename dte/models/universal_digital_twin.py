@@ -56,6 +56,12 @@ class UniversalDigitalTwin(eqx.Module):
 
     state_group_encoder: ResidualMLP
     state_group_mixer: ResidualMLP
+    group_token_film_scale: eqx.nn.Linear
+    group_token_film_shift: eqx.nn.Linear
+    group_mixer_film_scale: eqx.nn.Linear
+    group_mixer_film_shift: eqx.nn.Linear
+    decoder_film_scale: eqx.nn.Linear
+    decoder_film_shift: eqx.nn.Linear
     encoder_mean: ResidualMLP
     encoder_logvar: ResidualMLP
     decoder: ResidualMLP
@@ -157,12 +163,18 @@ class UniversalDigitalTwin(eqx.Module):
             key_group_kind,
             key_group_enc,
             key_group_mix,
+            key_group_token_film_scale,
+            key_group_token_film_shift,
+            key_group_mixer_film_scale,
+            key_group_mixer_film_shift,
+            key_decoder_film_scale,
+            key_decoder_film_shift,
             key_enc_mean,
             key_enc_logvar,
             key_dec,
             key_drift,
             key_cde,
-        ) = jax.random.split(key, 10)
+        ) = jax.random.split(key, 16)
         self.system_embedding_table = (
             0.02 * jax.random.normal(key_embed, (n_systems, system_embedding_dim))
         )
@@ -212,6 +224,36 @@ class UniversalDigitalTwin(eqx.Module):
             state_group_token_dim,
             state_group_coupling_layers,
             key=key_group_mix,
+        )
+        self.group_token_film_scale = eqx.nn.Linear(
+            self.descriptor_dim,
+            state_group_token_dim,
+            key=key_group_token_film_scale,
+        )
+        self.group_token_film_shift = eqx.nn.Linear(
+            self.descriptor_dim,
+            state_group_token_dim,
+            key=key_group_token_film_shift,
+        )
+        self.group_mixer_film_scale = eqx.nn.Linear(
+            self.descriptor_dim,
+            state_group_token_dim,
+            key=key_group_mixer_film_scale,
+        )
+        self.group_mixer_film_shift = eqx.nn.Linear(
+            self.descriptor_dim,
+            state_group_token_dim,
+            key=key_group_mixer_film_shift,
+        )
+        self.decoder_film_scale = eqx.nn.Linear(
+            self.descriptor_dim,
+            self.max_state_dim,
+            key=key_decoder_film_scale,
+        )
+        self.decoder_film_shift = eqx.nn.Linear(
+            self.descriptor_dim,
+            self.max_state_dim,
+            key=key_decoder_film_shift,
         )
         self.encoder_mean = ResidualMLP(
             encoder_input_dim,
@@ -338,6 +380,20 @@ class UniversalDigitalTwin(eqx.Module):
         descriptor = self.descriptor_table[system_id]
         return learned + jax.nn.gelu(self.descriptor_proj(descriptor))
 
+    def _apply_descriptor_film(
+        self,
+        values: Array,
+        descriptor: Array,
+        scale_layer: eqx.nn.Linear,
+        shift_layer: eqx.nn.Linear,
+    ) -> Array:
+        scale = 1.0 + 0.1 * jax.nn.tanh(scale_layer(descriptor))
+        shift = 0.1 * jax.nn.tanh(shift_layer(descriptor))
+        if values.ndim == 2:
+            scale = scale[None, :]
+            shift = shift[None, :]
+        return values * scale + shift
+
     def _state_group_tables(self, system_id: Array) -> tuple[Array, Array, Array, Array]:
         group_masks = self.state_group_mask_table[system_id]
         group_active = self.state_group_active_table[system_id]
@@ -352,6 +408,7 @@ class UniversalDigitalTwin(eqx.Module):
         system_id: Array,
     ) -> Array:
         context = self._system_context(system_id)
+        descriptor = self.descriptor_table[system_id]
         group_masks, group_active, _, group_kind_embeddings = self._state_group_tables(system_id)
         effective_masks = group_masks * state_mask[None, :]
         context_tokens = jnp.broadcast_to(context, (self.max_state_groups, context.shape[0]))
@@ -365,6 +422,12 @@ class UniversalDigitalTwin(eqx.Module):
             axis=-1,
         )
         group_tokens = jax.vmap(self.state_group_encoder)(group_features)
+        group_tokens = self._apply_descriptor_film(
+            group_tokens,
+            descriptor,
+            self.group_token_film_scale,
+            self.group_token_film_shift,
+        )
         group_tokens = group_tokens * group_active[:, None]
 
         denom = jnp.maximum(jnp.sum(group_active), jnp.asarray(1.0, dtype=group_tokens.dtype))
@@ -381,6 +444,13 @@ class UniversalDigitalTwin(eqx.Module):
         )
         mixed_updates = jax.vmap(self.state_group_mixer)(coupling_features)
         mixed_tokens = group_tokens + mixed_updates * group_active[:, None]
+        mixed_tokens = self._apply_descriptor_film(
+            mixed_tokens,
+            descriptor,
+            self.group_mixer_film_scale,
+            self.group_mixer_film_shift,
+        )
+        mixed_tokens = mixed_tokens * group_active[:, None]
         return jnp.sum(mixed_tokens, axis=0) / denom
 
     def normalize_states(self, states: Array, system_ids: Array) -> Array:
@@ -466,6 +536,7 @@ class UniversalDigitalTwin(eqx.Module):
         system_id: Array,
     ) -> Array:
         context = self._system_context(system_id)
+        descriptor = self.descriptor_table[system_id]
         group_masks, group_active, _, group_kind_embeddings = self._state_group_tables(system_id)
         effective_masks = group_masks * state_mask[None, :]
         shared_features = jnp.concatenate(
@@ -491,6 +562,12 @@ class UniversalDigitalTwin(eqx.Module):
             axis=-1,
         )
         group_outputs = jax.vmap(self.decoder)(group_features)
+        group_outputs = self._apply_descriptor_film(
+            group_outputs,
+            descriptor,
+            self.decoder_film_scale,
+            self.decoder_film_shift,
+        )
         decoded = jnp.sum(group_outputs * effective_masks * group_active[:, None], axis=0)
         return decoded * state_mask
 
@@ -652,6 +729,12 @@ class UniversalDigitalTwin(eqx.Module):
         return {
             "state_group_encoder": count_params(self.state_group_encoder),
             "state_group_mixer": count_params(self.state_group_mixer),
+            "group_token_film_scale": count_params(self.group_token_film_scale),
+            "group_token_film_shift": count_params(self.group_token_film_shift),
+            "group_mixer_film_scale": count_params(self.group_mixer_film_scale),
+            "group_mixer_film_shift": count_params(self.group_mixer_film_shift),
+            "decoder_film_scale": count_params(self.decoder_film_scale),
+            "decoder_film_shift": count_params(self.decoder_film_shift),
             "encoder_mean": count_params(self.encoder_mean),
             "encoder_logvar": count_params(self.encoder_logvar),
             "decoder": count_params(self.decoder),
