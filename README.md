@@ -143,6 +143,15 @@ python scripts/train_universal.py \
   --seed 42
 ```
 
+For a faster bounded baseline:
+
+```bash
+python scripts/train_universal.py \
+  --config configs/training_universal_baseline_fast.yaml \
+  --output_dir outputs/universal_fast_baseline/ \
+  --seed 42
+```
+
 This trains one shared checkpoint across `cstr`, `heat_exchanger`, and `two_tank`
 using:
 - mixed-system padded batches

@@ -170,6 +170,15 @@ python scripts/train_universal.py \
   --seed 42
 ```
 
+For a bounded baseline or fast experiment loop, use the capped config instead:
+
+```bash
+python scripts/train_universal.py \
+  --config configs/training_universal_baseline_fast.yaml \
+  --output_dir outputs/universal_fast_baseline/ \
+  --seed 42
+```
+
 Evaluate the shared checkpoint:
 
 ```bash
