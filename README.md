@@ -39,6 +39,7 @@ graph LR
 5. **PhysicsLoss** — Pluggable interface for system-specific conservation law residuals
 6. **System Registry** — Instantiates any registered system by name from a YAML config
 7. **Physics Registry** — Resolves system-specific physics losses and evaluation diagnostics
+8. **Universal Backbone** — Shared grouped-state model for one checkpoint across multiple systems
 
 **Total Parameters:** ~120K (optimised for RTX 4070)
 
@@ -51,6 +52,11 @@ graph LR
 | `two_tank` | 2 (h1, h2) | 2 (q_in, valve) | 2 (d1, d2) | Mass balance |
 
 New systems require a YAML config, a simulator class, an optional physics loss, and registry entries — no changes to the core model or trainer.
+
+The shared universal path also uses typed state groups declared in each system config:
+- `cstr`: concentration + thermal
+- `heat_exchanger`: thermal
+- `two_tank`: inventory
 
 ## Installation
 
@@ -126,7 +132,33 @@ Training includes stochastic SDE path, curriculum learning, and teacher-forcing 
 System-specific training configs are also included for simpler 2-state systems:
 `configs/heat_exchanger_training.yaml` and `configs/two_tank_training.yaml`.
 
-### 4. Few-Shot Transfer Learning
+### 4. Train a Shared Universal Baseline
+
+```bash
+python scripts/train_universal.py \
+  --config configs/training_universal.yaml \
+  --output_dir outputs/universal_v1/ \
+  --n_epochs 20 \
+  --batch_size 128 \
+  --seed 42
+```
+
+This trains one shared checkpoint across `cstr`, `heat_exchanger`, and `two_tank`
+using:
+- mixed-system padded batches
+- typed state groups from the system configs
+- a grouped universal backbone in `dte/models/universal_digital_twin.py`
+
+Evaluate that shared checkpoint with:
+
+```bash
+python scripts/evaluate_universal.py \
+  --model_path outputs/universal_v1/best_model.eqx \
+  --config outputs/universal_v1/config.yaml \
+  --output_dir outputs/universal_v1/eval/
+```
+
+### 5. Few-Shot Transfer Learning
 
 ```bash
 # Fine-tune only the decoder on 5 new-unit trajectories
@@ -138,7 +170,7 @@ python scripts/train.py \
   --n_epochs 10
 ```
 
-### 5. Evaluate
+### 6. Evaluate
 
 ```bash
 python scripts/evaluate.py \
@@ -149,7 +181,16 @@ python scripts/evaluate.py \
   --output_dir outputs/cstr_v1/eval/
 ```
 
-### 6. Run MPC
+For the shared universal checkpoint:
+
+```bash
+python scripts/evaluate_universal.py \
+  --model_path outputs/universal_v1/best_model.eqx \
+  --config outputs/universal_v1/config.yaml \
+  --output_dir outputs/universal_v1/eval/
+```
+
+### 7. Run MPC
 
 ```bash
 python scripts/run_mpc.py \
@@ -159,7 +200,7 @@ python scripts/run_mpc.py \
   --compare_pid
 ```
 
-### 7. Deploy the REST API
+### 8. Deploy the REST API
 
 ```bash
 # Local
@@ -172,7 +213,7 @@ docker compose up api
 Endpoints: `GET /health`, `POST /predict`, `POST /ensemble`, `POST /steady_state`.
 Optional API-key auth: set `DTE_API_KEY` in the environment.
 
-### 8. Launch the Dashboard
+### 9. Launch the Dashboard
 
 ```bash
 streamlit run app/dashboard.py
@@ -180,7 +221,7 @@ streamlit run app/dashboard.py
 
 Optional password protection: set `STREAMLIT_AUTH_PASSWORD` in the environment.
 
-### 9. Autoresearch Loop
+### 10. Autoresearch Loop
 
 ```bash
 python scripts/autoresearch.py \
@@ -198,6 +239,7 @@ digital-twin-engine/
 │   ├── heat_exchanger_default.yaml   # Heat exchanger system spec
 │   ├── heat_exchanger_training.yaml  # HX-specific training hyper-params
 │   ├── training_default.yaml         # Model + training configuration
+│   ├── training_universal.yaml       # Shared universal-checkpoint training config
 │   └── mpc_default.yaml
 ├── dte/
 │   ├── simulators/
@@ -209,12 +251,14 @@ digital-twin-engine/
 │   │   ├── dataset.py        # TrajectoryDataset (HDF5 loader)
 │   │   ├── generation.py     # CSTR-specific data generator
 │   │   ├── generation_generic.py # Generic data generator (any ProcessSimulator)
+│   │   ├── multi_system_dataset.py # Mixed-system padded dataset for universal training
 │   │   └── real_data.py      # Real-world plant data ingestion pipeline
 │   ├── models/
 │   │   ├── encoder.py        # VAE encoder (SystemSpec-driven normalisation)
 │   │   ├── latent_sde.py     # Drift + diffusion networks
 │   │   ├── decoder.py        # Decoder with configurable output constraints
-│   │   └── digital_twin.py   # Composed DigitalTwin module
+│   │   ├── digital_twin.py   # Composed single-system DigitalTwin module
+│   │   └── universal_digital_twin.py # Shared grouped-state universal model
 │   ├── physics/
 │   │   ├── base.py           # PhysicsLoss ABC + NullPhysicsLoss
 │   │   ├── registry.py       # Physics loss / diagnostic registry
@@ -223,6 +267,7 @@ digital-twin-engine/
 │   ├── training/
 │   │   ├── losses.py         # LossComputer (generic, pluggable PhysicsLoss)
 │   │   ├── trainer.py        # Trainer with SDE training, curriculum, teacher-forcing
+│   │   ├── universal_trainer.py # Shared-checkpoint multi-system trainer
 │   │   ├── online.py         # OnlineAdapter — sliding-window fine-tune + drift detection
 │   │   └── transfer.py       # FewShotAdapter, zero_shot_eval, apply_finetune_mask
 │   ├── api/
@@ -235,7 +280,9 @@ digital-twin-engine/
 │   ├── generate_data.py      # Data generation (any registered system)
 │   ├── ingest_real_data.py   # Real plant data ingestion CLI
 │   ├── train.py              # Training (+ --finetune transfer-learning mode)
+│   ├── train_universal.py    # Shared universal-checkpoint training
 │   ├── evaluate.py
+│   ├── evaluate_universal.py # Shared universal-checkpoint evaluation
 │   └── run_mpc.py
 ├── app/
 │   ├── dashboard.py          # Streamlit dashboard (with optional auth)

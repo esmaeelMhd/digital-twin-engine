@@ -54,6 +54,8 @@ class ResidualMLP(eqx.Module):
 class UniversalDigitalTwin(eqx.Module):
     """Shared padded digital twin trained across multiple systems."""
 
+    state_group_encoder: ResidualMLP
+    state_group_mixer: ResidualMLP
     encoder_mean: ResidualMLP
     encoder_logvar: ResidualMLP
     decoder: ResidualMLP
@@ -75,14 +77,21 @@ class UniversalDigitalTwin(eqx.Module):
     disturbance_mask_table: Float[Array, "n_systems max_disturbance_dim"]
     param_mask_table: Float[Array, "n_systems max_param_dim"]
     descriptor_table: Float[Array, "n_systems descriptor_dim"]
+    state_group_mask_table: Float[Array, "n_systems max_state_groups max_state_dim"]
+    state_group_active_table: Float[Array, "n_systems max_state_groups"]
+    state_group_kind_id_table: Array
+    state_group_kind_embedding_table: Float[Array, "n_group_kinds group_kind_dim"]
 
     latent_dim: int = eqx.field(static=True)
     max_state_dim: int = eqx.field(static=True)
     max_control_dim: int = eqx.field(static=True)
     max_disturbance_dim: int = eqx.field(static=True)
     max_param_dim: int = eqx.field(static=True)
+    max_state_groups: int = eqx.field(static=True)
     system_embedding_dim: int = eqx.field(static=True)
     descriptor_dim: int = eqx.field(static=True)
+    group_kind_dim: int = eqx.field(static=True)
+    state_group_token_dim: int = eqx.field(static=True)
     path_dim: int = eqx.field(static=True)
     use_system_spec_embedding: bool = eqx.field(static=True)
     neural_cde_enabled: bool = eqx.field(static=True)
@@ -95,6 +104,10 @@ class UniversalDigitalTwin(eqx.Module):
         latent_dim: int,
         shared_hidden_dim: int,
         system_embedding_dim: int,
+        state_group_token_dim: int,
+        group_kind_dim: int,
+        state_group_encoder_layers: int,
+        state_group_coupling_layers: int,
         n_encoder_layers: int,
         n_decoder_layers: int,
         n_drift_layers: int,
@@ -110,8 +123,11 @@ class UniversalDigitalTwin(eqx.Module):
         self.max_control_dim = int(metadata.control_center.shape[1])
         self.max_disturbance_dim = int(metadata.disturbance_center.shape[1])
         self.max_param_dim = int(metadata.param_scale.shape[1])
+        self.max_state_groups = int(metadata.state_group_mask.shape[1])
         self.system_embedding_dim = system_embedding_dim
         self.descriptor_dim = int(metadata.system_descriptor.shape[1])
+        self.group_kind_dim = group_kind_dim
+        self.state_group_token_dim = state_group_token_dim
         self.path_dim = 1 + self.max_control_dim + self.max_disturbance_dim
         self.use_system_spec_embedding = use_system_spec_embedding
         self.neural_cde_enabled = neural_cde_enabled
@@ -129,13 +145,29 @@ class UniversalDigitalTwin(eqx.Module):
         self.disturbance_mask_table = metadata.disturbance_mask
         self.param_mask_table = metadata.param_mask
         self.descriptor_table = metadata.system_descriptor
+        self.state_group_mask_table = metadata.state_group_mask
+        self.state_group_active_table = metadata.state_group_active
+        self.state_group_kind_id_table = metadata.state_group_kind_id
 
         n_systems = len(metadata.system_names)
-        key_embed, key_desc, key_enc_mean, key_enc_logvar, key_dec, key_drift, key_cde = (
-            jax.random.split(key, 7)
-        )
+        n_group_kinds = len(metadata.state_group_kind_names)
+        (
+            key_embed,
+            key_desc,
+            key_group_kind,
+            key_group_enc,
+            key_group_mix,
+            key_enc_mean,
+            key_enc_logvar,
+            key_dec,
+            key_drift,
+            key_cde,
+        ) = jax.random.split(key, 10)
         self.system_embedding_table = (
             0.02 * jax.random.normal(key_embed, (n_systems, system_embedding_dim))
+        )
+        self.state_group_kind_embedding_table = (
+            0.02 * jax.random.normal(key_group_kind, (n_group_kinds, group_kind_dim))
         )
 
         if self.use_system_spec_embedding:
@@ -148,17 +180,15 @@ class UniversalDigitalTwin(eqx.Module):
             self.descriptor_proj = None
 
         context_dim = system_embedding_dim
-        encoder_input_dim = (
-            2 * self.max_state_dim
-            + 2 * self.max_control_dim
-            + 2 * self.max_param_dim
-            + context_dim
-        )
+        group_encoder_input_dim = 2 * self.max_state_dim + context_dim + group_kind_dim
+        group_coupling_input_dim = 2 * state_group_token_dim + context_dim + group_kind_dim
+        encoder_input_dim = state_group_token_dim + 2 * self.max_control_dim + 2 * self.max_param_dim + context_dim
         decoder_input_dim = (
             latent_dim
             + 2 * self.max_control_dim
             + 2 * self.max_param_dim
             + self.max_state_dim
+            + group_kind_dim
             + context_dim
         )
         drift_input_dim = (
@@ -169,6 +199,20 @@ class UniversalDigitalTwin(eqx.Module):
             + context_dim
         )
 
+        self.state_group_encoder = ResidualMLP(
+            group_encoder_input_dim,
+            shared_hidden_dim,
+            state_group_token_dim,
+            state_group_encoder_layers,
+            key=key_group_enc,
+        )
+        self.state_group_mixer = ResidualMLP(
+            group_coupling_input_dim,
+            shared_hidden_dim,
+            state_group_token_dim,
+            state_group_coupling_layers,
+            key=key_group_mix,
+        )
         self.encoder_mean = ResidualMLP(
             encoder_input_dim,
             shared_hidden_dim,
@@ -222,6 +266,15 @@ class UniversalDigitalTwin(eqx.Module):
             latent_dim=int(model_cfg.get("latent_dim", 32)),
             shared_hidden_dim=int(model_cfg.get("shared_hidden_dim", 128)),
             system_embedding_dim=int(model_cfg.get("system_embedding_dim", 32)),
+            state_group_token_dim=int(
+                model_cfg.get(
+                    "state_group_token_dim",
+                    model_cfg.get("shared_hidden_dim", 128),
+                )
+            ),
+            group_kind_dim=int(model_cfg.get("state_group_kind_dim", 16)),
+            state_group_encoder_layers=int(model_cfg.get("state_group_encoder_layers", 2)),
+            state_group_coupling_layers=int(model_cfg.get("state_group_coupling_layers", 2)),
             n_encoder_layers=int(model_cfg.get("encoder_layers", 3)),
             n_decoder_layers=int(model_cfg.get("decoder_layers", 3)),
             n_drift_layers=int(model_cfg.get("drift_layers", 3)),
@@ -270,9 +323,12 @@ class UniversalDigitalTwin(eqx.Module):
                 m.disturbance_mask_table,
                 m.param_mask_table,
                 m.descriptor_table,
+                m.state_group_mask_table,
+                m.state_group_active_table,
+                m.state_group_kind_id_table,
             ),
             spec,
-            replace=(False,) * 12,
+            replace=(False,) * 15,
         )
 
     def _system_context(self, system_id: Array) -> Array:
@@ -281,6 +337,51 @@ class UniversalDigitalTwin(eqx.Module):
             return learned
         descriptor = self.descriptor_table[system_id]
         return learned + jax.nn.gelu(self.descriptor_proj(descriptor))
+
+    def _state_group_tables(self, system_id: Array) -> tuple[Array, Array, Array, Array]:
+        group_masks = self.state_group_mask_table[system_id]
+        group_active = self.state_group_active_table[system_id]
+        group_kind_ids = self.state_group_kind_id_table[system_id]
+        group_kind_embeddings = self.state_group_kind_embedding_table[group_kind_ids]
+        return group_masks, group_active, group_kind_ids, group_kind_embeddings
+
+    def _encode_state_groups(
+        self,
+        state_norm: Array,
+        state_mask: Array,
+        system_id: Array,
+    ) -> Array:
+        context = self._system_context(system_id)
+        group_masks, group_active, _, group_kind_embeddings = self._state_group_tables(system_id)
+        effective_masks = group_masks * state_mask[None, :]
+        context_tokens = jnp.broadcast_to(context, (self.max_state_groups, context.shape[0]))
+        group_features = jnp.concatenate(
+            [
+                effective_masks * state_norm[None, :],
+                effective_masks,
+                group_kind_embeddings,
+                context_tokens,
+            ],
+            axis=-1,
+        )
+        group_tokens = jax.vmap(self.state_group_encoder)(group_features)
+        group_tokens = group_tokens * group_active[:, None]
+
+        denom = jnp.maximum(jnp.sum(group_active), jnp.asarray(1.0, dtype=group_tokens.dtype))
+        pooled = jnp.sum(group_tokens, axis=0) / denom
+        pooled_tokens = jnp.broadcast_to(pooled, group_tokens.shape)
+        coupling_features = jnp.concatenate(
+            [
+                group_tokens,
+                pooled_tokens,
+                group_kind_embeddings,
+                context_tokens,
+            ],
+            axis=-1,
+        )
+        mixed_updates = jax.vmap(self.state_group_mixer)(coupling_features)
+        mixed_tokens = group_tokens + mixed_updates * group_active[:, None]
+        return jnp.sum(mixed_tokens, axis=0) / denom
 
     def normalize_states(self, states: Array, system_ids: Array) -> Array:
         center = self.state_center_table[system_ids]
@@ -331,11 +432,11 @@ class UniversalDigitalTwin(eqx.Module):
         system_id: Array,
         key: PRNGKeyArray | None = None,
     ) -> tuple[Array, Array, Array]:
+        state_summary = self._encode_state_groups(state_norm, state_mask, system_id)
         context = self._system_context(system_id)
         features = jnp.concatenate(
             [
-                state_norm * state_mask,
-                state_mask,
+                state_summary,
                 control_norm * control_mask,
                 control_mask,
                 params_scaled * param_mask,
@@ -365,18 +466,33 @@ class UniversalDigitalTwin(eqx.Module):
         system_id: Array,
     ) -> Array:
         context = self._system_context(system_id)
-        features = jnp.concatenate(
+        group_masks, group_active, _, group_kind_embeddings = self._state_group_tables(system_id)
+        effective_masks = group_masks * state_mask[None, :]
+        shared_features = jnp.concatenate(
             [
                 z,
                 control_norm * control_mask,
                 control_mask,
                 params_scaled * param_mask,
                 param_mask,
-                state_mask,
                 context,
             ]
         )
-        return self.decoder(features) * state_mask
+        shared_features = jnp.broadcast_to(
+            shared_features,
+            (self.max_state_groups, shared_features.shape[0]),
+        )
+        group_features = jnp.concatenate(
+            [
+                shared_features,
+                effective_masks,
+                group_kind_embeddings,
+            ],
+            axis=-1,
+        )
+        group_outputs = jax.vmap(self.decoder)(group_features)
+        decoded = jnp.sum(group_outputs * effective_masks * group_active[:, None], axis=0)
+        return decoded * state_mask
 
     def control_path_term(
         self,
@@ -534,6 +650,8 @@ class UniversalDigitalTwin(eqx.Module):
             return sum(x.size for x in jax.tree.leaves(eqx.filter(module, eqx.is_array)))
 
         return {
+            "state_group_encoder": count_params(self.state_group_encoder),
+            "state_group_mixer": count_params(self.state_group_mixer),
             "encoder_mean": count_params(self.encoder_mean),
             "encoder_logvar": count_params(self.encoder_logvar),
             "decoder": count_params(self.decoder),

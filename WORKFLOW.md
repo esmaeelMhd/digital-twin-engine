@@ -156,7 +156,41 @@ python scripts/train.py \
   --output_dir outputs/two_tank_v1/
 ```
 
-### 3.3 Few-Shot Transfer Learning (Fine-tune a Pre-trained Model)
+### 3.3 Train a Shared Universal Baseline
+
+Train one checkpoint across all registered systems listed in
+`configs/training_universal.yaml`:
+
+```bash
+python scripts/train_universal.py \
+  --config configs/training_universal.yaml \
+  --output_dir outputs/universal_v1/ \
+  --n_epochs 20 \
+  --batch_size 128 \
+  --seed 42
+```
+
+Evaluate the shared checkpoint:
+
+```bash
+python scripts/evaluate_universal.py \
+  --model_path outputs/universal_v1/best_model.eqx \
+  --config outputs/universal_v1/config.yaml \
+  --output_dir outputs/universal_v1/eval/
+```
+
+The universal path uses:
+- Mixed-system padded batches from `dte/data/multi_system_dataset.py`
+- Typed state groups from each system config (`thermal`, `concentration`, `inventory`, etc.)
+- One shared grouped universal model in `dte/models/universal_digital_twin.py`
+
+Outputs:
+- `outputs/universal_v1/best_model.eqx` — best mixed validation checkpoint
+- `outputs/universal_v1/final_model.eqx` — final epoch
+- `outputs/universal_v1/summary.json` — mixed + per-system validation summary
+- `outputs/universal_v1/eval/summary.json` — evaluation summary
+
+### 3.4 Few-Shot Transfer Learning (Fine-tune a Pre-trained Model)
 
 Freeze the encoder and latent SDE; update only the decoder on N new-unit trajectories:
 
@@ -172,7 +206,7 @@ python scripts/train.py \
 
 Options for `--finetune_part`: `decoder` (default), `encoder`, `all`.
 
-### 3.4 Autoresearch Loop
+### 3.5 Autoresearch Loop
 
 ```bash
 python scripts/autoresearch.py \
@@ -206,6 +240,15 @@ python scripts/evaluate.py \
   --system_config configs/cstr_default.yaml \
   --data_dir data/cstr/ \
   --output_dir outputs/cstr_v1/eval/
+```
+
+For a shared universal checkpoint:
+
+```bash
+python scripts/evaluate_universal.py \
+  --model_path outputs/universal_v1/best_model.eqx \
+  --config outputs/universal_v1/config.yaml \
+  --output_dir outputs/universal_v1/eval/
 ```
 
 Generated artefacts:

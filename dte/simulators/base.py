@@ -42,6 +42,15 @@ class NormalizationSpec:
 
 
 @dataclass
+class StateGroupSpec:
+    """Semantic grouping for state channels in shared multi-system models."""
+
+    name: str
+    kind: str
+    indices: List[int]
+
+
+@dataclass
 class SystemSpec:
     """Complete specification of a process system.
 
@@ -69,6 +78,61 @@ class SystemSpec:
     # Operating range info used by dashboard / MPC scripts
     control_ranges: Dict[str, List[float]] = field(default_factory=dict)
     disturbance_ranges: Dict[str, List[float]] = field(default_factory=dict)
+    state_groups: List[StateGroupSpec] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.state_groups:
+            self.state_groups = [
+                StateGroupSpec(
+                    name="all_states",
+                    kind="generic",
+                    indices=list(range(self.state_dim)),
+                )
+            ]
+
+        if len(self.state_names) != self.state_dim:
+            raise ValueError(
+                f"{self.name}: expected {self.state_dim} state names, got {len(self.state_names)}."
+            )
+        if len(self.control_names) != self.control_dim:
+            raise ValueError(
+                f"{self.name}: expected {self.control_dim} control names, got {len(self.control_names)}."
+            )
+        if len(self.disturbance_names) != self.disturbance_dim:
+            raise ValueError(
+                f"{self.name}: expected {self.disturbance_dim} disturbance names, "
+                f"got {len(self.disturbance_names)}."
+            )
+
+        covered: set[int] = set()
+        normalized_groups: List[StateGroupSpec] = []
+        for group in self.state_groups:
+            indices = [int(idx) for idx in group.indices]
+            if not indices:
+                raise ValueError(f"{self.name}: state group '{group.name}' cannot be empty.")
+            for idx in indices:
+                if idx < 0 or idx >= self.state_dim:
+                    raise ValueError(
+                        f"{self.name}: state group '{group.name}' index {idx} is out of range "
+                        f"for state_dim={self.state_dim}."
+                    )
+                if idx in covered:
+                    raise ValueError(
+                        f"{self.name}: state index {idx} appears in multiple state groups."
+                    )
+                covered.add(idx)
+            normalized_groups.append(
+                StateGroupSpec(name=str(group.name), kind=str(group.kind), indices=indices)
+            )
+
+        missing = [idx for idx in range(self.state_dim) if idx not in covered]
+        if missing:
+            raise ValueError(
+                f"{self.name}: state_groups must cover every state index exactly once; "
+                f"missing indices: {missing}."
+            )
+
+        self.state_groups = normalized_groups
 
     def state_center_array(self) -> Float[Array, "state_dim"]:
         return jnp.array(self.normalization.state_center)

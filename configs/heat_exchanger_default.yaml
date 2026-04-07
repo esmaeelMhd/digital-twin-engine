@@ -1,6 +1,10 @@
 system:
   name: heat_exchanger
   state_names: [T_hot, T_cold]
+  state_groups:
+    - name: temperatures
+      kind: thermal
+      indices: [0, 1]
   control_names: [F_hot, F_cold]
   disturbance_names: [T_hot_in, T_cold_in]
   normalization:

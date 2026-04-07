@@ -5,6 +5,10 @@ model:
   latent_dim: 32
   shared_hidden_dim: 128
   system_embedding_dim: 32
+  state_group_token_dim: 96
+  state_group_kind_dim: 16
+  state_group_encoder_layers: 2
+  state_group_coupling_layers: 2
   encoder_layers: 3
   decoder_layers: 3
   drift_layers: 3

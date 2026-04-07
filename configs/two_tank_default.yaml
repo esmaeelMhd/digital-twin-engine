@@ -1,6 +1,10 @@
 system:
   name: two_tank
   state_names: [h1, h2]
+  state_groups:
+    - name: levels
+      kind: inventory
+      indices: [0, 1]
   control_names: [q_in, valve]
   disturbance_names: [d1, d2]
   normalization:

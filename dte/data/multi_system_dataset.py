@@ -66,17 +66,24 @@ class UniversalSystemMetadata:
     disturbance_dim: Array
     param_dim: Array
     system_descriptor: Array
+    state_group_kind_names: tuple[str, ...]
+    state_group_mask: Array
+    state_group_active: Array
+    state_group_kind_id: Array
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe snapshot of the metadata layout."""
         return {
             "system_names": list(self.system_names),
+            "state_group_kind_names": list(self.state_group_kind_names),
             "shape": {
                 "state_center": list(self.state_center.shape),
                 "control_center": list(self.control_center.shape),
                 "disturbance_center": list(self.disturbance_center.shape),
                 "param_scale": list(self.param_scale.shape),
                 "system_descriptor": list(self.system_descriptor.shape),
+                "state_group_mask": list(self.state_group_mask.shape),
+                "state_group_active": list(self.state_group_active.shape),
             },
         }
 
@@ -113,7 +120,9 @@ class MultiSystemTrajectoryDataset:
         self.max_control_dim = max(entry.spec.control_dim for entry in self.entries)
         self.max_disturbance_dim = max(entry.spec.disturbance_dim for entry in self.entries)
         self.max_param_dim = max(entry.spec.param_dim for entry in self.entries)
+        self.max_state_groups = max(len(entry.spec.state_groups) for entry in self.entries)
         self._n_samples = sum(entry.dataset.n_samples for entry in self.entries)
+        self.state_group_kind_names = self._collect_state_group_kinds()
         self._metadata = self._build_metadata()
 
     @classmethod
@@ -157,12 +166,14 @@ class MultiSystemTrajectoryDataset:
         max_control = max(self.max_control_dim, 1)
         max_disturbance = max(self.max_disturbance_dim, 1)
         max_param = max(self.max_param_dim, 1)
+        max_groups = max(self.max_state_groups, 1)
         norm = spec.normalization
         return [
             spec.state_dim / max_state,
             spec.control_dim / max_control,
             spec.disturbance_dim / max_disturbance,
             spec.param_dim / max_param,
+            len(spec.state_groups) / max_groups,
             *self._pad(norm.state_center, self.max_state_dim, 0.0),
             *self._pad(norm.state_scale, self.max_state_dim, 1.0),
             *self._pad(norm.control_center, self.max_control_dim, 0.0),
@@ -171,6 +182,16 @@ class MultiSystemTrajectoryDataset:
             *self._pad(norm.disturbance_scale, self.max_disturbance_dim, 1.0),
             norm.param_scale,
         ]
+
+    def _collect_state_group_kinds(self) -> tuple[str, ...]:
+        kinds: list[str] = []
+        for entry in self.entries:
+            for group in entry.spec.state_groups:
+                if group.kind not in kinds:
+                    kinds.append(group.kind)
+        if "generic" not in kinds:
+            kinds.append("generic")
+        return tuple(kinds)
 
     def _build_metadata(self) -> UniversalSystemMetadata:
         state_center = []
@@ -189,6 +210,12 @@ class MultiSystemTrajectoryDataset:
         disturbance_dim = []
         param_dim = []
         descriptor = []
+        state_group_mask = []
+        state_group_active = []
+        state_group_kind_id = []
+        kind_to_id = {
+            name: idx for idx, name in enumerate(self.state_group_kind_names)
+        }
 
         for entry in self.entries:
             spec = entry.spec
@@ -223,6 +250,20 @@ class MultiSystemTrajectoryDataset:
             param_dim.append(spec.param_dim)
             descriptor.append(self._descriptor_for_spec(spec))
 
+            system_group_mask = np.zeros(
+                (self.max_state_groups, self.max_state_dim),
+                dtype=np.float32,
+            )
+            system_group_active = np.zeros((self.max_state_groups,), dtype=np.float32)
+            system_group_kind_id = np.zeros((self.max_state_groups,), dtype=np.int32)
+            for group_idx, group in enumerate(spec.state_groups):
+                system_group_mask[group_idx, np.asarray(group.indices, dtype=np.int32)] = 1.0
+                system_group_active[group_idx] = 1.0
+                system_group_kind_id[group_idx] = kind_to_id[group.kind]
+            state_group_mask.append(system_group_mask)
+            state_group_active.append(system_group_active)
+            state_group_kind_id.append(system_group_kind_id)
+
         return UniversalSystemMetadata(
             system_names=tuple(self.system_names),
             state_center=jnp.asarray(np.asarray(state_center, dtype=np.float32)),
@@ -241,6 +282,10 @@ class MultiSystemTrajectoryDataset:
             disturbance_dim=jnp.asarray(np.asarray(disturbance_dim, dtype=np.int32)),
             param_dim=jnp.asarray(np.asarray(param_dim, dtype=np.int32)),
             system_descriptor=jnp.asarray(np.asarray(descriptor, dtype=np.float32)),
+            state_group_kind_names=self.state_group_kind_names,
+            state_group_mask=jnp.asarray(np.asarray(state_group_mask, dtype=np.float32)),
+            state_group_active=jnp.asarray(np.asarray(state_group_active, dtype=np.float32)),
+            state_group_kind_id=jnp.asarray(np.asarray(state_group_kind_id, dtype=np.int32)),
         )
 
     def split(self, val_fraction: float = 0.2) -> tuple["MultiSystemTrajectoryDataset", "MultiSystemTrajectoryDataset"]:
@@ -288,6 +333,14 @@ class MultiSystemTrajectoryDataset:
                         "disturbance": entry.spec.disturbance_dim,
                         "param": entry.spec.param_dim,
                     },
+                    "state_groups": [
+                        {
+                            "name": group.name,
+                            "kind": group.kind,
+                            "indices": list(group.indices),
+                        }
+                        for group in entry.spec.state_groups
+                    ],
                 }
                 for entry in self.entries
             ],

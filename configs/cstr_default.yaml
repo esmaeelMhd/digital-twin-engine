@@ -1,6 +1,13 @@
 system:
   name: cstr
   state_names: [Ca, Cb, T, Tc]
+  state_groups:
+    - name: species
+      kind: concentration
+      indices: [0, 1]
+    - name: temperatures
+      kind: thermal
+      indices: [2, 3]
   control_names: [F_in, Tc_in]
   disturbance_names: [Ca_in, T_in]
   normalization:

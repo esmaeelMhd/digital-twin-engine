@@ -6,8 +6,29 @@ from dte.simulators.base import (
     DecoderConstraint,
     NormalizationSpec,
     ProcessSimulator,
+    StateGroupSpec,
     SystemSpec,
 )
+
+
+def _parse_state_groups(sys: dict, state_dim: int) -> list[StateGroupSpec]:
+    raw_groups = sys.get("state_groups")
+    if not raw_groups:
+        return [
+            StateGroupSpec(
+                name="all_states",
+                kind="generic",
+                indices=list(range(state_dim)),
+            )
+        ]
+    return [
+        StateGroupSpec(
+            name=str(group["name"]),
+            kind=str(group.get("kind", "generic")),
+            indices=[int(idx) for idx in group.get("indices", [])],
+        )
+        for group in raw_groups
+    ]
 
 
 def _build_cstr_spec(system_config: dict) -> SystemSpec:
@@ -76,6 +97,7 @@ def _build_cstr_spec(system_config: dict) -> SystemSpec:
         default_nominal_disturbance=default_nominal_disturbance,
         control_ranges={k: list(v) for k, v in ops.items() if k in control_names},
         disturbance_ranges={k: list(v) for k, v in ops.items() if k in disturbance_names},
+        state_groups=_parse_state_groups(sys, state_dim=4),
     )
 
 
@@ -141,6 +163,7 @@ def _build_heat_exchanger_spec(system_config: dict) -> SystemSpec:
         default_nominal_disturbance=default_nominal_disturbance,
         control_ranges={k: list(v) for k, v in ops.items() if k in control_names},
         disturbance_ranges={k: list(v) for k, v in ops.items() if k in disturbance_names},
+        state_groups=_parse_state_groups(sys, state_dim=2),
     )
 
 
@@ -205,6 +228,7 @@ def _build_two_tank_spec(system_config: dict) -> SystemSpec:
         default_nominal_disturbance=default_nominal_disturbance,
         control_ranges={k: list(v) for k, v in ops.items() if k in control_names},
         disturbance_ranges={k: list(v) for k, v in ops.items() if k in disturbance_names},
+        state_groups=_parse_state_groups(sys, state_dim=2),
     )
 
 
