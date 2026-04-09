@@ -33,7 +33,7 @@ training:
 pretraining:
   enabled: true
   epochs: 1
-  batches_per_epoch: 25
+  batches_per_epoch: 50
   reconstruction_weight: 1.0
   kl_weight: 0.0001
 
