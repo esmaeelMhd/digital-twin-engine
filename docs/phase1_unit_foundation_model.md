@@ -117,6 +117,22 @@ evaluation:
 - control-sensitivity and uncertainty utility tests
 - universal trainer multi-horizon loss test
 
+## Reusable Smoke Script
+
+Use [scripts/smoke_phase1.py](/home/ismayil/digital-twin-engine/scripts/smoke_phase1.py) to rerun the small end-to-end Phase 1 matrix:
+
+```bash
+source .venv/bin/activate
+python scripts/smoke_phase1.py
+```
+
+Useful overrides:
+
+- `--workspace_dir outputs/phase1_smoke/manual_run`
+- `--n_trajectories 12 --n_steps 20`
+- `--skip_data_generation` to reuse an existing workspace
+- `--dry_run` to inspect the generated configs and planned commands
+
 ## Remaining Phase 1 Follow-Up
 
 The thin-slice implementation is in place, but future iterations can still deepen:
