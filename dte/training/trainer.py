@@ -86,7 +86,7 @@ class Trainer:
             optax.adam(schedule, b1=0.95, b2=0.99),
         )
         
-        self.opt_state = self.optimizer.init(eqx.filter(model, eqx.is_array))
+        self.opt_state = self.optimizer.init(eqx.filter(model, eqx.is_inexact_array))
         
         # Training history
         self.history = {
@@ -332,7 +332,7 @@ class Trainer:
         
         # Update model
         updates, new_opt_state = self.optimizer.update(
-            grads, opt_state, eqx.filter(model, eqx.is_array)
+            grads, opt_state, eqx.filter(model, eqx.is_inexact_array)
         )
         new_model = eqx.apply_updates(model, updates)
         

@@ -146,7 +146,8 @@ class TrajectoryDataset:
         if seq_len is not None:
             native_len = batch["states"].shape[1]
             effective_len = min(seq_len, native_len)
-            batch = {k: v[:, :effective_len] if v.ndim >= 2 else v for k, v in batch.items()}
+            for name in ("states", "controls", "disturbances", "t"):
+                batch[name] = batch[name][:, :effective_len]
 
         return batch
 
