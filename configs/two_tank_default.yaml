@@ -1,12 +1,66 @@
 system:
   name: two_tank
+  unit_type: coupled_tanks
+  family: hydraulic
+  subtype: two_tank_level
+  law_tags: [mass_balance, gravity_flow]
   state_names: [h1, h2]
   state_groups:
     - name: levels
       kind: inventory
       indices: [0, 1]
+  state_channels:
+    - name: h1
+      role: inventory
+      unit: m
+      lower_bound: 0.0
+      upper_bound: 5.0
+      conserved_group: levels
+    - name: h2
+      role: inventory
+      unit: m
+      lower_bound: 0.0
+      upper_bound: 5.0
+      conserved_group: levels
   control_names: [q_in, valve]
+  control_channels:
+    - name: q_in
+      role: flow
+      unit: m^3/min
+      lower_bound: 0.3
+      upper_bound: 1.2
+    - name: valve
+      role: actuator_state
+      lower_bound: 0.65
+      upper_bound: 1.0
   disturbance_names: [d1, d2]
+  disturbance_channels:
+    - name: d1
+      role: flow
+      unit: m^3/min
+      lower_bound: 0.0
+      upper_bound: 0.15
+    - name: d2
+      role: flow
+      unit: m^3/min
+      lower_bound: 0.0
+      upper_bound: 0.1
+  parameter_descriptors:
+    - name: A1
+      unit: m^2
+      law_tag: geometry
+    - name: A2
+      unit: m^2
+      law_tag: geometry
+    - name: k12
+      unit: m^2.5/min
+      law_tag: hydraulics
+    - name: kout
+      unit: m^2.5/min
+      law_tag: hydraulics
+    - name: h_max
+      unit: m
+      law_tag: constraints
   normalization:
     state_center: [1.5, 1.0]
     state_scale: [0.5, 0.5]

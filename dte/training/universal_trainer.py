@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset
 from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.physics.constraints import bound_penalty, positivity_penalty
 
 
 def _non_finite_loss_names(losses: Dict[str, float]) -> list[str]:
@@ -76,6 +77,9 @@ class UniversalTrainer:
         self.history = {"train_loss": [], "val_loss": [], "step": []}
         self.last_train_summary: Dict[str, float | int | bool | str | None] = {}
         self.pretraining_steps = 0
+        self.state_lower_bound_table = train_dataset.metadata.state_lower_bound
+        self.state_upper_bound_table = train_dataset.metadata.state_upper_bound
+        self.state_role_id_table = train_dataset.metadata.state_role_id
 
     def _normalize_batch(self, model: UniversalDigitalTwin, batch: Dict[str, Array]) -> Dict[str, Array]:
         system_ids = batch["system_id"]
@@ -108,6 +112,76 @@ class UniversalTrainer:
             "system_id": system_ids,
             "t": batch["t"],
         }
+
+    def _predict_k_step_for_sample(
+        self,
+        model: UniversalDigitalTwin,
+        state_traj: Array,
+        control_traj: Array,
+        disturbance_traj: Array,
+        params_scaled: Array,
+        ts: Array,
+        state_mask: Array,
+        control_mask: Array,
+        disturbance_mask: Array,
+        param_mask: Array,
+        system_id: Array,
+        horizon: int,
+    ) -> Array:
+        window_count = state_traj.shape[0] - horizon
+        z_curr = jax.vmap(
+            lambda state_t, control_t: model.encode(
+                state_t,
+                params_scaled,
+                control_t,
+                state_mask,
+                control_mask,
+                param_mask,
+                system_id,
+                None,
+            )[1]
+        )(
+            state_traj[:window_count],
+            control_traj[:window_count],
+        )
+        for step in range(horizon):
+            dt_window = ts[step + 1 : step + 1 + window_count] - ts[step : step + window_count]
+            z_curr = jax.vmap(
+                lambda z_prev, u_t, u_tp1, d_t, d_tp1, dt_t: model.latent_step(
+                    z_prev,
+                    u_t,
+                    u_tp1,
+                    d_t,
+                    d_tp1,
+                    params_scaled,
+                    control_mask,
+                    disturbance_mask,
+                    param_mask,
+                    system_id,
+                    dt_t,
+                )
+            )(
+                z_curr,
+                control_traj[step : step + window_count],
+                control_traj[step + 1 : step + 1 + window_count],
+                disturbance_traj[step : step + window_count],
+                disturbance_traj[step + 1 : step + 1 + window_count],
+                dt_window,
+            )
+        return jax.vmap(
+            lambda z_t, control_t: model.decode(
+                z_t,
+                params_scaled,
+                control_t,
+                state_mask,
+                control_mask,
+                param_mask,
+                system_id,
+            )
+        )(
+            z_curr,
+            control_traj[horizon : horizon + window_count],
+        )
 
     def compute_loss(
         self,
@@ -252,6 +326,75 @@ class UniversalTrainer:
             pred_next - normalized["states_norm"][:, 1:, :],
             next_state_mask,
         )
+        k_step_losses: dict[int, Array] = {}
+        multi_horizon_cfg = self.config.get("multi_horizon", {})
+        horizons = tuple(
+            sorted(
+                {
+                    int(horizon)
+                    for horizon in multi_horizon_cfg.get("k_steps", [])
+                    if int(horizon) > 1 and int(horizon) < normalized["states_norm"].shape[1]
+                }
+            )
+        )
+        for horizon in horizons:
+            pred_k_step = jax.vmap(
+                lambda state_traj, control_traj, disturbance_traj, params_scaled, ts, state_mask, control_mask, disturbance_mask, param_mask, system_id: self._predict_k_step_for_sample(
+                    model,
+                    state_traj,
+                    control_traj,
+                    disturbance_traj,
+                    params_scaled,
+                    ts,
+                    state_mask,
+                    control_mask,
+                    disturbance_mask,
+                    param_mask,
+                    system_id,
+                    horizon,
+                )
+            )(
+                normalized["states_norm"],
+                normalized["controls_norm"],
+                normalized["disturbances_norm"],
+                normalized["params_scaled"],
+                normalized["t"],
+                normalized["state_mask"],
+                normalized["control_mask"],
+                normalized["disturbance_mask"],
+                normalized["param_mask"],
+                normalized["system_id"],
+            )
+            k_step_mask = (
+                normalized["time_mask"][:, horizon:, None]
+                * normalized["state_mask"][:, None, :]
+            )
+            k_step_losses[horizon] = _masked_huber(
+                pred_k_step - normalized["states_norm"][:, horizon:, :],
+                k_step_mask,
+            )
+
+        if k_step_losses:
+            loss_k_step = jnp.mean(jnp.asarray(list(k_step_losses.values())))
+        else:
+            loss_k_step = jnp.asarray(0.0, dtype=loss_one_step.dtype)
+
+        pred_states_phys = model.denormalize_states(
+            pred_states,
+            normalized["system_id"],
+        )
+        lower = self.state_lower_bound_table[normalized["system_id"]][:, None, :]
+        upper = self.state_upper_bound_table[normalized["system_id"]][:, None, :]
+        loss_state_bounds = bound_penalty(
+            pred_states_phys,
+            lower=lower,
+            upper=upper,
+            mask=state_time_mask,
+        )
+        loss_positivity = positivity_penalty(
+            pred_states_phys,
+            mask=state_time_mask,
+        )
         kl = -0.5 * jnp.sum(1 + z_logvars - z_means ** 2 - jnp.exp(z_logvars), axis=-1)
         loss_kl = jnp.mean(kl)
 
@@ -260,15 +403,23 @@ class UniversalTrainer:
             float(weights.get("reconstruction", 1.0)) * loss_recon
             + float(weights.get("trajectory", 1.0)) * loss_traj
             + float(weights.get("one_step", 0.0)) * loss_one_step
+            + float(weights.get("k_step", 0.0)) * loss_k_step
             + float(weights.get("kl", 0.0)) * loss_kl
+            + float(weights.get("state_bounds", 0.0)) * loss_state_bounds
+            + float(weights.get("positivity", 0.0)) * loss_positivity
         )
         loss_dict = {
             "total": total_loss,
             "reconstruction": loss_recon,
             "trajectory": loss_traj,
             "one_step": loss_one_step,
+            "k_step": loss_k_step,
             "kl": loss_kl,
+            "state_bounds": loss_state_bounds,
+            "positivity": loss_positivity,
         }
+        for horizon, loss_value in k_step_losses.items():
+            loss_dict[f"k_step_{horizon}"] = loss_value
         return total_loss, loss_dict
 
     def compute_group_pretraining_loss(
@@ -392,7 +543,16 @@ class UniversalTrainer:
         system_probabilities: Array | None = None,
     ) -> Dict[str, float]:
         batch_size = min(int(self.config["training"]["batch_size"]), dataset.n_samples)
-        losses: Dict[str, list] = {"total": [], "reconstruction": [], "trajectory": [], "one_step": [], "kl": []}
+        losses: Dict[str, list] = {
+            "total": [],
+            "reconstruction": [],
+            "trajectory": [],
+            "one_step": [],
+            "k_step": [],
+            "kl": [],
+            "state_bounds": [],
+            "positivity": [],
+        }
         for _ in range(n_batches):
             key, sample_key, loss_key = jax.random.split(key, 3)
             batch = dataset.sample_batch(
@@ -525,7 +685,16 @@ class UniversalTrainer:
                 timed_out = True
                 break
 
-            train_losses: Dict[str, list] = {"total": [], "reconstruction": [], "trajectory": [], "one_step": [], "kl": []}
+            train_losses: Dict[str, list] = {
+                "total": [],
+                "reconstruction": [],
+                "trajectory": [],
+                "one_step": [],
+                "k_step": [],
+                "kl": [],
+                "state_bounds": [],
+                "positivity": [],
+            }
             pbar = tqdm(range(n_batches), desc="Universal Training")
             for batch_index in pbar:
                 if deadline is not None and time.perf_counter() >= deadline:

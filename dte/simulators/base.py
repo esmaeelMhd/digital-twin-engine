@@ -1,11 +1,20 @@
-"""Base classes and SystemSpec for process system abstraction."""
+"""Base classes and unit specifications for process system abstraction."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import jax.numpy as jnp
 from jaxtyping import Array, Float
+
+from dte.core.state_schema import (
+    ParameterDescriptor,
+    SignalChannel,
+    StateChannel,
+    TopologyPort,
+    infer_signal_channels,
+    infer_state_channels,
+)
 
 
 @dataclass
@@ -157,6 +166,107 @@ class SystemSpec:
 
     def default_nominal_disturbance_array(self) -> Float[Array, "disturbance_dim"]:
         return jnp.array(self.default_nominal_disturbance)
+
+
+@dataclass
+class ProcessUnitSpec(SystemSpec):
+    """Backward-compatible extension of :class:`SystemSpec`.
+
+    Existing code can continue to treat this like a ``SystemSpec``. Phase 1
+    surfaces the richer typed channel metadata through the additional fields.
+    """
+
+    state_channels: List[StateChannel] = field(default_factory=list)
+    control_channels: List[SignalChannel] = field(default_factory=list)
+    disturbance_channels: List[SignalChannel] = field(default_factory=list)
+    parameter_descriptors: List[ParameterDescriptor] = field(default_factory=list)
+    unit_type: str = "generic_unit"
+    family: str = "generic"
+    subtype: Optional[str] = None
+    law_tags: List[str] = field(default_factory=list)
+    topology_ports: List[TopologyPort] = field(default_factory=list)
+    constraints_metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if not self.state_channels:
+            self.state_channels = infer_state_channels(
+                self.state_names,
+                self.state_groups,
+                self.decoder_constraints,
+            )
+        if not self.control_channels:
+            self.control_channels = infer_signal_channels(
+                self.control_names,
+                self.control_ranges,
+            )
+        if not self.disturbance_channels:
+            self.disturbance_channels = infer_signal_channels(
+                self.disturbance_names,
+                self.disturbance_ranges,
+            )
+        if not self.parameter_descriptors:
+            self.parameter_descriptors = [
+                ParameterDescriptor(name=f"param_{idx}")
+                for idx in range(self.param_dim)
+            ]
+
+        if len(self.state_channels) != self.state_dim:
+            raise ValueError(
+                f"{self.name}: expected {self.state_dim} state channels, "
+                f"got {len(self.state_channels)}."
+            )
+        if len(self.control_channels) != self.control_dim:
+            raise ValueError(
+                f"{self.name}: expected {self.control_dim} control channels, "
+                f"got {len(self.control_channels)}."
+            )
+        if len(self.disturbance_channels) != self.disturbance_dim:
+            raise ValueError(
+                f"{self.name}: expected {self.disturbance_dim} disturbance channels, "
+                f"got {len(self.disturbance_channels)}."
+            )
+        if len(self.parameter_descriptors) != self.param_dim:
+            raise ValueError(
+                f"{self.name}: expected {self.param_dim} parameter descriptors, "
+                f"got {len(self.parameter_descriptors)}."
+            )
+
+        if not self.constraints_metadata:
+            self.constraints_metadata = {
+                "decoder_constraints": [
+                    {
+                        "type": constraint.type,
+                        "indices": list(constraint.indices),
+                        "bias": constraint.bias,
+                        "low": constraint.low,
+                        "high": constraint.high,
+                    }
+                    for constraint in self.decoder_constraints
+                ]
+            }
+
+    def state_lower_bounds(self) -> Float[Array, "state_dim"]:
+        return jnp.asarray(
+            [
+                -jnp.inf if channel.lower_bound is None else channel.lower_bound
+                for channel in self.state_channels
+            ],
+            dtype=jnp.float32,
+        )
+
+    def state_upper_bounds(self) -> Float[Array, "state_dim"]:
+        return jnp.asarray(
+            [
+                jnp.inf if channel.upper_bound is None else channel.upper_bound
+                for channel in self.state_channels
+            ],
+            dtype=jnp.float32,
+        )
+
+    def state_role_names(self) -> Tuple[str, ...]:
+        return tuple(channel.role for channel in self.state_channels)
 
 
 class ProcessSimulator(ABC):

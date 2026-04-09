@@ -36,6 +36,28 @@ def _build_metadata() -> UniversalSystemMetadata:
         ),
         state_group_active=jnp.asarray([[1, 1], [1, 0]], dtype=jnp.float32),
         state_group_kind_id=jnp.asarray([[0, 1], [1, 0]], dtype=jnp.int32),
+        state_role_names=("concentration", "temperature", "inventory"),
+        state_role_id=jnp.asarray(
+            [
+                [0, 0, 1, 1],
+                [1, 1, 2, 2],
+            ],
+            dtype=jnp.int32,
+        ),
+        state_lower_bound=jnp.asarray(
+            [
+                [0.0, 0.0, 250.0, 250.0],
+                [250.0, 250.0, -jnp.inf, -jnp.inf],
+            ],
+            dtype=jnp.float32,
+        ),
+        state_upper_bound=jnp.asarray(
+            [
+                [jnp.inf, jnp.inf, 400.0, 400.0],
+                [450.0, 450.0, jnp.inf, jnp.inf],
+            ],
+            dtype=jnp.float32,
+        ),
     )
 
 

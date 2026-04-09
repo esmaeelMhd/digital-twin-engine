@@ -1,0 +1,409 @@
+# Implementation Mapping Against `plan.md`
+
+Date: 2026-04-09
+
+This document maps the roadmap in `plan.md` to the code that already exists in the repository.
+
+Status legend:
+
+- `Implemented`: the repo already has a working version of the planned capability.
+- `Partial`: some of the intent exists, but the exact abstraction or acceptance criteria are not met.
+- `Missing`: no meaningful implementation exists yet.
+
+## High-Level Phase Summary
+
+| Phase | Status | Notes |
+| --- | --- | --- |
+| Phase 0. Repository audit | Implemented | Covered by `docs/repo_audit.md` and this file |
+| Phase 1. Stabilize/refactor universal unit model | Implemented | Thin-slice implementation landed: typed channel schema, richer unit spec, optional grouped encoder, reusable constraints, multi-horizon universal loss, and new evaluation diagnostics |
+| Phase 2. Adapters and family conditioning | Partial | Descriptor conditioning, few-shot fine-tuning, and basic family metadata now exist, but there is still no adapter architecture or taxonomy-conditioned modeling |
+| Phase 3. Flowsheet graph modeling | Missing | No flowsheet, stream, or graph simulator layer |
+| Phase 4. Modular law layers | Missing | Physics remains per-system handwritten residual code |
+| Phase 5. Customer adaptation workflow | Partial | Few-shot adaptation exists, but no onboarding schema or report generator |
+| Phase 6. Website/demo app | Partial | Streamlit dashboard and API exist, but not the broader demo product described in the plan |
+| Phase 7. MPC and DRL readiness | Partial | MPC, PID, and online adaptation exist; RL wrapper and generic interfaces do not |
+| Phase 8. Distributed/transport-aware units | Missing | No distributed-unit modeling layer yet |
+
+## Plan Assumptions Already Outdated
+
+Before the phase-by-phase mapping, three plan assumptions are already stale:
+
+1. `SystemSpec` is not “too minimal” in the current repo.
+   It already includes dimensions, names, normalization, defaults, ranges, decoder constraints, and `state_groups`.
+
+2. The repo already has typed grouped universal modeling.
+   `state_groups` are declared in system YAML files and consumed by `UniversalDigitalTwin`.
+
+3. The repo already has a universal shared-checkpoint path.
+   `MultiSystemTrajectoryDataset`, `UniversalDigitalTwin`, `UniversalTrainer`, `scripts/train_universal.py`, and `scripts/evaluate_universal.py` are present and wired together.
+
+## Phase 0. Repository Audit
+
+### Planned outputs
+
+- `docs/repo_audit.md`
+
+### Current repo state
+
+- The repository structure, training paths, data model, loss system, universal path, evaluation surface, API/UI surface, and autoresearch loop have now been documented.
+
+### Status
+
+- `Implemented`
+
+## Phase 1. Stabilize And Refactor The Universal Unit Model
+
+### 1. Introduce typed state groups
+
+Plan intent:
+
+- add state-channel roles like inventory, temperature, concentration, pressure, flow, biology
+
+Current state:
+
+- `dte/core/state_schema.py` now defines `StateChannel`
+- `ProcessUnitSpec` exposes ordered `state_channels`
+- default system YAMLs now carry explicit typed channel metadata
+- `SystemSpec.state_groups` still exist and remain the grouping backbone
+- `UniversalDigitalTwin` continues to consume group masks and group-kind ids
+- the single-system stack can now opt into a grouped encoder path driven by the same state-group semantics
+
+Status:
+
+- `Implemented`
+
+### 2. Extend `SystemSpec` into `ProcessUnitSpec`
+
+Plan intent:
+
+- richer abstraction with unit type, law tags, parameter descriptors, ports, constraints metadata
+
+Current state:
+
+- `ProcessUnitSpec` now subclasses `SystemSpec`
+- it adds state/control/disturbance channel metadata, parameter descriptors, unit family/type metadata, law tags, topology ports, and constraints metadata
+- the registry returns `ProcessUnitSpec` while remaining backward-compatible with `SystemSpec` callers
+
+Status:
+
+- `Implemented`
+
+### 3. Add typed encoders instead of one flat encoder only
+
+Current state:
+
+- `UniversalDigitalTwin` already has a grouped encoder path:
+  - state-group encoder
+  - state-group mixer
+  - group-kind embeddings
+  - descriptor-conditioned FiLM modulation
+- `dte/models/grouped_encoder.py` now adds a grouped typed encoder to the single-system path
+- `DigitalTwin.from_config` preserves the flat encoder by default and enables the grouped encoder only when configured
+
+Status:
+
+- `Implemented`
+
+### 4. Add explicit physics constraint utilities
+
+Current state:
+
+- generic decoder constraints exist in `dte/models/decoder.py`
+- per-system physics residuals exist in `dte/physics/*.py`
+- `dte/physics/constraints.py` now provides reusable positivity, bound, mass-balance, energy-balance, and monotonicity helpers
+- the universal trainer now uses the bound and positivity utilities as optional rollout regularizers
+
+Status:
+
+- `Implemented`
+
+### 5. Add multi-horizon training support
+
+Current state:
+
+- the single-system trainer already combines:
+  - reconstruction loss
+  - full trajectory loss
+  - one-step teacher-forced loss
+  - curriculum over `seq_len`
+  - teacher-forcing annealing
+- the universal trainer uses:
+  - initial reconstruction
+  - full trajectory loss
+  - one-step loss
+- `UniversalTrainer` now supports configurable K-step teacher-forced losses through `multi_horizon.k_steps` and `loss_weights.k_step`
+- full-trajectory rollout loss remains the long-window component
+
+Status:
+
+- `Implemented`
+
+### 6. Add action sensitivity evaluation
+
+Current state:
+
+- `dte/evaluation/control_sensitivity.py` adds finite-difference Jacobian and mismatch metrics
+- `scripts/evaluate_universal.py` now compares local control gains from the learned model against the registered simulator
+
+Status:
+
+- `Implemented`
+
+### 7. Improve uncertainty calibration
+
+Current state:
+
+- stochastic latent diffusion exists
+- ensemble rollout exists
+- `scripts/evaluate.py` computes one calibration number: percent of values within `±2σ`
+- `dte/evaluation/uncertainty.py` now adds empirical coverage, calibration gap, Gaussian NLL, and variance-collapse diagnostics
+- `scripts/evaluate_universal.py` now reports these metrics from rollout samples drawn from the variational encoder
+
+Status:
+
+- `Implemented`
+
+### Phase 1 acceptance criteria
+
+Planned acceptance criteria:
+
+- existing systems still train
+- `cstr`, `heat_exchanger`, `two_tank` run through new abstractions
+- universal model still works
+
+Current assessment:
+
+- existing systems still train under the old defaults
+- `cstr`, `heat_exchanger`, and `two_tank` now resolve through `ProcessUnitSpec`
+- the universal model and evaluation path now include the new Phase 1 hooks
+
+Overall status:
+
+- `Implemented`
+
+## Phase 2. Add Unit Adapters And Family-Level Conditioning
+
+### 1. Add unit-family taxonomy
+
+Current state:
+
+- `ProcessUnitSpec` now exposes `family`, `subtype`, `unit_type`, and `law_tags`
+- the default `cstr`, `heat_exchanger`, and `two_tank` configs now declare this metadata
+
+What is still missing:
+
+- the taxonomy is metadata only; no model component conditions on it directly yet
+- there is no broader family registry beyond per-system config declarations
+
+Status:
+
+- `Partial`
+
+### 2. Add adapter layers
+
+Current state:
+
+- no adapter modules in encoder, latent dynamics, or decoder
+- selective fine-tuning exists, but not parameter-efficient adapters
+
+Status:
+
+- `Missing`
+
+### 3. Add parameter and law embeddings
+
+Current state:
+
+- the universal model already uses:
+  - learned `system_id` embeddings
+  - numeric `SystemSpec` descriptor embeddings
+  - state-group-kind embeddings
+- `ProcessUnitSpec` now supplies structured `parameter_descriptors` and `law_tags`
+
+What is still missing:
+
+- no explicit law-tag embedding layer
+- no structured parameter-descriptor embedding layer
+- the new metadata is not yet fused into adapter or family-conditioning modules
+
+Status:
+
+- `Partial`
+
+### 4. Add calibration pipeline
+
+Current state:
+
+- `dte/training/transfer.py` provides `FewShotAdapter` and `zero_shot_eval`
+- this is a useful building block for customer calibration
+
+What is still missing:
+
+- no `calibration/unit_calibration.py`
+- no automated backbone-freeze plus adapter-only workflow
+- no normalization recalibration
+- no selected physics-parameter calibration path
+
+Status:
+
+- `Partial`
+
+## Phase 3. Introduce Flowsheet Graph Modeling
+
+Planned deliverables:
+
+- flowsheet schema
+- graph dataset
+- graph simulator
+- recycle-loop support
+- plant-level losses
+
+Current state:
+
+- no `flowsheet/` package
+- no stream or topology schema
+- no graph dataset
+- no flowsheet model
+- no plant-wide losses
+
+Status:
+
+- `Missing`
+
+## Phase 4. Add Modular Law Layers
+
+Planned deliverables:
+
+- `laws/chemistry.py`
+- `laws/thermo.py`
+- `laws/biology.py`
+- unit integration hooks
+
+Current state:
+
+- physics is implemented as per-system residual modules
+- there is no reusable modular law layer
+
+Status:
+
+- `Missing`
+
+## Phase 5. Build Customer Adaptation Workflow
+
+Planned deliverables:
+
+- onboarding schema
+- adaptation script
+- validation report generator
+
+Current state:
+
+- closest existing pieces:
+  - `FewShotAdapter`
+  - `zero_shot_eval`
+  - FastAPI inference endpoints
+  - dashboard visualization
+
+What is still missing:
+
+- no onboarding schema
+- no template matching
+- no customer-level adaptation orchestration
+- no automated validation report
+
+Status:
+
+- `Partial`
+
+## Phase 6. Website / Demo App
+
+Planned deliverables:
+
+- polished demo backend endpoints
+- frontend with multiple demos
+- flowsheet demo
+
+Current state:
+
+- `dte/api/service.py` exposes:
+  - `/health`
+  - `/predict`
+  - `/ensemble`
+  - `/steady_state`
+- `app/dashboard.py` provides a Streamlit dashboard for trained runs
+- deployment files exist: `Dockerfile`, `docker-compose.yml`
+
+What is still missing:
+
+- no dedicated demo website
+- no multi-demo product flow matching the roadmap
+- no flowsheet demo because flowsheet modeling does not exist yet
+- no dedicated `simulate` / `optimize_control` / `compare_scenarios` API family beyond the current endpoints
+
+Status:
+
+- `Partial`
+
+## Phase 7. MPC And DRL Readiness
+
+### What already exists
+
+- `dte/control/mpc.py` has a sampling/CEM MPC controller
+- `dte/control/pid.py` has PID support
+- `scripts/run_mpc.py` runs an MPC comparison loop
+- `dte/training/online.py` has an `OnlineAdapter` with:
+  - ring buffer
+  - drift detection
+  - sliding-window fine-tuning
+
+### What is still missing
+
+- no generic `control/mpc_interface.py`
+- no RL environment wrapper
+- no generic state-estimation or filtering module
+- no formal control-readiness metric suite
+- current MPC implementation is still CSTR-shaped in important places
+
+Status:
+
+- `Partial`
+
+## Phase 8. Later Distributed / Transport-Aware Units
+
+Current state:
+
+- no distributed-unit package
+- no compartment-chain abstraction beyond current lumped simulators
+- no operator/neural-field model layer
+
+Status:
+
+- `Missing`
+
+## Cross-Cutting Gaps That Matter Before New Phases
+
+These are not tied to one roadmap phase, but they should be resolved before large feature expansion:
+
+1. Unify the semantics between the single-system and universal model paths.
+   Right now grouped typed semantics live mostly in the universal stack.
+
+2. Make training config behavior fully explicit.
+   `scripts/train.py` currently overrides loaded YAML values programmatically.
+
+3. Fix the existing correctness bugs before layering on more complexity.
+   The trainer SDE-KL bug and PID path bug should not be carried into later phases.
+
+4. Repair the dataset normalization contract.
+   Generated HDF5 files and `TrajectoryDataset` disagree about parameter normalization support.
+
+5. Decide whether the universal model is a research sidecar or the main foundation path.
+   The roadmap assumes it becomes the foundation path, but the repo still treats it as a parallel baseline.
+
+## Recommended Interpretation Of The Current Repo
+
+The cleanest reading of the repository today is:
+
+- the single-system path is the production-capable unit-model stack
+- the universal grouped path is the early foundation-model research stack
+
+The roadmap should therefore build from that split rather than pretending the repo is still only a CSTR-to-generalization refactor. The next practical milestone is to merge more of the universal typed semantics back into the main unit-model abstractions before attempting flowsheets or customer adaptation layers.

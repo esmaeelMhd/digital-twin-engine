@@ -22,6 +22,12 @@ model:
     n_layers: 2
   neural_cde:
     enabled: true
+  grouped_encoder:
+    enabled: false
+    group_token_dim: 64
+    group_kind_dim: 8
+    group_encoder_layers: 2
+    group_mixer_layers: 2
   state_dim: 4
   param_dim: 6
   control_dim: 2

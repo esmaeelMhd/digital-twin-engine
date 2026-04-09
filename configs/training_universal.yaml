@@ -32,7 +32,13 @@ loss_weights:
   reconstruction: 1.0
   trajectory: 1.0
   one_step: 0.5
+  k_step: 0.0
   kl: 0.0001
+  state_bounds: 0.0
+  positivity: 0.0
+
+multi_horizon:
+  k_steps: [3, 5]
 
 optimizer:
   peak_lr: 0.0005
@@ -65,3 +71,6 @@ evaluation:
   per_system_batches: 4
   aggregate_method: geometric_mean
   metric_name: geometric_mean_per_system_total_loss
+  uncertainty_samples: 8
+  uncertainty_batches: 2
+  sensitivity_batches: 2

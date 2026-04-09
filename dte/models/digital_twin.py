@@ -8,6 +8,7 @@ from jaxtyping import Array, Float, PRNGKeyArray
 import diffrax
 
 from dte.models.encoder import Encoder
+from dte.models.grouped_encoder import GroupedStateEncoder
 from dte.models.decoder import Decoder
 from dte.models.latent_sde import LatentSDE
 from dte.simulators.base import ProcessSimulator
@@ -17,7 +18,7 @@ from dte.simulators.registry import get_simulator
 class DigitalTwin(eqx.Module):
     """Digital Twin model combining encoder, decoder, and latent SDE."""
 
-    encoder: Encoder
+    encoder: Encoder | GroupedStateEncoder
     decoder: Decoder
     latent_sde: LatentSDE
     simulator: Optional[ProcessSimulator] = eqx.field(static=True)
@@ -96,20 +97,36 @@ class DigitalTwin(eqx.Module):
         ]
         nominal_disturbance = system_spec.default_nominal_disturbance
 
-        encoder = Encoder(
-            state_dim=state_dim,
-            param_dim=param_dim,
-            control_dim=control_dim,
-            latent_dim=latent_dim,
-            hidden_dim=hidden_dim,
-            n_layers=n_layers,
-            state_center=state_center,
-            state_scale=state_scale,
-            control_center=control_center,
-            control_scale=control_scale,
-            param_scale=param_scale,
-            key=key_enc,
-        )
+        grouped_encoder_cfg = model_config.get("grouped_encoder", {})
+        if bool(grouped_encoder_cfg.get("enabled", False)):
+            encoder = GroupedStateEncoder(
+                system_spec=system_spec,
+                param_dim=param_dim,
+                control_dim=control_dim,
+                latent_dim=latent_dim,
+                hidden_dim=hidden_dim,
+                n_layers=n_layers,
+                group_token_dim=int(grouped_encoder_cfg.get("group_token_dim", hidden_dim)),
+                group_kind_dim=int(grouped_encoder_cfg.get("group_kind_dim", 8)),
+                group_encoder_layers=int(grouped_encoder_cfg.get("group_encoder_layers", 2)),
+                group_mixer_layers=int(grouped_encoder_cfg.get("group_mixer_layers", 2)),
+                key=key_enc,
+            )
+        else:
+            encoder = Encoder(
+                state_dim=state_dim,
+                param_dim=param_dim,
+                control_dim=control_dim,
+                latent_dim=latent_dim,
+                hidden_dim=hidden_dim,
+                n_layers=n_layers,
+                state_center=state_center,
+                state_scale=state_scale,
+                control_center=control_center,
+                control_scale=control_scale,
+                param_scale=param_scale,
+                key=key_enc,
+            )
 
         decoder = Decoder(
             latent_dim=latent_dim,

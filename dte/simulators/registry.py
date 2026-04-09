@@ -2,9 +2,11 @@
 
 from typing import Callable, Dict, Optional
 
+from dte.core.state_schema import ParameterDescriptor, SignalChannel, StateChannel, TopologyPort
 from dte.simulators.base import (
     DecoderConstraint,
     NormalizationSpec,
+    ProcessUnitSpec,
     ProcessSimulator,
     StateGroupSpec,
     SystemSpec,
@@ -28,6 +30,112 @@ def _parse_state_groups(sys: dict, state_dim: int) -> list[StateGroupSpec]:
             indices=[int(idx) for idx in group.get("indices", [])],
         )
         for group in raw_groups
+    ]
+
+
+def _parse_state_channels(
+    sys: dict,
+    state_names: list[str],
+    state_groups: list[StateGroupSpec],
+    decoder_constraints: list[DecoderConstraint],
+) -> list[StateChannel]:
+    raw_channels = sys.get("state_channels")
+    if not raw_channels:
+        return []
+    if len(raw_channels) != len(state_names):
+        raise ValueError(
+            "system.state_channels must match the length of system.state_names."
+        )
+
+    channels: list[StateChannel] = []
+    for idx, (expected_name, channel_cfg) in enumerate(zip(state_names, raw_channels)):
+        channel_name = str(channel_cfg.get("name", expected_name))
+        if channel_name != expected_name:
+            raise ValueError(
+                f"system.state_channels[{idx}] name '{channel_name}' does not match "
+                f"state_names[{idx}]='{expected_name}'."
+            )
+        channels.append(
+            StateChannel(
+                name=channel_name,
+                role=str(channel_cfg.get("role", "generic")),
+                unit=channel_cfg.get("unit"),
+                lower_bound=channel_cfg.get("lower_bound"),
+                upper_bound=channel_cfg.get("upper_bound"),
+                conserved_group=channel_cfg.get("conserved_group"),
+                description=channel_cfg.get("description"),
+            )
+        )
+    return channels
+
+
+def _parse_signal_channels(
+    channel_cfg: list[dict] | None,
+    expected_names: list[str],
+    label: str,
+) -> list[SignalChannel]:
+    if not channel_cfg:
+        return []
+    if len(channel_cfg) != len(expected_names):
+        raise ValueError(f"system.{label} must match the configured dimension.")
+
+    channels: list[SignalChannel] = []
+    for idx, (expected_name, item) in enumerate(zip(expected_names, channel_cfg)):
+        channel_name = str(item.get("name", expected_name))
+        if channel_name != expected_name:
+            raise ValueError(
+                f"system.{label}[{idx}] name '{channel_name}' does not match "
+                f"expected '{expected_name}'."
+            )
+        channels.append(
+            SignalChannel(
+                name=channel_name,
+                role=str(item.get("role", "generic")),
+                unit=item.get("unit"),
+                lower_bound=item.get("lower_bound"),
+                upper_bound=item.get("upper_bound"),
+                description=item.get("description"),
+            )
+        )
+    return channels
+
+
+def _parse_parameter_descriptors(
+    sys: dict,
+    default_names: list[str],
+) -> list[ParameterDescriptor]:
+    raw = sys.get("parameter_descriptors")
+    if not raw:
+        return [
+            ParameterDescriptor(name=name)
+            for name in default_names
+        ]
+    if len(raw) != len(default_names):
+        raise ValueError("system.parameter_descriptors must match param_dim.")
+    return [
+        ParameterDescriptor(
+            name=str(item.get("name", default_name)),
+            unit=item.get("unit"),
+            default=item.get("default"),
+            law_tag=item.get("law_tag"),
+            description=item.get("description"),
+        )
+        for default_name, item in zip(default_names, raw)
+    ]
+
+
+def _parse_topology_ports(sys: dict) -> list[TopologyPort]:
+    raw = sys.get("topology_ports")
+    if not raw:
+        return []
+    return [
+        TopologyPort(
+            name=str(item["name"]),
+            kind=str(item.get("kind", "generic")),
+            direction=str(item.get("direction", "bidirectional")),
+            description=item.get("description"),
+        )
+        for item in raw
     ]
 
 
@@ -82,7 +190,8 @@ def _build_cstr_spec(system_config: dict) -> SystemSpec:
         (t_in_range[0] + t_in_range[1]) / 2.0,
     ]
 
-    return SystemSpec(
+    state_groups = _parse_state_groups(sys, state_dim=4)
+    return ProcessUnitSpec(
         name="cstr",
         state_dim=4,
         control_dim=2,
@@ -97,7 +206,32 @@ def _build_cstr_spec(system_config: dict) -> SystemSpec:
         default_nominal_disturbance=default_nominal_disturbance,
         control_ranges={k: list(v) for k, v in ops.items() if k in control_names},
         disturbance_ranges={k: list(v) for k, v in ops.items() if k in disturbance_names},
-        state_groups=_parse_state_groups(sys, state_dim=4),
+        state_groups=state_groups,
+        state_channels=_parse_state_channels(
+            sys,
+            state_names,
+            state_groups,
+            decoder_constraints,
+        ),
+        control_channels=_parse_signal_channels(
+            sys.get("control_channels"),
+            control_names,
+            "control_channels",
+        ),
+        disturbance_channels=_parse_signal_channels(
+            sys.get("disturbance_channels"),
+            disturbance_names,
+            "disturbance_channels",
+        ),
+        parameter_descriptors=_parse_parameter_descriptors(
+            sys,
+            ["V", "Ea_over_R", "dH_rxn", "UA", "Fc", "Cp"],
+        ),
+        unit_type=str(sys.get("unit_type", "stirred_tank_reactor")),
+        family=str(sys.get("family", "reactor")),
+        subtype=sys.get("subtype", "nonisothermal_cstr"),
+        law_tags=[str(tag) for tag in sys.get("law_tags", ["mass_balance", "energy_balance", "reaction_kinetics"])],
+        topology_ports=_parse_topology_ports(sys),
     )
 
 
@@ -148,7 +282,8 @@ def _build_heat_exchanger_spec(system_config: dict) -> SystemSpec:
         (t_cold_in_range[0] + t_cold_in_range[1]) / 2.0,
     ]
 
-    return SystemSpec(
+    state_groups = _parse_state_groups(sys, state_dim=2)
+    return ProcessUnitSpec(
         name="heat_exchanger",
         state_dim=2,
         control_dim=2,
@@ -163,7 +298,35 @@ def _build_heat_exchanger_spec(system_config: dict) -> SystemSpec:
         default_nominal_disturbance=default_nominal_disturbance,
         control_ranges={k: list(v) for k, v in ops.items() if k in control_names},
         disturbance_ranges={k: list(v) for k, v in ops.items() if k in disturbance_names},
-        state_groups=_parse_state_groups(sys, state_dim=2),
+        state_groups=state_groups,
+        state_channels=_parse_state_channels(
+            sys,
+            state_names,
+            state_groups,
+            decoder_constraints,
+        ),
+        control_channels=_parse_signal_channels(
+            sys.get("control_channels"),
+            control_names,
+            "control_channels",
+        ),
+        disturbance_channels=_parse_signal_channels(
+            sys.get("disturbance_channels"),
+            disturbance_names,
+            "disturbance_channels",
+        ),
+        parameter_descriptors=_parse_parameter_descriptors(
+            sys,
+            ["V_hot", "V_cold", "UA", "rho", "Cp"],
+        ),
+        unit_type=str(sys.get("unit_type", "heat_exchanger")),
+        family=str(sys.get("family", "thermal")),
+        subtype=sys.get("subtype", "counter_current"),
+        law_tags=[
+            str(tag)
+            for tag in sys.get("law_tags", ["energy_balance", "heat_transfer"])
+        ],
+        topology_ports=_parse_topology_ports(sys),
     )
 
 
@@ -213,7 +376,8 @@ def _build_two_tank_spec(system_config: dict) -> SystemSpec:
         0.5 * (d2_range[0] + d2_range[1]),
     ]
 
-    return SystemSpec(
+    state_groups = _parse_state_groups(sys, state_dim=2)
+    return ProcessUnitSpec(
         name="two_tank",
         state_dim=2,
         control_dim=2,
@@ -228,7 +392,35 @@ def _build_two_tank_spec(system_config: dict) -> SystemSpec:
         default_nominal_disturbance=default_nominal_disturbance,
         control_ranges={k: list(v) for k, v in ops.items() if k in control_names},
         disturbance_ranges={k: list(v) for k, v in ops.items() if k in disturbance_names},
-        state_groups=_parse_state_groups(sys, state_dim=2),
+        state_groups=state_groups,
+        state_channels=_parse_state_channels(
+            sys,
+            state_names,
+            state_groups,
+            decoder_constraints,
+        ),
+        control_channels=_parse_signal_channels(
+            sys.get("control_channels"),
+            control_names,
+            "control_channels",
+        ),
+        disturbance_channels=_parse_signal_channels(
+            sys.get("disturbance_channels"),
+            disturbance_names,
+            "disturbance_channels",
+        ),
+        parameter_descriptors=_parse_parameter_descriptors(
+            sys,
+            ["A1", "A2", "k12", "kout", "h_max"],
+        ),
+        unit_type=str(sys.get("unit_type", "coupled_tanks")),
+        family=str(sys.get("family", "hydraulic")),
+        subtype=sys.get("subtype", "two_tank_level"),
+        law_tags=[
+            str(tag)
+            for tag in sys.get("law_tags", ["mass_balance", "gravity_flow"])
+        ],
+        topology_ports=_parse_topology_ports(sys),
     )
 
 

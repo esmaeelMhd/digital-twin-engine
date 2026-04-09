@@ -1,12 +1,67 @@
 system:
   name: heat_exchanger
+  unit_type: heat_exchanger
+  family: thermal
+  subtype: counter_current
+  law_tags: [energy_balance, heat_transfer]
   state_names: [T_hot, T_cold]
   state_groups:
     - name: temperatures
       kind: thermal
       indices: [0, 1]
+  state_channels:
+    - name: T_hot
+      role: temperature
+      unit: K
+      lower_bound: 250.0
+      upper_bound: 450.0
+      conserved_group: temperatures
+    - name: T_cold
+      role: temperature
+      unit: K
+      lower_bound: 250.0
+      upper_bound: 450.0
+      conserved_group: temperatures
   control_names: [F_hot, F_cold]
+  control_channels:
+    - name: F_hot
+      role: flow
+      unit: L/min
+      lower_bound: 1.0
+      upper_bound: 10.0
+    - name: F_cold
+      role: flow
+      unit: L/min
+      lower_bound: 1.0
+      upper_bound: 10.0
   disturbance_names: [T_hot_in, T_cold_in]
+  disturbance_channels:
+    - name: T_hot_in
+      role: temperature
+      unit: K
+      lower_bound: 360.0
+      upper_bound: 420.0
+    - name: T_cold_in
+      role: temperature
+      unit: K
+      lower_bound: 270.0
+      upper_bound: 310.0
+  parameter_descriptors:
+    - name: V_hot
+      unit: L
+      law_tag: geometry
+    - name: V_cold
+      unit: L
+      law_tag: geometry
+    - name: UA
+      unit: J/(min*K)
+      law_tag: heat_transfer
+    - name: rho
+      unit: g/L
+      law_tag: thermodynamics
+    - name: Cp
+      unit: J/(g*K)
+      law_tag: thermodynamics
   normalization:
     state_center: [350.0, 300.0]
     state_scale: [0.01, 0.01]

@@ -70,12 +70,17 @@ class UniversalSystemMetadata:
     state_group_mask: Array
     state_group_active: Array
     state_group_kind_id: Array
+    state_role_names: tuple[str, ...]
+    state_role_id: Array
+    state_lower_bound: Array
+    state_upper_bound: Array
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe snapshot of the metadata layout."""
         return {
             "system_names": list(self.system_names),
             "state_group_kind_names": list(self.state_group_kind_names),
+            "state_role_names": list(self.state_role_names),
             "shape": {
                 "state_center": list(self.state_center.shape),
                 "control_center": list(self.control_center.shape),
@@ -84,6 +89,7 @@ class UniversalSystemMetadata:
                 "system_descriptor": list(self.system_descriptor.shape),
                 "state_group_mask": list(self.state_group_mask.shape),
                 "state_group_active": list(self.state_group_active.shape),
+                "state_role_id": list(self.state_role_id.shape),
             },
         }
 
@@ -123,6 +129,7 @@ class MultiSystemTrajectoryDataset:
         self.max_state_groups = max(len(entry.spec.state_groups) for entry in self.entries)
         self._n_samples = sum(entry.dataset.n_samples for entry in self.entries)
         self.state_group_kind_names = self._collect_state_group_kinds()
+        self.state_role_names = self._collect_state_roles()
         self._metadata = self._build_metadata()
 
     @classmethod
@@ -193,6 +200,16 @@ class MultiSystemTrajectoryDataset:
             kinds.append("generic")
         return tuple(kinds)
 
+    def _collect_state_roles(self) -> tuple[str, ...]:
+        roles: list[str] = []
+        for entry in self.entries:
+            for channel in getattr(entry.spec, "state_channels", []):
+                if channel.role not in roles:
+                    roles.append(channel.role)
+        if "generic" not in roles:
+            roles.append("generic")
+        return tuple(roles)
+
     def _build_metadata(self) -> UniversalSystemMetadata:
         state_center = []
         state_scale = []
@@ -213,8 +230,14 @@ class MultiSystemTrajectoryDataset:
         state_group_mask = []
         state_group_active = []
         state_group_kind_id = []
+        state_role_id = []
+        state_lower_bound = []
+        state_upper_bound = []
         kind_to_id = {
             name: idx for idx, name in enumerate(self.state_group_kind_names)
+        }
+        role_to_id = {
+            name: idx for idx, name in enumerate(self.state_role_names)
         }
 
         for entry in self.entries:
@@ -263,6 +286,33 @@ class MultiSystemTrajectoryDataset:
             state_group_mask.append(system_group_mask)
             state_group_active.append(system_group_active)
             state_group_kind_id.append(system_group_kind_id)
+            state_role_id.append(
+                self._pad(
+                    [role_to_id[channel.role] for channel in getattr(spec, "state_channels", [])],
+                    self.max_state_dim,
+                    role_to_id["generic"],
+                )
+            )
+            state_lower_bound.append(
+                self._pad(
+                    [
+                        -np.inf if channel.lower_bound is None else float(channel.lower_bound)
+                        for channel in getattr(spec, "state_channels", [])
+                    ],
+                    self.max_state_dim,
+                    -np.inf,
+                )
+            )
+            state_upper_bound.append(
+                self._pad(
+                    [
+                        np.inf if channel.upper_bound is None else float(channel.upper_bound)
+                        for channel in getattr(spec, "state_channels", [])
+                    ],
+                    self.max_state_dim,
+                    np.inf,
+                )
+            )
 
         return UniversalSystemMetadata(
             system_names=tuple(self.system_names),
@@ -286,6 +336,10 @@ class MultiSystemTrajectoryDataset:
             state_group_mask=jnp.asarray(np.asarray(state_group_mask, dtype=np.float32)),
             state_group_active=jnp.asarray(np.asarray(state_group_active, dtype=np.float32)),
             state_group_kind_id=jnp.asarray(np.asarray(state_group_kind_id, dtype=np.int32)),
+            state_role_names=self.state_role_names,
+            state_role_id=jnp.asarray(np.asarray(state_role_id, dtype=np.int32)),
+            state_lower_bound=jnp.asarray(np.asarray(state_lower_bound, dtype=np.float32)),
+            state_upper_bound=jnp.asarray(np.asarray(state_upper_bound, dtype=np.float32)),
         )
 
     def split(self, val_fraction: float = 0.2) -> tuple["MultiSystemTrajectoryDataset", "MultiSystemTrajectoryDataset"]:

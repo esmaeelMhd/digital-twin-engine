@@ -1,5 +1,9 @@
 system:
   name: cstr
+  unit_type: stirred_tank_reactor
+  family: reactor
+  subtype: nonisothermal_cstr
+  law_tags: [mass_balance, energy_balance, reaction_kinetics]
   state_names: [Ca, Cb, T, Tc]
   state_groups:
     - name: species
@@ -8,8 +12,72 @@ system:
     - name: temperatures
       kind: thermal
       indices: [2, 3]
+  state_channels:
+    - name: Ca
+      role: concentration
+      unit: mol/L
+      lower_bound: 0.0
+      conserved_group: species
+    - name: Cb
+      role: concentration
+      unit: mol/L
+      lower_bound: 0.0
+      conserved_group: species
+    - name: T
+      role: temperature
+      unit: K
+      lower_bound: 250.0
+      upper_bound: 400.0
+      conserved_group: temperatures
+    - name: Tc
+      role: temperature
+      unit: K
+      lower_bound: 250.0
+      upper_bound: 400.0
+      conserved_group: temperatures
   control_names: [F_in, Tc_in]
+  control_channels:
+    - name: F_in
+      role: flow
+      unit: L/min
+      lower_bound: 10.0
+      upper_bound: 100.0
+    - name: Tc_in
+      role: temperature
+      unit: K
+      lower_bound: 280.0
+      upper_bound: 320.0
   disturbance_names: [Ca_in, T_in]
+  disturbance_channels:
+    - name: Ca_in
+      role: concentration
+      unit: mol/L
+      lower_bound: 0.5
+      upper_bound: 2.0
+    - name: T_in
+      role: temperature
+      unit: K
+      lower_bound: 290.0
+      upper_bound: 350.0
+  parameter_descriptors:
+    - name: V
+      unit: L
+      law_tag: geometry
+    - name: Ea_over_R
+      unit: K
+      law_tag: kinetics
+    - name: dH_rxn
+      unit: J/mol
+      law_tag: thermodynamics
+    - name: UA
+      unit: J/(min*K)
+      law_tag: heat_transfer
+    - name: Fc
+      unit: L/min
+      law_tag: hydraulics
+    - name: Cp
+      unit: J/(g*K)
+      law_tag: thermodynamics
   normalization:
     state_center: [1.0, 1.0, 325.0, 325.0]
     state_scale: [1.0, 1.0, 0.01, 0.01]
