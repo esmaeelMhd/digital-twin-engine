@@ -4,6 +4,11 @@ system:
   family: thermal
   subtype: counter_current
   law_tags: [energy_balance, heat_transfer]
+  conditioning_tags:
+    reaction_class: none
+    thermo_regime: single_phase_countercurrent
+    bio_model_family: none
+    operating_regime: nominal_heat_exchange
   state_names: [T_hot, T_cold]
   state_groups:
     - name: temperatures

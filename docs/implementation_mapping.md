@@ -189,26 +189,36 @@ Current state:
 
 - `ProcessUnitSpec` now exposes `family`, `subtype`, `unit_type`, and `law_tags`
 - the default `cstr`, `heat_exchanger`, and `two_tank` configs now declare this metadata
-
-What is still missing:
-
-- the taxonomy is metadata only; no model component conditions on it directly yet
-- there is no broader family registry beyond per-system config declarations
+- `dte/data/multi_system_dataset.py` now materializes:
+  - `family_id`
+  - `subtype_id`
+  - `law_tag_mask`
+  - `conditioning_value_id`
+  - `parameter_law_tag_id`
+- system configs now carry structured `conditioning_tags`:
+  - `reaction_class`
+  - `thermo_regime`
+  - `bio_model_family`
+  - `operating_regime`
 
 Status:
 
-- `Partial`
+- `Implemented`
 
 ### 2. Add adapter layers
 
 Current state:
 
-- no adapter modules in encoder, latent dynamics, or decoder
-- selective fine-tuning exists, but not parameter-efficient adapters
+- `dte/models/universal_digital_twin.py` now includes optional residual bottleneck adapters for:
+  - encoder features
+  - latent drift / neural-CDE path features
+  - decoder group features
+- adapter training is exposed through `UniversalDigitalTwin.trainable_filter_spec(mode="adapters")`
+- universal configs now expose `model.adapters`
 
 Status:
 
-- `Missing`
+- `Implemented`
 
 ### 3. Add parameter and law embeddings
 
@@ -218,35 +228,35 @@ Current state:
   - learned `system_id` embeddings
   - numeric `SystemSpec` descriptor embeddings
   - state-group-kind embeddings
-- `ProcessUnitSpec` now supplies structured `parameter_descriptors` and `law_tags`
-
-What is still missing:
-
-- no explicit law-tag embedding layer
-- no structured parameter-descriptor embedding layer
-- the new metadata is not yet fused into adapter or family-conditioning modules
+- Phase 2 adds:
+  - family embeddings
+  - subtype embeddings
+  - pooled law-tag embeddings
+  - structured conditioning-tag embeddings
+  - parameter-law-tag summaries fused into the universal context
+- universal encode/decode/drift paths now condition on this richer context directly
 
 Status:
 
-- `Partial`
+- `Implemented`
 
 ### 4. Add calibration pipeline
 
 Current state:
 
-- `dte/training/transfer.py` provides `FewShotAdapter` and `zero_shot_eval`
-- this is a useful building block for customer calibration
-
-What is still missing:
-
-- no `calibration/unit_calibration.py`
-- no automated backbone-freeze plus adapter-only workflow
-- no normalization recalibration
-- no selected physics-parameter calibration path
+- `dte/calibration/unit_calibration.py` now provides:
+  - target-model initialization from a pretrained multi-system checkpoint
+  - adapter-only or full calibration filter specs
+  - optional normalization recalibration
+  - optional selected physics-parameter calibration
+- `scripts/calibrate_unit.py` is the calibration entry point
+- `UniversalDigitalTwin` now carries calibration tables for:
+  - normalization offsets/scales
+  - per-parameter additive bias terms with per-system masks
 
 Status:
 
-- `Partial`
+- `Implemented`
 
 ## Phase 3. Introduce Flowsheet Graph Modeling
 

@@ -14,6 +14,13 @@ model:
   drift_layers: 3
   use_system_spec_embedding: true
   use_variational_encoder: true
+  adapters:
+    enabled: true
+    bottleneck_dim: 16
+    residual_scale: 0.1
+    encoder: true
+    drift: true
+    decoder: true
   neural_cde:
     enabled: true
     hidden_dim: 64

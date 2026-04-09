@@ -4,6 +4,11 @@ system:
   family: hydraulic
   subtype: two_tank_level
   law_tags: [mass_balance, gravity_flow]
+  conditioning_tags:
+    reaction_class: none
+    thermo_regime: incompressible_isothermal
+    bio_model_family: none
+    operating_regime: gravity_dominated
   state_names: [h1, h2]
   state_groups:
     - name: levels

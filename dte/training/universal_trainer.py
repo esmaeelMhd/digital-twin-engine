@@ -47,6 +47,7 @@ class UniversalTrainer:
         config: dict,
         train_dataset: MultiSystemTrajectoryDataset,
         val_dataset: Optional[MultiSystemTrajectoryDataset] = None,
+        filter_spec=None,
     ):
         self.model = model
         self.config = config
@@ -69,9 +70,9 @@ class UniversalTrainer:
             optax.adam(schedule, b1=0.95, b2=0.99),
         )
 
-        self.filter_spec = self.model.trainable_filter_spec()
+        self.filter_spec = filter_spec if filter_spec is not None else self.model.trainable_filter_spec()
         trainable, _ = eqx.partition(self.model, self.filter_spec)
-        self.opt_state = self.optimizer.init(trainable)
+        self.opt_state = self.optimizer.init(eqx.filter(trainable, eqx.is_inexact_array))
 
         self.best_val_loss = float("inf")
         self.history = {"train_loss": [], "val_loss": [], "step": []}
@@ -512,7 +513,11 @@ class UniversalTrainer:
             return self.compute_loss(model, batch, key)
 
         (loss, loss_dict), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(trainable)
-        updates, new_opt_state = self.optimizer.update(grads, opt_state, trainable)
+        updates, new_opt_state = self.optimizer.update(
+            eqx.filter(grads, eqx.is_inexact_array),
+            opt_state,
+            eqx.filter(trainable, eqx.is_inexact_array),
+        )
         new_trainable = eqx.apply_updates(trainable, updates)
         new_model = eqx.combine(new_trainable, frozen)
         return new_model, new_opt_state, loss_dict
@@ -529,7 +534,11 @@ class UniversalTrainer:
             return self.compute_group_pretraining_loss(model, batch, key)
 
         (loss, loss_dict), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(trainable)
-        updates, new_opt_state = self.optimizer.update(grads, opt_state, trainable)
+        updates, new_opt_state = self.optimizer.update(
+            eqx.filter(grads, eqx.is_inexact_array),
+            opt_state,
+            eqx.filter(trainable, eqx.is_inexact_array),
+        )
         new_trainable = eqx.apply_updates(trainable, updates)
         new_model = eqx.combine(new_trainable, frozen)
         return new_model, new_opt_state, loss_dict

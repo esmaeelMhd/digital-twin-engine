@@ -7,7 +7,7 @@ tables needed for shared-checkpoint universal models.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,13 @@ from jaxtyping import Array, PRNGKeyArray
 from dte.data.dataset import TrajectoryDataset
 from dte.simulators.base import SystemSpec
 from dte.simulators.registry import get_system_spec
+
+CONDITIONING_TAG_KEYS = (
+    "reaction_class",
+    "thermo_regime",
+    "bio_model_family",
+    "operating_regime",
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,7 @@ class PreparedSystemDataset:
     source: SystemDatasetSource
     spec: SystemSpec
     dataset: TrajectoryDataset
+    system_config: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -74,6 +82,26 @@ class UniversalSystemMetadata:
     state_role_id: Array
     state_lower_bound: Array
     state_upper_bound: Array
+    family_names: tuple[str, ...] = ()
+    family_id: Array = field(
+        default_factory=lambda: jnp.zeros((0,), dtype=jnp.int32)
+    )
+    subtype_names: tuple[str, ...] = ()
+    subtype_id: Array = field(
+        default_factory=lambda: jnp.zeros((0,), dtype=jnp.int32)
+    )
+    law_tag_names: tuple[str, ...] = ()
+    law_tag_mask: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.float32)
+    )
+    conditioning_category_names: tuple[str, ...] = ()
+    conditioning_value_names: tuple[str, ...] = ()
+    conditioning_value_id: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.int32)
+    )
+    parameter_law_tag_id: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.int32)
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe snapshot of the metadata layout."""
@@ -81,6 +109,11 @@ class UniversalSystemMetadata:
             "system_names": list(self.system_names),
             "state_group_kind_names": list(self.state_group_kind_names),
             "state_role_names": list(self.state_role_names),
+            "family_names": list(self.family_names),
+            "subtype_names": list(self.subtype_names),
+            "law_tag_names": list(self.law_tag_names),
+            "conditioning_category_names": list(self.conditioning_category_names),
+            "conditioning_value_names": list(self.conditioning_value_names),
             "shape": {
                 "state_center": list(self.state_center.shape),
                 "control_center": list(self.control_center.shape),
@@ -90,6 +123,11 @@ class UniversalSystemMetadata:
                 "state_group_mask": list(self.state_group_mask.shape),
                 "state_group_active": list(self.state_group_active.shape),
                 "state_role_id": list(self.state_role_id.shape),
+                "family_id": list(self.family_id.shape),
+                "subtype_id": list(self.subtype_id.shape),
+                "law_tag_mask": list(self.law_tag_mask.shape),
+                "conditioning_value_id": list(self.conditioning_value_id.shape),
+                "parameter_law_tag_id": list(self.parameter_law_tag_id.shape),
             },
         }
 
@@ -130,6 +168,11 @@ class MultiSystemTrajectoryDataset:
         self._n_samples = sum(entry.dataset.n_samples for entry in self.entries)
         self.state_group_kind_names = self._collect_state_group_kinds()
         self.state_role_names = self._collect_state_roles()
+        self.family_names = self._collect_family_names()
+        self.subtype_names = self._collect_subtype_names()
+        self.law_tag_names = self._collect_law_tag_names()
+        self.conditioning_category_names = self._collect_conditioning_category_names()
+        self.conditioning_value_names = self._collect_conditioning_value_names()
         self._metadata = self._build_metadata()
 
     @classmethod
@@ -146,7 +189,14 @@ class MultiSystemTrajectoryDataset:
                 system_config = yaml.safe_load(f)
             spec = get_system_spec(system_config)
             dataset = TrajectoryDataset(source.data_path, seq_len=seq_len, stride=stride)
-            entries.append(PreparedSystemDataset(source=source, spec=spec, dataset=dataset))
+            entries.append(
+                PreparedSystemDataset(
+                    source=source,
+                    spec=spec,
+                    dataset=dataset,
+                    system_config=system_config,
+                )
+            )
         return cls(entries, seq_len=seq_len, stride=stride)
 
     @property
@@ -210,6 +260,61 @@ class MultiSystemTrajectoryDataset:
             roles.append("generic")
         return tuple(roles)
 
+    def _collect_family_names(self) -> tuple[str, ...]:
+        families = ["generic"]
+        for entry in self.entries:
+            family = str(getattr(entry.spec, "family", "generic") or "generic")
+            if family not in families:
+                families.append(family)
+        return tuple(families)
+
+    def _collect_subtype_names(self) -> tuple[str, ...]:
+        subtypes = ["generic"]
+        for entry in self.entries:
+            subtype = getattr(entry.spec, "subtype", None) or getattr(
+                entry.spec, "unit_type", None
+            )
+            normalized = str(subtype or "generic")
+            if normalized not in subtypes:
+                subtypes.append(normalized)
+        return tuple(subtypes)
+
+    def _collect_law_tag_names(self) -> tuple[str, ...]:
+        law_tags = ["generic"]
+        for entry in self.entries:
+            for tag in getattr(entry.spec, "law_tags", []):
+                normalized = str(tag or "generic")
+                if normalized not in law_tags:
+                    law_tags.append(normalized)
+            for descriptor in getattr(entry.spec, "parameter_descriptors", []):
+                normalized = str(getattr(descriptor, "law_tag", None) or "generic")
+                if normalized not in law_tags:
+                    law_tags.append(normalized)
+        return tuple(law_tags)
+
+    def _conditioning_tags_for_entry(self, entry: PreparedSystemDataset) -> dict[str, str]:
+        raw = entry.system_config.get("system", {}).get("conditioning_tags", {}) or {}
+        return {
+            str(key): str(value)
+            for key, value in raw.items()
+        }
+
+    def _collect_conditioning_category_names(self) -> tuple[str, ...]:
+        categories = list(CONDITIONING_TAG_KEYS)
+        for entry in self.entries:
+            for key in self._conditioning_tags_for_entry(entry):
+                if key not in categories:
+                    categories.append(key)
+        return tuple(categories)
+
+    def _collect_conditioning_value_names(self) -> tuple[str, ...]:
+        values = ["unknown"]
+        for entry in self.entries:
+            for value in self._conditioning_tags_for_entry(entry).values():
+                if value not in values:
+                    values.append(value)
+        return tuple(values)
+
     def _build_metadata(self) -> UniversalSystemMetadata:
         state_center = []
         state_scale = []
@@ -233,11 +338,28 @@ class MultiSystemTrajectoryDataset:
         state_role_id = []
         state_lower_bound = []
         state_upper_bound = []
+        family_id = []
+        subtype_id = []
+        law_tag_mask = []
+        conditioning_value_id = []
+        parameter_law_tag_id = []
         kind_to_id = {
             name: idx for idx, name in enumerate(self.state_group_kind_names)
         }
         role_to_id = {
             name: idx for idx, name in enumerate(self.state_role_names)
+        }
+        family_to_id = {
+            name: idx for idx, name in enumerate(self.family_names)
+        }
+        subtype_to_id = {
+            name: idx for idx, name in enumerate(self.subtype_names)
+        }
+        law_tag_to_id = {
+            name: idx for idx, name in enumerate(self.law_tag_names)
+        }
+        conditioning_value_to_id = {
+            name: idx for idx, name in enumerate(self.conditioning_value_names)
         }
 
         for entry in self.entries:
@@ -272,6 +394,36 @@ class MultiSystemTrajectoryDataset:
             disturbance_dim.append(spec.disturbance_dim)
             param_dim.append(spec.param_dim)
             descriptor.append(self._descriptor_for_spec(spec))
+            family_id.append(
+                family_to_id[str(getattr(spec, "family", "generic") or "generic")]
+            )
+            subtype_name = getattr(spec, "subtype", None) or getattr(spec, "unit_type", None)
+            subtype_id.append(subtype_to_id[str(subtype_name or "generic")])
+
+            system_law_mask = np.zeros((len(self.law_tag_names),), dtype=np.float32)
+            for tag in getattr(spec, "law_tags", []):
+                system_law_mask[law_tag_to_id[str(tag or "generic")]] = 1.0
+            if not np.any(system_law_mask):
+                system_law_mask[law_tag_to_id["generic"]] = 1.0
+            law_tag_mask.append(system_law_mask)
+
+            raw_conditioning_tags = self._conditioning_tags_for_entry(entry)
+            conditioning_value_id.append(
+                [
+                    conditioning_value_to_id[raw_conditioning_tags.get(category, "unknown")]
+                    for category in self.conditioning_category_names
+                ]
+            )
+            parameter_law_tag_id.append(
+                self._pad(
+                    [
+                        law_tag_to_id[str(getattr(descriptor, "law_tag", None) or "generic")]
+                        for descriptor in getattr(spec, "parameter_descriptors", [])
+                    ],
+                    self.max_param_dim,
+                    law_tag_to_id["generic"],
+                )
+            )
 
             system_group_mask = np.zeros(
                 (self.max_state_groups, self.max_state_dim),
@@ -340,6 +492,20 @@ class MultiSystemTrajectoryDataset:
             state_role_id=jnp.asarray(np.asarray(state_role_id, dtype=np.int32)),
             state_lower_bound=jnp.asarray(np.asarray(state_lower_bound, dtype=np.float32)),
             state_upper_bound=jnp.asarray(np.asarray(state_upper_bound, dtype=np.float32)),
+            family_names=self.family_names,
+            family_id=jnp.asarray(np.asarray(family_id, dtype=np.int32)),
+            subtype_names=self.subtype_names,
+            subtype_id=jnp.asarray(np.asarray(subtype_id, dtype=np.int32)),
+            law_tag_names=self.law_tag_names,
+            law_tag_mask=jnp.asarray(np.asarray(law_tag_mask, dtype=np.float32)),
+            conditioning_category_names=self.conditioning_category_names,
+            conditioning_value_names=self.conditioning_value_names,
+            conditioning_value_id=jnp.asarray(
+                np.asarray(conditioning_value_id, dtype=np.int32)
+            ),
+            parameter_law_tag_id=jnp.asarray(
+                np.asarray(parameter_law_tag_id, dtype=np.int32)
+            ),
         )
 
     def split(self, val_fraction: float = 0.2) -> tuple["MultiSystemTrajectoryDataset", "MultiSystemTrajectoryDataset"]:
@@ -349,10 +515,20 @@ class MultiSystemTrajectoryDataset:
         for entry in self.entries:
             train_dataset, val_dataset = entry.dataset.split(val_fraction)
             train_entries.append(
-                PreparedSystemDataset(source=entry.source, spec=entry.spec, dataset=train_dataset)
+                PreparedSystemDataset(
+                    source=entry.source,
+                    spec=entry.spec,
+                    dataset=train_dataset,
+                    system_config=entry.system_config,
+                )
             )
             val_entries.append(
-                PreparedSystemDataset(source=entry.source, spec=entry.spec, dataset=val_dataset)
+                PreparedSystemDataset(
+                    source=entry.source,
+                    spec=entry.spec,
+                    dataset=val_dataset,
+                    system_config=entry.system_config,
+                )
             )
         return (
             MultiSystemTrajectoryDataset(train_entries, seq_len=self.seq_len, stride=self.stride),
@@ -380,6 +556,14 @@ class MultiSystemTrajectoryDataset:
                     "system_config": entry.source.system_config,
                     "data_path": entry.source.data_path,
                     "weight": float(entry.source.weight),
+                    "family": str(getattr(entry.spec, "family", "generic") or "generic"),
+                    "subtype": str(
+                        getattr(entry.spec, "subtype", None)
+                        or getattr(entry.spec, "unit_type", None)
+                        or "generic"
+                    ),
+                    "law_tags": [str(tag) for tag in getattr(entry.spec, "law_tags", [])],
+                    "conditioning_tags": self._conditioning_tags_for_entry(entry),
                     "n_samples": entry.dataset.n_samples,
                     "dims": {
                         "state": entry.spec.state_dim,

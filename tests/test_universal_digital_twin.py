@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import equinox as eqx
 
 from dte.data.multi_system_dataset import UniversalSystemMetadata
 from dte.models.universal_digital_twin import UniversalDigitalTwin
@@ -58,6 +59,47 @@ def _build_metadata() -> UniversalSystemMetadata:
             ],
             dtype=jnp.float32,
         ),
+        family_names=("reactor", "thermal"),
+        family_id=jnp.asarray([0, 1], dtype=jnp.int32),
+        subtype_names=("nonisothermal_cstr", "counter_current"),
+        subtype_id=jnp.asarray([0, 1], dtype=jnp.int32),
+        law_tag_names=("mass_balance", "energy_balance", "heat_transfer", "generic"),
+        law_tag_mask=jnp.asarray(
+            [
+                [1.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 1.0, 0.0],
+            ],
+            dtype=jnp.float32,
+        ),
+        conditioning_category_names=(
+            "reaction_class",
+            "thermo_regime",
+            "bio_model_family",
+            "operating_regime",
+        ),
+        conditioning_value_names=(
+            "unknown",
+            "irreversible_exothermic",
+            "single_phase_countercurrent",
+            "liquid_well_mixed",
+            "nominal_continuous",
+            "nominal_heat_exchange",
+            "none",
+        ),
+        conditioning_value_id=jnp.asarray(
+            [
+                [1, 3, 6, 4],
+                [6, 2, 6, 5],
+            ],
+            dtype=jnp.int32,
+        ),
+        parameter_law_tag_id=jnp.asarray(
+            [
+                [0, 0, 1, 2, 1, 3],
+                [1, 2, 2, 3, 3, 3],
+            ],
+            dtype=jnp.int32,
+        ),
     )
 
 
@@ -76,9 +118,24 @@ def _build_config() -> dict:
             "drift_layers": 2,
             "use_system_spec_embedding": True,
             "use_variational_encoder": True,
+            "adapters": {
+                "enabled": True,
+                "bottleneck_dim": 8,
+                "residual_scale": 0.1,
+                "encoder": True,
+                "drift": True,
+                "decoder": True,
+            },
             "neural_cde": {"enabled": True, "hidden_dim": 16, "n_layers": 2},
         }
     }
+
+
+def _count_trainable(model, filter_spec) -> int:
+    trainable, _ = eqx.partition(model, filter_spec)
+    return sum(
+        leaf.size for leaf in jax.tree.leaves(eqx.filter(trainable, eqx.is_inexact_array))
+    )
 
 
 def test_universal_model_grouped_encode_decode_shapes():
@@ -152,3 +209,35 @@ def test_universal_model_respects_inactive_state_dimensions():
 
     assert decoded.shape == (4,)
     assert jnp.allclose(decoded[2:], 0.0)
+
+
+def test_universal_model_adapter_filter_is_smaller_than_full_filter():
+    metadata = _build_metadata()
+    model = UniversalDigitalTwin.from_config(_build_config(), metadata, jax.random.PRNGKey(3))
+
+    full_count = _count_trainable(model, model.trainable_filter_spec(mode="full"))
+    adapter_count = _count_trainable(model, model.trainable_filter_spec(mode="adapters"))
+
+    assert adapter_count > 0
+    assert adapter_count < full_count
+
+
+def test_universal_model_param_calibration_changes_scaled_params():
+    metadata = _build_metadata()
+    model = UniversalDigitalTwin.from_config(_build_config(), metadata, jax.random.PRNGKey(4))
+    model = eqx.tree_at(
+        lambda m: m.param_bias_table,
+        model,
+        model.param_bias_table.at[0, 1].set(0.5),
+    )
+    params = jnp.asarray([1.0, 2.0, 0.5, 0.0, 0.0, 0.0], dtype=jnp.float32)
+
+    scaled_without_bias = UniversalDigitalTwin.from_config(
+        _build_config(),
+        metadata,
+        jax.random.PRNGKey(5),
+    ).scale_params(params, jnp.asarray(0, dtype=jnp.int32))
+    scaled_with_bias = model.scale_params(params, jnp.asarray(0, dtype=jnp.int32))
+
+    assert scaled_with_bias.shape == scaled_without_bias.shape
+    assert scaled_with_bias[1] > scaled_without_bias[1]

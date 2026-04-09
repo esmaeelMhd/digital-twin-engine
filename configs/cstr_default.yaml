@@ -4,6 +4,11 @@ system:
   family: reactor
   subtype: nonisothermal_cstr
   law_tags: [mass_balance, energy_balance, reaction_kinetics]
+  conditioning_tags:
+    reaction_class: irreversible_exothermic
+    thermo_regime: liquid_well_mixed
+    bio_model_family: none
+    operating_regime: nominal_continuous
   state_names: [Ca, Cb, T, Tc]
   state_groups:
     - name: species
