@@ -75,6 +75,7 @@ class UniversalTrainer:
         self.best_val_loss = float("inf")
         self.history = {"train_loss": [], "val_loss": [], "step": []}
         self.last_train_summary: Dict[str, float | int | bool | str | None] = {}
+        self.pretraining_steps = 0
 
     def _normalize_batch(self, model: UniversalDigitalTwin, batch: Dict[str, Array]) -> Dict[str, Array]:
         system_ids = batch["system_id"]
@@ -270,6 +271,89 @@ class UniversalTrainer:
         }
         return total_loss, loss_dict
 
+    def compute_group_pretraining_loss(
+        self,
+        model: UniversalDigitalTwin,
+        batch: Dict[str, Array],
+        key: PRNGKeyArray,
+    ) -> tuple[Array, Dict[str, Array]]:
+        normalized = self._normalize_batch(model, batch)
+        batch_size = normalized["states_norm"].shape[0]
+
+        state0 = normalized["states_norm"][:, 0, :]
+        control0 = normalized["controls_norm"][:, 0, :]
+        params_scaled = normalized["params_scaled"]
+        state_mask = normalized["state_mask"]
+        control_mask = normalized["control_mask"]
+        param_mask = normalized["param_mask"]
+        system_ids = normalized["system_id"]
+
+        group_masks = model.state_group_mask_table[system_ids] * state_mask[:, None, :]
+        group_active = model.state_group_active_table[system_ids]
+        masked_logits = jnp.where(
+            group_active > 0.0,
+            jnp.zeros_like(group_active),
+            jnp.full_like(group_active, -1e9),
+        )
+        selected_group_idx = jax.random.categorical(key, masked_logits, axis=-1)
+        selected_group_mask = group_masks[jnp.arange(batch_size), selected_group_idx]
+
+        corrupted_state0 = state0 * (1.0 - selected_group_mask)
+
+        z_mean, z_logvar = jax.vmap(
+            lambda state_t, params_t, control_t, state_m, control_m, param_m, system_id: model.encode(
+                state_t,
+                params_t,
+                control_t,
+                state_m,
+                control_m,
+                param_m,
+                system_id,
+                key=None,
+            )[1:]
+        )(
+            corrupted_state0,
+            params_scaled,
+            control0,
+            state_mask,
+            control_mask,
+            param_mask,
+            system_ids,
+        )
+        pred_state0 = jax.vmap(
+            lambda z_t, params_t, control_t, state_m, control_m, param_m, system_id: model.decode(
+                z_t,
+                params_t,
+                control_t,
+                state_m,
+                control_m,
+                param_m,
+                system_id,
+            )
+        )(
+            z_mean,
+            params_scaled,
+            control0,
+            state_mask,
+            control_mask,
+            param_mask,
+            system_ids,
+        )
+
+        recon_loss = _masked_huber(pred_state0 - state0, selected_group_mask)
+        kl = -0.5 * jnp.sum(1 + z_logvar - z_mean ** 2 - jnp.exp(z_logvar), axis=-1)
+        loss_kl = jnp.mean(kl)
+
+        pre_cfg = self.config.get("pretraining", {})
+        recon_weight = float(pre_cfg.get("reconstruction_weight", 1.0))
+        kl_weight = float(pre_cfg.get("kl_weight", self.config["loss_weights"].get("kl", 0.0)))
+        total_loss = recon_weight * recon_loss + kl_weight * loss_kl
+        return total_loss, {
+            "total": total_loss,
+            "masked_reconstruction": recon_loss,
+            "kl": loss_kl,
+        }
+
     @eqx.filter_jit
     def train_step(self, trainable, frozen, opt_state, batch: Dict[str, Array], key: PRNGKeyArray):
         def loss_fn(trainable_model):
@@ -286,6 +370,18 @@ class UniversalTrainer:
     def eval_step(self, model: UniversalDigitalTwin, batch: Dict[str, Array], key: PRNGKeyArray):
         _, loss_dict = self.compute_loss(model, batch, key)
         return loss_dict
+
+    @eqx.filter_jit
+    def pretrain_step(self, trainable, frozen, opt_state, batch: Dict[str, Array], key: PRNGKeyArray):
+        def loss_fn(trainable_model):
+            model = eqx.combine(trainable_model, frozen)
+            return self.compute_group_pretraining_loss(model, batch, key)
+
+        (loss, loss_dict), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(trainable)
+        updates, new_opt_state = self.optimizer.update(grads, opt_state, trainable)
+        new_trainable = eqx.apply_updates(trainable, updates)
+        new_model = eqx.combine(new_trainable, frozen)
+        return new_model, new_opt_state, loss_dict
 
     def _validate_batches(
         self,
@@ -348,6 +444,81 @@ class UniversalTrainer:
         timed_out = False
         epochs_completed = 0
         failure_reason = None
+        pre_cfg = self.config.get("pretraining", {})
+        pretraining_enabled = bool(pre_cfg.get("enabled", False))
+        pretraining_epochs = int(pre_cfg.get("epochs", 0))
+        pretraining_batches = int(pre_cfg.get("batches_per_epoch", 0))
+
+        if pretraining_enabled and pretraining_epochs > 0 and pretraining_batches > 0:
+            for pre_epoch in range(pretraining_epochs):
+                if deadline is not None and time.perf_counter() >= deadline:
+                    timed_out = True
+                    break
+
+                pretrain_losses: Dict[str, list] = {
+                    "total": [],
+                    "masked_reconstruction": [],
+                    "kl": [],
+                }
+                pbar = tqdm(range(pretraining_batches), desc="Grouped Pretraining")
+                for batch_index in pbar:
+                    if deadline is not None and time.perf_counter() >= deadline:
+                        timed_out = True
+                        break
+                    key, sample_key, step_key = jax.random.split(key, 3)
+                    batch = self.train_dataset.sample_batch(
+                        sample_key,
+                        batch_size=batch_size,
+                        seq_len=int(self.config["training"]["seq_len"]),
+                    )
+                    trainable, frozen = eqx.partition(self.model, self.filter_spec)
+                    self.model, self.opt_state, loss_dict = self.pretrain_step(
+                        trainable,
+                        frozen,
+                        self.opt_state,
+                        batch,
+                        step_key,
+                    )
+                    loss_dict_float = {name: float(value) for name, value in loss_dict.items()}
+                    if _non_finite_loss_names(loss_dict_float):
+                        failure_reason = (
+                            f"non_finite_pretrain_loss at epoch={pre_epoch+1}, "
+                            f"batch={batch_index+1}: {loss_dict_float}"
+                        )
+                        break
+                    for name, value in loss_dict_float.items():
+                        pretrain_losses.setdefault(name, []).append(value)
+                    self.step += 1
+                    self.pretraining_steps += 1
+                    pbar.set_postfix({"loss": f"{loss_dict_float['total']:.4f}"})
+
+                if failure_reason is not None:
+                    break
+                if not pretrain_losses["total"]:
+                    failure_reason = "no pretraining batches completed before timeout"
+                    break
+
+                mean_pretrain_losses = {
+                    name: float(jnp.mean(jnp.asarray(values)))
+                    for name, values in pretrain_losses.items()
+                }
+                print(f"\nGrouped pretraining losses: {mean_pretrain_losses}")
+
+            if failure_reason is not None or timed_out:
+                final_path = os.path.join(output_dir, "final_model.eqx")
+                self.model.save(final_path)
+                training_seconds = time.perf_counter() - start_time
+                self.last_train_summary = {
+                    "best_val_loss": None if self.best_val_loss == float("inf") else float(self.best_val_loss),
+                    "epochs_completed": epochs_completed,
+                    "timed_out": timed_out,
+                    "training_seconds": training_seconds,
+                    "failure_reason": failure_reason,
+                    "steps_completed": self.step,
+                    "pretraining_enabled": pretraining_enabled,
+                    "pretraining_steps": self.pretraining_steps,
+                }
+                return self.last_train_summary
 
         for epoch in range(n_epochs):
             if deadline is not None and time.perf_counter() >= deadline:
@@ -434,5 +605,7 @@ class UniversalTrainer:
             "training_seconds": training_seconds,
             "failure_reason": failure_reason,
             "steps_completed": self.step,
+            "pretraining_enabled": pretraining_enabled,
+            "pretraining_steps": self.pretraining_steps,
         }
         return self.last_train_summary

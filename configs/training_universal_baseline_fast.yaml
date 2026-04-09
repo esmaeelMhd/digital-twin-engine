@@ -30,6 +30,13 @@ training:
   mixed_batching: weighted
   max_batches_per_epoch: 100
 
+pretraining:
+  enabled: true
+  epochs: 1
+  batches_per_epoch: 25
+  reconstruction_weight: 1.0
+  kl_weight: 0.0001
+
 loss_weights:
   reconstruction: 1.0
   trajectory: 1.0
