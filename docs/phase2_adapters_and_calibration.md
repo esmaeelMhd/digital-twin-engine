@@ -106,6 +106,23 @@ Targeted verification for Phase 2:
 - `pytest tests/test_digital_twin.py tests/test_grouped_encoder.py tests/test_phase1_process_unit_spec.py -q`
 - `python -m py_compile dte/data/multi_system_dataset.py dte/models/universal_digital_twin.py dte/training/universal_trainer.py dte/calibration/unit_calibration.py scripts/calibrate_unit.py`
 
+## Reusable Smoke Script
+
+Use [scripts/smoke_phase2.py](/home/ismayil/digital-twin-engine/scripts/smoke_phase2.py) to rerun the small end-to-end Phase 2 matrix:
+
+```bash
+source .venv/bin/activate
+python scripts/smoke_phase2.py
+```
+
+Useful overrides:
+
+- `--workspace_dir outputs/phase2_smoke/manual_run`
+- `--target_base_system heat_exchanger --target_system_name hx_variant`
+- `--target_n_trajectories 12 --n_steps 20`
+- `--skip_data_generation` to reuse an existing workspace
+- `--dry_run` to inspect the generated configs and planned commands
+
 ## Notes
 
 - the single-system `DigitalTwin` path is unchanged
