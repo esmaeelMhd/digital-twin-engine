@@ -121,3 +121,34 @@ What is still intentionally thin:
 - no bundled RL training algorithm or replay buffer stack
 - optimisation in `ProcessMPCInterface` is random-shooting, not a full advanced solver family
 - the environment wrapper is Gymnasium-style without taking a hard dependency on `gymnasium`
+
+## Smoke Runner
+
+Phase 7 now includes a reusable smoke runner:
+
+- `scripts/smoke_phase7.py`
+
+It executes the new control-facing surfaces directly in one local process and writes a workspace `summary.json` plus per-step artifacts for:
+
+- measurement correction with latent refresh
+- model-backed rollout through `ProcessMPCInterface`
+- a short simulator-backed MPC loop
+- a Gymnasium-style RL environment rollout
+- disturbance sensitivity and mismatch robustness metrics
+
+Default usage:
+
+```bash
+source .venv/bin/activate
+python scripts/smoke_phase7.py
+```
+
+Useful variants:
+
+```bash
+python scripts/smoke_phase7.py --dry_run
+python scripts/smoke_phase7.py --workspace_dir outputs/phase7_smoke/manual_run
+python scripts/smoke_phase7.py --mpc_horizon 12 --mpc_candidates 16
+```
+
+The runner defaults to `JAX_PLATFORMS=cpu` so the smoke path stays reproducible and does not depend on GPU availability.
