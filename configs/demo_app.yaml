@@ -1,0 +1,43 @@
+theme:
+  product_name: Digital Twin Engine
+  headline: Industrial dynamics you can steer in real time.
+  summary: Interactive process demos for operators, engineers, and customers exploring control, forecast uncertainty, and operating risk.
+
+demos:
+  - id: cstr_live
+    title: CSTR
+    system: cstr
+    kind: unit_demo
+    description: Reactor temperature, conversion, and coolant action under changing feed conditions.
+    dt: 0.1
+    n_steps: 25
+    highlight_states: [Ca, Cb, T]
+    target_state:
+      Ca: 0.35
+      Cb: 0.85
+      T: 338.0
+      Tc: 304.0
+
+  - id: heat_exchanger_live
+    title: Heat Exchanger
+    system: heat_exchanger
+    kind: unit_demo
+    description: Counter-current outlet temperatures and duty response under coordinated hot/cold-side flow changes.
+    dt: 0.1
+    n_steps: 25
+    highlight_states: [T_hot, T_cold]
+    target_state:
+      T_hot: 345.0
+      T_cold: 320.0
+
+  - id: two_tank_live
+    title: Two-Tank System
+    system: two_tank
+    kind: unit_demo
+    description: Inventory balancing, overflow margin, and valve action in a coupled hydraulic section.
+    dt: 0.1
+    n_steps: 25
+    highlight_states: [h1, h2]
+    target_state:
+      h1: 1.2
+      h2: 1.0

@@ -45,6 +45,15 @@ from fastapi import Depends, FastAPI, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 
 from dte.api.models import (
+    DemoCatalogResponse,
+    DemoCompareScenariosRequest,
+    DemoCompareScenariosResponse,
+    DemoOptimizeControlRequest,
+    DemoOptimizeControlResponse,
+    DemoRolloutRequest,
+    DemoRolloutResponse,
+    DemoSimulateRequest,
+    DemoSimulateResponse,
     EnsembleRequest,
     EnsembleResponse,
     ErrorResponse,
@@ -53,6 +62,17 @@ from dte.api.models import (
     PredictResponse,
     SteadyStateRequest,
     SteadyStateResponse,
+)
+from dte.demo.engine import (
+    compare_scenarios,
+    constraint_summary,
+    default_disturbance_sequence,
+    demo_catalog_from_config,
+    load_demo_config,
+    optimize_control_sequence,
+    rollout_scenario,
+    simulate_open_loop,
+    time_axis,
 )
 from dte.models.digital_twin import DigitalTwin
 from dte.simulators.base import SystemSpec
@@ -65,6 +85,7 @@ from dte.simulators.registry import get_system_spec, get_simulator
 
 _models: Dict[str, DigitalTwin] = {}
 _specs: Dict[str, SystemSpec] = {}
+_system_configs: Dict[str, dict] = {}
 _startup_time: float = 0.0
 
 
@@ -77,6 +98,7 @@ def _load_system(system_config_path: str, model_path: Optional[str], training_co
 
     spec = get_system_spec(sys_cfg)
     _specs[spec.name] = spec
+    _system_configs[spec.name] = sys_cfg
 
     if model_path and os.path.exists(model_path):
         model = DigitalTwin.load(
@@ -174,8 +196,52 @@ def _get_model_and_spec(system: str):
     return model, spec
 
 
+def _get_demo_runtime(system: str):
+    spec = _specs.get(system)
+    if spec is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"System '{system}' not registered.  Available: {list(_specs.keys())}",
+        )
+    system_config = _system_configs.get(system)
+    if system_config is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"No system config loaded for '{system}'.",
+        )
+    try:
+        simulator = get_simulator(system, system_config)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not instantiate simulator for '{system}': {exc}",
+        )
+    model = _models.get(system)
+    return spec, simulator, model
+
+
 def _build_time_array(n_steps: int, dt: float) -> jnp.ndarray:
     return jnp.linspace(0.0, (n_steps - 1) * dt, n_steps)
+
+
+def _ensure_disturbance_sequence(
+    spec: SystemSpec,
+    disturbances: Optional[List[List[float]]],
+    n_steps: int,
+) -> np.ndarray:
+    if disturbances:
+        values = np.asarray(disturbances, dtype=np.float32)
+    else:
+        values = np.asarray(default_disturbance_sequence(spec, n_steps), dtype=np.float32)
+    if values.shape != (n_steps, spec.disturbance_dim):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"disturbances must have shape [{n_steps}, {spec.disturbance_dim}] "
+                f"for system '{spec.name}'."
+            ),
+        )
+    return values
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +256,205 @@ async def health():
         status="ok",
         loaded_systems=list(_specs.keys()),
         version="0.1.0",
+    )
+
+
+@app.get(
+    "/demo/catalog",
+    response_model=DemoCatalogResponse,
+    tags=["demo"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def demo_catalog():
+    """Return the interactive demo catalog and flowsheet previews."""
+
+    demo_config_path = os.environ.get("DTE_DEMO_CONFIG", "configs/demo_app.yaml")
+    config = load_demo_config(demo_config_path)
+    catalog = demo_catalog_from_config(config, _system_configs)
+    return DemoCatalogResponse.model_validate(catalog)
+
+
+@app.post(
+    "/demo/simulate",
+    response_model=DemoSimulateResponse,
+    tags=["demo"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def demo_simulate(req: DemoSimulateRequest):
+    """Run a deterministic simulator rollout for the demo app."""
+
+    spec, simulator, _ = _get_demo_runtime(req.system)
+    controls = np.asarray(req.controls, dtype=np.float32)
+    if controls.shape[1] != spec.control_dim:
+        raise HTTPException(
+            status_code=422,
+            detail=f"controls must have shape [T, {spec.control_dim}] for '{req.system}'.",
+        )
+    disturbances = _ensure_disturbance_sequence(spec, req.disturbances, controls.shape[0])
+    states = simulate_open_loop(
+        spec,
+        simulator,
+        np.asarray(req.initial_state, dtype=np.float32),
+        controls,
+        disturbances,
+        float(req.dt),
+    )
+    return DemoSimulateResponse(
+        system=req.system,
+        times=time_axis(controls.shape[0], float(req.dt)).tolist(),
+        states=states.tolist(),
+        state_names=spec.state_names,
+        constraint_summary={
+            key: float(value)
+            for key, value in constraint_summary(spec, states).items()
+        },
+    )
+
+
+@app.post(
+    "/demo/rollout",
+    response_model=DemoRolloutResponse,
+    tags=["demo"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def demo_rollout(req: DemoRolloutRequest):
+    """Return mean trajectory and uncertainty bands for one scenario."""
+
+    spec, simulator, model = _get_demo_runtime(req.system)
+    controls = np.asarray(req.controls, dtype=np.float32)
+    if controls.shape[1] != spec.control_dim:
+        raise HTTPException(
+            status_code=422,
+            detail=f"controls must have shape [T, {spec.control_dim}] for '{req.system}'.",
+        )
+    disturbances = _ensure_disturbance_sequence(spec, req.disturbances, controls.shape[0])
+    result = rollout_scenario(
+        spec,
+        simulator,
+        initial_state=np.asarray(req.initial_state, dtype=np.float32),
+        controls=controls,
+        disturbances=disturbances,
+        dt=float(req.dt),
+        model=model,
+        params=None if req.params is None else np.asarray(req.params, dtype=np.float32),
+        n_samples=int(req.n_samples),
+        seed=int(req.seed),
+    )
+    return DemoRolloutResponse(
+        system=req.system,
+        source=result["source"],
+        times=np.asarray(result["times"]).tolist(),
+        mean=np.asarray(result["mean"]).tolist(),
+        std=np.asarray(result["std"]).tolist(),
+        p05=np.asarray(result["p05"]).tolist(),
+        p95=np.asarray(result["p95"]).tolist(),
+        state_names=spec.state_names,
+        constraint_summary={
+            key: float(value) for key, value in result["constraint_summary"].items()
+        },
+    )
+
+
+@app.post(
+    "/demo/optimize_control",
+    response_model=DemoOptimizeControlResponse,
+    tags=["demo"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def demo_optimize_control(req: DemoOptimizeControlRequest):
+    """Return a lightweight random-shooting control recommendation."""
+
+    spec, simulator, _ = _get_demo_runtime(req.system)
+    disturbances = np.asarray(req.disturbances, dtype=np.float32)
+    if disturbances.shape[1] != spec.disturbance_dim:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"disturbances must have shape [T, {spec.disturbance_dim}] for '{req.system}'."
+            ),
+        )
+    result = optimize_control_sequence(
+        spec,
+        simulator,
+        initial_state=np.asarray(req.initial_state, dtype=np.float32),
+        disturbances=disturbances,
+        dt=float(req.dt),
+        target_state=np.asarray(req.target_state, dtype=np.float32),
+        tracked_state_names=req.tracked_state_names,
+        n_candidates=int(req.n_candidates),
+        seed=int(req.seed),
+    )
+    return DemoOptimizeControlResponse(
+        system=req.system,
+        control_sequence=np.asarray(result["control_sequence"]).tolist(),
+        predicted_states=np.asarray(result["predicted_states"]).tolist(),
+        objective=float(result["objective"]),
+        tracked_state_names=list(result["tracked_state_names"]),
+        state_names=spec.state_names,
+        constraint_summary={
+            key: float(value) for key, value in result["constraint_summary"].items()
+        },
+    )
+
+
+@app.post(
+    "/demo/compare_scenarios",
+    response_model=DemoCompareScenariosResponse,
+    tags=["demo"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def demo_compare_scenarios(req: DemoCompareScenariosRequest):
+    """Compare baseline and candidate control schedules for one demo system."""
+
+    spec, simulator, model = _get_demo_runtime(req.system)
+    baseline_controls = np.asarray(req.baseline_controls, dtype=np.float32)
+    candidate_controls = np.asarray(req.candidate_controls, dtype=np.float32)
+    if baseline_controls.shape != candidate_controls.shape:
+        raise HTTPException(
+            status_code=422,
+            detail="baseline_controls and candidate_controls must have the same shape.",
+        )
+    if baseline_controls.shape[1] != spec.control_dim:
+        raise HTTPException(
+            status_code=422,
+            detail=f"controls must have shape [T, {spec.control_dim}] for '{req.system}'.",
+        )
+    disturbances = _ensure_disturbance_sequence(
+        spec,
+        req.disturbances,
+        baseline_controls.shape[0],
+    )
+    result = compare_scenarios(
+        spec,
+        simulator,
+        initial_state=np.asarray(req.initial_state, dtype=np.float32),
+        baseline_controls=baseline_controls,
+        candidate_controls=candidate_controls,
+        disturbances=disturbances,
+        dt=float(req.dt),
+        model=model,
+        params=None if req.params is None else np.asarray(req.params, dtype=np.float32),
+        n_samples=int(req.n_samples),
+        seed=int(req.seed),
+    )
+    baseline = result["baseline"]
+    candidate = result["candidate"]
+    return DemoCompareScenariosResponse(
+        system=req.system,
+        state_names=spec.state_names,
+        baseline_mean=np.asarray(baseline["mean"]).tolist(),
+        candidate_mean=np.asarray(candidate["mean"]).tolist(),
+        baseline_p05=np.asarray(baseline["p05"]).tolist(),
+        baseline_p95=np.asarray(baseline["p95"]).tolist(),
+        candidate_p05=np.asarray(candidate["p05"]).tolist(),
+        candidate_p95=np.asarray(candidate["p95"]).tolist(),
+        summary=result["summary"],
+        baseline_constraints={
+            key: float(value) for key, value in baseline["constraint_summary"].items()
+        },
+        candidate_constraints={
+            key: float(value) for key, value in candidate["constraint_summary"].items()
+        },
     )
 
 
@@ -321,26 +586,7 @@ async def ensemble(req: EnsembleRequest):
 )
 async def steady_state(req: SteadyStateRequest):
     """Find the steady-state operating point for a given system."""
-    spec = _specs.get(req.system)
-    if spec is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"System '{req.system}' not registered.  Available: {list(_specs.keys())}",
-        )
-
-    # Build a simulator via the registry
-    try:
-        # Load system config from environment (best effort)
-        sys_config_env = os.environ.get("DTE_SYSTEM_CONFIG", "configs/cstr_default.yaml")
-        cfg_path = sys_config_env.split(",")[0].strip()
-        with open(cfg_path) as f:
-            sys_cfg = yaml.safe_load(f)
-        simulator = get_simulator(req.system, sys_cfg)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Could not instantiate simulator for '{req.system}': {exc}",
-        )
+    spec, simulator, _ = _get_demo_runtime(req.system)
 
     control = (
         jnp.array(req.nominal_control, dtype=jnp.float32)

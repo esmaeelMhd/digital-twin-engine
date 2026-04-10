@@ -20,7 +20,7 @@ Status legend:
 | Phase 3. Flowsheet graph modeling | Implemented | Thin-slice graph layer landed: flowsheet schema, graph dataset, synthetic demo data, shared flowsheet model, recycle-aware rollout, and plant-level proxy losses |
 | Phase 4. Modular law layers | Implemented | Reusable chemistry, thermo, and biology law modules now exist with config-driven bundle integration and physics-registry hooks |
 | Phase 5. Customer adaptation workflow | Implemented | Customer onboarding schema, template matching, an adaptation CLI, and automatic validation report generation now exist for unit workflows |
-| Phase 6. Website/demo app | Partial | Streamlit dashboard and API exist, but not the broader demo product described in the plan |
+| Phase 6. Website/demo app | Implemented | Dedicated demo API routes, a separate interactive Streamlit demo app, and config-driven example demos now exist locally |
 | Phase 7. MPC and DRL readiness | Partial | MPC, PID, and online adaptation exist; RL wrapper and generic interfaces do not |
 | Phase 8. Distributed/transport-aware units | Missing | No distributed-unit modeling layer yet |
 
@@ -422,24 +422,38 @@ Planned deliverables:
 
 Current state:
 
-- `dte/api/service.py` exposes:
+- `dte/demo/engine.py` now provides shared demo runtime helpers for:
+  - deterministic simulator rollouts
+  - model-backed or simulator-ensemble rollouts
+  - scenario comparison
+  - lightweight control-sequence optimisation
+  - demo catalog and flowsheet preview generation
+- `dte/api/service.py` still exposes:
   - `/health`
   - `/predict`
   - `/ensemble`
   - `/steady_state`
-- `app/dashboard.py` provides a Streamlit dashboard for trained runs
-- deployment files exist: `Dockerfile`, `docker-compose.yml`
+- `dte/api/service.py` now also exposes:
+  - `/demo/catalog`
+  - `/demo/simulate`
+  - `/demo/rollout`
+  - `/demo/optimize_control`
+  - `/demo/compare_scenarios`
+- `app/demo_app.py` now provides a dedicated multi-demo Streamlit experience for:
+  - CSTR
+  - heat exchanger
+  - two-tank system
+- `configs/demo_app.yaml` now defines the demo catalog, target states, horizons, and highlighted state channels
+- deployment files still exist: `Dockerfile`, `docker-compose.yml`
 
 What is still missing:
 
-- no dedicated demo website
-- no multi-demo product flow matching the roadmap
-- no flowsheet demo because flowsheet modeling does not exist yet
-- no dedicated `simulate` / `optimize_control` / `compare_scenarios` API family beyond the current endpoints
+- flowsheet support is currently a preview/catalog surface, not a fully interactive plant-graph simulator in the demo UI
+- control optimisation is a lightweight demo optimiser, not the Phase 7 generic MPC interface
 
 Status:
 
-- `Partial`
+- `Implemented`
 
 ## Phase 7. MPC And DRL Readiness
 
