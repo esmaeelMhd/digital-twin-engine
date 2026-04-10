@@ -1,6 +1,6 @@
 # Implementation Mapping Against `plan.md`
 
-Date: 2026-04-09
+Date: 2026-04-10
 
 This document maps the roadmap in `plan.md` to the code that already exists in the repository.
 
@@ -17,7 +17,7 @@ Status legend:
 | Phase 0. Repository audit | Implemented | Covered by `docs/repo_audit.md` and this file |
 | Phase 1. Stabilize/refactor universal unit model | Implemented | Thin-slice implementation landed: typed channel schema, richer unit spec, optional grouped encoder, reusable constraints, multi-horizon universal loss, and new evaluation diagnostics |
 | Phase 2. Adapters and family conditioning | Partial | Descriptor conditioning, few-shot fine-tuning, and basic family metadata now exist, but there is still no adapter architecture or taxonomy-conditioned modeling |
-| Phase 3. Flowsheet graph modeling | Missing | No flowsheet, stream, or graph simulator layer |
+| Phase 3. Flowsheet graph modeling | Implemented | Thin-slice graph layer landed: flowsheet schema, graph dataset, synthetic demo data, shared flowsheet model, recycle-aware rollout, and plant-level proxy losses |
 | Phase 4. Modular law layers | Missing | Physics remains per-system handwritten residual code |
 | Phase 5. Customer adaptation workflow | Partial | Few-shot adaptation exists, but no onboarding schema or report generator |
 | Phase 6. Website/demo app | Partial | Streamlit dashboard and API exist, but not the broader demo product described in the plan |
@@ -270,15 +270,49 @@ Planned deliverables:
 
 Current state:
 
-- no `flowsheet/` package
-- no stream or topology schema
-- no graph dataset
-- no flowsheet model
-- no plant-wide losses
+- `dte/flowsheet/schema.py` now defines:
+  - `StreamSpec`
+  - `FlowsheetSpec`
+  - source/sink validation
+  - recycle-loop detection on the internal unit graph
+- `dte/flowsheet/types.py` defines the external node sentinels and allowed stream kinds
+- `dte/flowsheet/examples.py` now provides two initial demo graphs:
+  - exchanger -> reactor -> tank
+  - reactor -> separator -> recycle -> reactor
+- `dte/data/flowsheet_dataset.py` now provides:
+  - `FlowsheetGraphMetadata`
+  - `FlowsheetTrajectoryDataset`
+  - HDF5 save/load support with topology metadata
+  - preserved `seq_len` / `stride` roundtrips
+- `dte/flowsheet/synthetic.py` now provides a lightweight synthetic data path so Phase 3 can be trained and tested without adding a full plant simulator stack yet
+- `dte/models/flowsheet_model.py` now provides a first shared graph model with:
+  - shared unit backbone
+  - stream-message aggregation
+  - graph-level update block
+  - multi-unit rollout
+  - recycle-aware delay handling through per-stream lag metadata
+- `dte/evaluation/flowsheet_metrics.py` now provides:
+  - stream consistency loss
+  - unit-output consistency loss
+  - plant-balance proxy loss
+  - rollout stability penalty
+- `dte/training/flowsheet_trainer.py` now provides a runnable train/validate loop for the graph model
+- targeted Phase 3 tests now cover:
+  - schema validation
+  - dataset/HDF5 roundtrip
+  - rollout on both example flowsheets
+  - recycle-delay behavior
+  - one-epoch train/validate execution
 
 Status:
 
-- `Missing`
+- `Implemented`
+
+Notes:
+
+- this is a thin first slice, not a full Aspen-style simulator
+- plant balance is currently a topology-aware proxy consistency term, not a thermodynamically rigorous plant residual layer
+- demo/training data is currently synthetic; there is not yet a generic flowsheet data-generation CLI
 
 ## Phase 4. Add Modular Law Layers
 
