@@ -21,7 +21,7 @@ Status legend:
 | Phase 4. Modular law layers | Implemented | Reusable chemistry, thermo, and biology law modules now exist with config-driven bundle integration and physics-registry hooks |
 | Phase 5. Customer adaptation workflow | Implemented | Customer onboarding schema, template matching, an adaptation CLI, and automatic validation report generation now exist for unit workflows |
 | Phase 6. Website/demo app | Implemented | Dedicated demo API routes, a separate interactive Streamlit demo app, and config-driven example demos now exist locally |
-| Phase 7. MPC and DRL readiness | Partial | MPC, PID, and online adaptation exist; RL wrapper and generic interfaces do not |
+| Phase 7. MPC and DRL readiness | Implemented | A generic MPC runtime, Gymnasium-style env wrapper, state-correction hooks, and control-oriented metrics now exist alongside the legacy MPC/PID path |
 | Phase 8. Distributed/transport-aware units | Missing | No distributed-unit modeling layer yet |
 
 ## Plan Assumptions Already Outdated
@@ -457,27 +457,50 @@ Status:
 
 ## Phase 7. MPC And DRL Readiness
 
-### What already exists
+Planned deliverables:
 
-- `dte/control/mpc.py` has a sampling/CEM MPC controller
-- `dte/control/pid.py` has PID support
-- `scripts/run_mpc.py` runs an MPC comparison loop
-- `dte/training/online.py` has an `OnlineAdapter` with:
-  - ring buffer
-  - drift detection
-  - sliding-window fine-tuning
+- MPC wrapper
+- RL env wrapper
+- state correction utilities
 
-### What is still missing
+Current state:
 
-- no generic `control/mpc_interface.py`
-- no RL environment wrapper
-- no generic state-estimation or filtering module
-- no formal control-readiness metric suite
-- current MPC implementation is still CSTR-shaped in important places
+- `dte/control/mpc.py` still provides the original sampling/CEM MPC controller
+- `dte/control/pid.py` still provides the PID baseline
+- `scripts/run_mpc.py` still runs the legacy MPC comparison loop
+- `dte/training/online.py` still provides the heavier online fine-tuning path
+- `dte/control/mpc_interface.py` now provides:
+  - `ProcessMPCInterface`
+  - current state estimate access
+  - rollout under candidate actions
+  - custom cost hooks
+  - custom constraint hooks
+  - random-shooting optimisation for controller prototypes
+- `dte/control/rl_env.py` now provides:
+  - `ProcessControlEnv`
+  - Gymnasium-style `reset()` / `step()` signatures
+  - observation and action spaces
+  - disturbance schedule support
+- `dte/control/state_correction.py` now provides:
+  - measurement assimilation
+  - exponential filtering
+  - latent refresh through the encoder when a model is attached
+  - one-step latent prediction hooks
+- `dte/evaluation/control_metrics.py` now provides:
+  - closed-loop cost summaries
+  - constraint violation summaries
+  - disturbance sensitivity metrics
+  - mismatch robustness metrics
+
+What is still intentionally thin:
+
+- the new MPC runtime uses random-shooting rather than a full solver family
+- the RL wrapper is Gymnasium-style without taking a hard dependency on `gymnasium`
+- no bundled RL training algorithm stack landed in this phase
 
 Status:
 
-- `Partial`
+- `Implemented`
 
 ## Phase 8. Later Distributed / Transport-Aware Units
 

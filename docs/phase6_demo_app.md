@@ -113,3 +113,29 @@ What is still intentionally thin:
 - `python -m py_compile dte/demo/__init__.py dte/demo/engine.py dte/api/models.py dte/api/service.py app/demo_app.py`
 
 The route tests explicitly cover the no-checkpoint fallback so the demos remain usable locally without pre-trained weights.
+
+## Smoke Runner
+
+Phase 6 now includes a reusable smoke runner:
+
+- `scripts/smoke_phase6.py`
+
+It starts the real FastAPI service and the real Streamlit app, waits for health checks, exercises the demo API surface, fetches the Streamlit root HTML, and writes logs plus a workspace `summary.json`.
+
+Default usage:
+
+```bash
+source .venv/bin/activate
+python scripts/smoke_phase6.py
+```
+
+Useful variants:
+
+```bash
+python scripts/smoke_phase6.py --dry_run
+python scripts/smoke_phase6.py --workspace_dir outputs/phase6_smoke/manual_run
+python scripts/smoke_phase6.py --skip_streamlit
+python scripts/smoke_phase6.py --skip_api
+```
+
+The runner defaults subprocesses to `JAX_PLATFORMS=cpu` so smoke runs stay reproducible and do not depend on GPU availability.
