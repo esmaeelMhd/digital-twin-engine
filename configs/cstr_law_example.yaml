@@ -1,0 +1,26 @@
+laws:
+  enabled: true
+  chemistry:
+    - name: primary_reaction
+      kind: arrhenius_reaction
+      stoichiometry: [-1.0, 1.0, 0.0, 0.0]
+      reactant_indices: [0]
+      reaction_orders: [1.0]
+      temperature_index: 2
+      pre_exponential: 0.75
+      activation_energy_over_r: 1200.0
+      heat_of_reaction: -2.5
+      thermal_state_index: 2
+      thermal_gain: 0.01
+  thermo:
+    - name: liquid_cp
+      kind: constant_heat_capacity
+      temperature_index: 2
+      reference_temperature: 298.15
+      heat_capacity_reference: 0.239
+      heat_capacity_slope: 0.0005
+      density: 1000.0
+      equilibrium_temperature: 330.0
+      equilibrium_sharpness: 0.05
+      thermal_state_index: 2
+      thermal_gain: 0.005

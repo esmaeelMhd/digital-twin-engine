@@ -5,7 +5,13 @@ from collections.abc import Callable
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
+from dte.laws.integration import (
+    LawAugmentedPhysicsLoss,
+    augment_diagnostic_with_laws,
+    build_law_bundle,
+)
 from dte.physics.base import NullPhysicsLoss, PhysicsLoss
+from dte.simulators.registry import get_system_spec
 
 
 PhysicsDiagnosticFn = Callable[
@@ -139,8 +145,19 @@ def get_physics_loss(system_name: str, system_config: dict) -> PhysicsLoss:
     """Build the registered PhysicsLoss implementation for ``system_name``."""
     builder = _PHYSICS_LOSS_BUILDERS.get(system_name)
     if builder is None:
-        return NullPhysicsLoss()
-    return builder(system_config)
+        base_loss: PhysicsLoss = NullPhysicsLoss()
+    else:
+        base_loss = builder(system_config)
+
+    try:
+        spec = get_system_spec(system_config)
+    except Exception:
+        return base_loss
+
+    law_bundle = build_law_bundle(spec, system_config)
+    if law_bundle is None:
+        return base_loss
+    return LawAugmentedPhysicsLoss(base_loss, law_bundle)
 
 
 def get_physics_diagnostic_fn(
@@ -153,9 +170,16 @@ def get_physics_diagnostic_fn(
     residual name. Missing diagnostics should simply be omitted from the dict.
     """
     builder = _PHYSICS_DIAGNOSTIC_BUILDERS.get(system_name)
-    if builder is None:
-        return None
-    return builder(system_config)
+    base_fn = None if builder is None else builder(system_config)
+    try:
+        spec = get_system_spec(system_config)
+    except Exception:
+        return base_fn
+
+    law_bundle = build_law_bundle(spec, system_config)
+    if law_bundle is None:
+        return base_fn
+    return augment_diagnostic_with_laws(base_fn, law_bundle)
 
 
 def zero_residual(length: int) -> jnp.ndarray:

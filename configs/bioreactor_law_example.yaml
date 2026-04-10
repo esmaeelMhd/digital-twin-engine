@@ -1,0 +1,18 @@
+laws:
+  enabled: true
+  biology:
+    - name: aerobic_growth
+      kind: monod_growth
+      substrate_index: 0
+      biomass_index: 1
+      oxygen_index: 2
+      mu_max: 0.45
+      half_saturation: 0.2
+      decay_rate: 0.03
+      yield_coefficient: 0.55
+      oxygen_half_saturation: 0.15
+      kla: 1.2
+      oxygen_saturation: 1.0
+      oxygen_demand_factor: 0.4
+      inhibition_kind: substrate
+      inhibition_constant: 8.0

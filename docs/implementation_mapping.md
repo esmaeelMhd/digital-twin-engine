@@ -18,7 +18,7 @@ Status legend:
 | Phase 1. Stabilize/refactor universal unit model | Implemented | Thin-slice implementation landed: typed channel schema, richer unit spec, optional grouped encoder, reusable constraints, multi-horizon universal loss, and new evaluation diagnostics |
 | Phase 2. Adapters and family conditioning | Partial | Descriptor conditioning, few-shot fine-tuning, and basic family metadata now exist, but there is still no adapter architecture or taxonomy-conditioned modeling |
 | Phase 3. Flowsheet graph modeling | Implemented | Thin-slice graph layer landed: flowsheet schema, graph dataset, synthetic demo data, shared flowsheet model, recycle-aware rollout, and plant-level proxy losses |
-| Phase 4. Modular law layers | Missing | Physics remains per-system handwritten residual code |
+| Phase 4. Modular law layers | Implemented | Reusable chemistry, thermo, and biology law modules now exist with config-driven bundle integration and physics-registry hooks |
 | Phase 5. Customer adaptation workflow | Partial | Few-shot adaptation exists, but no onboarding schema or report generator |
 | Phase 6. Website/demo app | Partial | Streamlit dashboard and API exist, but not the broader demo product described in the plan |
 | Phase 7. MPC and DRL readiness | Partial | MPC, PID, and online adaptation exist; RL wrapper and generic interfaces do not |
@@ -325,12 +325,49 @@ Planned deliverables:
 
 Current state:
 
-- physics is implemented as per-system residual modules
-- there is no reusable modular law layer
+- `dte/laws/chemistry.py` now provides:
+  - Arrhenius and power-law rate helpers
+  - stoichiometric source terms
+  - heat-of-reaction hooks
+  - `ChemistryLaw`
+- `dte/laws/thermo.py` now provides:
+  - heat-capacity correlations
+  - enthalpy-like transforms
+  - simple equilibrium indicator placeholders
+  - `ThermoLaw`
+- `dte/laws/biology.py` now provides:
+  - Monod growth
+  - substrate uptake
+  - oxygen transfer
+  - inhibition handling
+  - `BiologyLaw`
+- `dte/laws/base.py` and `dte/laws/integration.py` now provide:
+  - `LawModule`
+  - `UnitLawBundle`
+  - config-driven bundle construction
+  - law residual aggregation
+  - mechanistic delta / feature-vector hooks
+  - `LawAugmentedPhysicsLoss`
+- `dte/physics/registry.py` now augments registered physics losses and diagnostics when a config enables `laws`
+- example entry points now exist for both chemistry and biology:
+  - `configs/cstr_law_example.yaml`
+  - `configs/bioreactor_law_example.yaml`
+  - `dte/laws/examples.py`
+- targeted tests now cover:
+  - low-level law helpers
+  - bundle features and mechanistic deltas
+  - chemistry example integration
+  - biology example integration
+  - law-augmented physics registry behavior
 
 Status:
 
-- `Missing`
+- `Implemented`
+
+Notes:
+
+- the default system configs remain backward-compatible; law augmentation is opt-in through `laws.enabled`
+- the current integration hooks expose explicit features, mechanistic deltas, and residual terms, but they are not yet directly wired into the neural model architectures as extra input channels
 
 ## Phase 5. Build Customer Adaptation Workflow
 
