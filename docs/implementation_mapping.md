@@ -16,10 +16,10 @@ Status legend:
 | --- | --- | --- |
 | Phase 0. Repository audit | Implemented | Covered by `docs/repo_audit.md` and this file |
 | Phase 1. Stabilize/refactor universal unit model | Implemented | Thin-slice implementation landed: typed channel schema, richer unit spec, optional grouped encoder, reusable constraints, multi-horizon universal loss, and new evaluation diagnostics |
-| Phase 2. Adapters and family conditioning | Partial | Descriptor conditioning, few-shot fine-tuning, and basic family metadata now exist, but there is still no adapter architecture or taxonomy-conditioned modeling |
+| Phase 2. Adapters and family conditioning | Implemented | Family/subtype/law-tag conditioning, residual adapters, and target-unit calibration now exist in the universal path |
 | Phase 3. Flowsheet graph modeling | Implemented | Thin-slice graph layer landed: flowsheet schema, graph dataset, synthetic demo data, shared flowsheet model, recycle-aware rollout, and plant-level proxy losses |
 | Phase 4. Modular law layers | Implemented | Reusable chemistry, thermo, and biology law modules now exist with config-driven bundle integration and physics-registry hooks |
-| Phase 5. Customer adaptation workflow | Partial | Few-shot adaptation exists, but no onboarding schema or report generator |
+| Phase 5. Customer adaptation workflow | Implemented | Customer onboarding schema, template matching, an adaptation CLI, and automatic validation report generation now exist for unit workflows |
 | Phase 6. Website/demo app | Partial | Streamlit dashboard and API exist, but not the broader demo product described in the plan |
 | Phase 7. MPC and DRL readiness | Partial | MPC, PID, and online adaptation exist; RL wrapper and generic interfaces do not |
 | Phase 8. Distributed/transport-aware units | Missing | No distributed-unit modeling layer yet |
@@ -379,22 +379,38 @@ Planned deliverables:
 
 Current state:
 
-- closest existing pieces:
-  - `FewShotAdapter`
-  - `zero_shot_eval`
-  - FastAPI inference endpoints
-  - dashboard visualization
+- `dte/customer/onboarding_schema.py` now defines a validated onboarding payload for:
+  - unit list
+  - stream list
+  - controls
+  - disturbances
+  - measurements
+  - known laws
+  - operating ranges
+- `dte/customer/template_matching.py` now ranks:
+  - registered unit templates
+  - Phase 3 example flowsheet templates
+- `dte/customer/adaptation.py` now orchestrates:
+  - template matching
+  - pretrained-weight initialization
+  - adapter/calibration fine-tuning
+  - report generation
+- `scripts/adapt_customer.py` is now the Phase 5 entry point
+- `dte/customer/reporting.py` now generates:
+  - forecast metrics
+  - rollout metrics
+  - control sensitivity metrics
+  - uncertainty summaries
+  - constraint summaries
 
 What is still missing:
 
-- no onboarding schema
-- no template matching
-- no customer-level adaptation orchestration
-- no automated validation report
+- flowsheet adaptation is not yet wired through the customer CLI
+- customer-specific UI/demo surfaces are still separate future work
 
 Status:
 
-- `Partial`
+- `Implemented`
 
 ## Phase 6. Website / Demo App
 
