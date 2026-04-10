@@ -155,3 +155,26 @@ These cover:
 - rollout on both example flowsheets
 - recycle delay behavior
 - one-epoch train/validate execution
+
+## Smoke Runner
+
+Reusable smoke coverage for this phase now lives in:
+
+- `scripts/smoke_phase3.py`
+
+Default usage:
+
+```bash
+source .venv/bin/activate
+python scripts/smoke_phase3.py
+```
+
+Useful variants:
+
+```bash
+python scripts/smoke_phase3.py --dry_run
+python scripts/smoke_phase3.py --workspace_dir outputs/phase3_smoke/manual_run
+python scripts/smoke_phase3.py --flowsheets reactor_separator_recycle
+python scripts/smoke_phase3.py --n_trajectories 12 --n_steps 24
+python scripts/smoke_phase3.py --skip_data_generation
+```
