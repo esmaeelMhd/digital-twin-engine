@@ -207,7 +207,9 @@ def test_generate_dataset_to_hdf5_round_trips(tmp_path):
     assert dataset_summary["controls_shape"] == (2, 8, 2)
     assert reloaded["states"].shape == (2, 8, 4)
     assert "state_mean" in reloaded["normalization"]
+    assert "param_mean" in reloaded["normalization"]
     assert "state_mean" in dataset_summary["normalization"]
+    assert "param_mean" in dataset_summary["normalization"]
     assert dataset_summary["states_shape"] == (2, 8, 4)
     assert generator.last_profile["attempts"] >= 2
     assert generator.last_profile["invalid_trajectories"] >= 0

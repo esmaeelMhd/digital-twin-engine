@@ -30,11 +30,42 @@ class TrajectoryDataset:
             data = load_dataset(data)
         
         self.data = data
+        self.requested_seq_len = seq_len
         self.seq_len = seq_len
         self.stride = stride
+        self._ensure_normalization_contract()
         
         # Extract subsequences
         self._extract_subsequences()
+
+    def _ensure_normalization_contract(self) -> None:
+        """Backfill optional normalization statistics expected by older helpers.
+
+        Older generated and ingested datasets omitted parameter normalization
+        statistics even though ``normalize_params`` and ``denormalize_params``
+        expect them. Populate those fields lazily from the stored parameter
+        matrix so existing HDF5 files remain loadable.
+        """
+        normalization = dict(self.data.get("normalization", {}))
+        params = np.asarray(self.data["params"])
+        param_dim = params.shape[-1]
+
+        if "param_mean" not in normalization:
+            normalization["param_mean"] = jnp.asarray(
+                params.mean(axis=0),
+                dtype=jnp.float32,
+            )
+        if "param_std" not in normalization:
+            normalization["param_std"] = jnp.asarray(
+                np.clip(params.std(axis=0), 1e-8, None),
+                dtype=jnp.float32,
+            )
+
+        if param_dim == 0:
+            normalization["param_mean"] = jnp.zeros((0,), dtype=jnp.float32)
+            normalization["param_std"] = jnp.ones((0,), dtype=jnp.float32)
+
+        self.data["normalization"] = normalization
         
     def _extract_subsequences(self):
         """Extract subsequences of length seq_len with given stride."""
@@ -45,6 +76,10 @@ class TrajectoryDataset:
         time = np.asarray(self.data["time"])
 
         n_trajectories, n_steps_per_traj, _ = states.shape
+        effective_seq_len = min(self.requested_seq_len, n_steps_per_traj)
+        if effective_seq_len < 1:
+            raise ValueError("TrajectoryDataset requires at least one timestep per trajectory.")
+        self.seq_len = effective_seq_len
         
         # Calculate number of subsequences per trajectory
         n_subseqs_per_traj = (n_steps_per_traj - self.seq_len) // self.stride + 1
@@ -82,22 +117,22 @@ class TrajectoryDataset:
     @property
     def state_dim(self) -> int:
         """State dimension."""
-        return 4
+        return int(self.data["states"].shape[-1])
 
     @property
     def control_dim(self) -> int:
         """Control dimension."""
-        return 2
+        return int(self.data["controls"].shape[-1])
 
     @property
     def disturbance_dim(self) -> int:
         """Disturbance dimension."""
-        return 2
+        return int(self.data["disturbances"].shape[-1])
 
     @property
     def param_dim(self) -> int:
         """Parameter dimension."""
-        return 6
+        return int(self.data["params"].shape[-1])
 
     def __getitem__(self, idx: int) -> Dict[str, Array]:
         """Get a single sample.

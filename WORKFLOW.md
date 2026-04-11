@@ -112,6 +112,25 @@ pytest tests/ -v
 
 If you want fast validation instead of the full suite, use the phase smoke runners in Section 12.
 
+### 3.5 Full Milestone Validation
+
+If you want one command that validates the current first-version milestone end to end, use:
+
+```bash
+python scripts/run_v1_milestone.py
+```
+
+This runs:
+
+- install verification
+- the test suite
+- Phase 1 through Phase 7 smoke runners
+- a real universal train/eval run
+- an ingestion-backed customer adaptation pilot
+- the rollout-stability A/B benchmark
+
+The machine-readable report is written under `outputs/v1_milestone/<timestamp>/summary.json`.
+
 ---
 
 ## 4. Single-System Unit Workflow
@@ -522,6 +541,15 @@ Most smoke runners also support:
 
 The later smoke runners default to CPU-oriented execution for reproducibility on ordinary dev machines.
 
+Related validation runners:
+
+- `scripts/pilot_real_data_adaptation.py`
+  Exercises `generate_data.py` -> pseudo historian CSV -> `ingest_real_data.py` -> `adapt_customer.py`.
+- `scripts/compare_rollout_stability.py`
+  Compares the current architecture against an explicitly ablated old-style baseline.
+- `scripts/run_v1_milestone.py`
+  Chains the full milestone checklist into one report.
+
 ---
 
 ## 13. Deployment Workflow
@@ -618,6 +646,10 @@ If you are validating the full roadmap rather than one feature, run:
 2. `scripts/smoke_phase2.py`
 3. `scripts/smoke_phase3.py`
 4. `scripts/smoke_phase4.py`
+5. `scripts/smoke_phase5.py`
+6. `scripts/smoke_phase6.py`
+7. `scripts/smoke_phase7.py`
+8. `scripts/run_v1_milestone.py`
 5. `scripts/smoke_phase5.py`
 6. `scripts/smoke_phase6.py`
 7. `scripts/smoke_phase7.py`

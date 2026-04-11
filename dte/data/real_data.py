@@ -340,6 +340,8 @@ class RealDataIngestion:
         control_std = np.clip(controls_arr.std(axis=(0, 1)), 1e-8, None)
         disturbance_mean = disturbances_arr.mean(axis=(0, 1))
         disturbance_std = np.clip(disturbances_arr.std(axis=(0, 1)), 1e-8, None)
+        param_mean = params_arr.mean(axis=0)
+        param_std = np.clip(params_arr.std(axis=0), 1e-8, None)
 
         # -- 6. Write HDF5 ---------------------------------------------
         output_path = Path(output_path)
@@ -359,6 +361,8 @@ class RealDataIngestion:
             norm.create_dataset("control_std", data=control_std)
             norm.create_dataset("disturbance_mean", data=disturbance_mean)
             norm.create_dataset("disturbance_std", data=disturbance_std)
+            norm.create_dataset("param_mean", data=param_mean)
+            norm.create_dataset("param_std", data=param_std)
 
         summary = {
             "n_trajectories": len(trajectories),
@@ -367,8 +371,16 @@ class RealDataIngestion:
             "t_total_seconds": float(t_end - t_start),
             "states_shape": states_arr.shape,
             "controls_shape": controls_arr.shape,
+            "disturbances_shape": disturbances_arr.shape,
+            "params_shape": params_arr.shape,
             "state_mean": state_mean.tolist(),
             "state_std": state_std.tolist(),
+            "control_mean": control_mean.tolist(),
+            "control_std": control_std.tolist(),
+            "disturbance_mean": disturbance_mean.tolist(),
+            "disturbance_std": disturbance_std.tolist(),
+            "param_mean": param_mean.tolist(),
+            "param_std": param_std.tolist(),
             "noise_std": noise_std,
             "output_path": str(output_path),
         }

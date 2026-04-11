@@ -731,6 +731,8 @@ class GenericDataGenerator:
         control_std = controls_arr.std(axis=(0, 1)) + 1e-8
         disturbance_mean = disturbances_arr.mean(axis=(0, 1))
         disturbance_std = disturbances_arr.std(axis=(0, 1)) + 1e-8
+        param_mean = params_arr.mean(axis=0)
+        param_std = params_arr.std(axis=0) + 1e-8
 
         with h5py.File(output_path, "w") as f:
             # Use the same key names as the CSTR DataGenerator for compatibility
@@ -748,6 +750,8 @@ class GenericDataGenerator:
             norm.create_dataset("control_std", data=control_std)
             norm.create_dataset("disturbance_mean", data=disturbance_mean)
             norm.create_dataset("disturbance_std", data=disturbance_std)
+            norm.create_dataset("param_mean", data=param_mean)
+            norm.create_dataset("param_std", data=param_std)
 
         elapsed = time.perf_counter() - t_start
         self.last_profile = {
@@ -774,6 +778,10 @@ class GenericDataGenerator:
                 "state_std": state_std,
                 "control_mean": control_mean,
                 "control_std": control_std,
+                "disturbance_mean": disturbance_mean,
+                "disturbance_std": disturbance_std,
+                "param_mean": param_mean,
+                "param_std": param_std,
             },
         }
 

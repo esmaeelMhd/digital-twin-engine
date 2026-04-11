@@ -522,16 +522,25 @@ These are not tied to one roadmap phase, but they should be resolved before larg
    Right now grouped typed semantics live mostly in the universal stack.
 
 2. Make training config behavior fully explicit.
-   `scripts/train.py` currently overrides loaded YAML values programmatically.
+   Status update:
+   `scripts/train.py` now exposes explicit `--config_mode {strict,legacy_safe}` resolution.
+   The historic behavior still exists behind `legacy_safe`, but the override path is no longer silent.
 
 3. Fix the existing correctness bugs before layering on more complexity.
    The trainer SDE-KL bug and PID path bug should not be carried into later phases.
 
 4. Repair the dataset normalization contract.
-   Generated HDF5 files and `TrajectoryDataset` disagree about parameter normalization support.
+   Status update:
+   generated and ingested HDF5 files now write `param_mean` and `param_std`,
+   and `TrajectoryDataset` backfills those stats when loading older files.
 
 5. Decide whether the universal model is a research sidecar or the main foundation path.
    The roadmap assumes it becomes the foundation path, but the repo still treats it as a parallel baseline.
+
+6. Add one canonical milestone-validation path.
+   Status update:
+   `scripts/run_v1_milestone.py` now chains tests, smoke runners, universal train/eval,
+   an ingestion-backed customer adaptation pilot, and the rollout-stability benchmark.
 
 ## Recommended Interpretation Of The Current Repo
 

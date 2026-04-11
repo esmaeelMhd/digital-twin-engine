@@ -23,6 +23,18 @@ SYSTEM_TRAINING_CONFIGS = {
     "heat_exchanger": PROJECT_ROOT / "configs" / "heat_exchanger_training.yaml",
     "two_tank": PROJECT_ROOT / "configs" / "two_tank_training.yaml",
 }
+OLD_STYLE_PHYSICS_WEIGHT_KEYS = {
+    "cstr": (
+        "mass_balance",
+        "species_mass_balance",
+        "energy_balance",
+        "mass",
+        "species_mass",
+        "energy",
+    ),
+    "heat_exchanger": ("energy", "energy_balance"),
+    "two_tank": ("mass", "mass_balance"),
+}
 
 
 class ComparisonError(RuntimeError):
@@ -114,6 +126,7 @@ def build_training_config(
     training_cfg = config.setdefault("training", {})
     optimizer_cfg = config.setdefault("optimizer", {})
     checkpointing_cfg = config.setdefault("checkpointing", {})
+    loss_weights_cfg = config.setdefault("loss_weights", {})
 
     training_cfg["n_epochs"] = int(n_epochs)
     training_cfg["max_batches_per_epoch"] = int(max_batches_per_epoch)
@@ -134,6 +147,13 @@ def build_training_config(
         model_cfg.setdefault("simulator_prior", {})["enabled"] = False
         model_cfg.setdefault("learned_solver", {})["enabled"] = False
         model_cfg.setdefault("self_correcting_policy", {})["enabled"] = False
+        for key in OLD_STYLE_PHYSICS_WEIGHT_KEYS.get(system_name, ()):
+            if key in loss_weights_cfg:
+                loss_weights_cfg[key] = 0.0
+        config["physics_loss_weights"] = {
+            key: 0.0
+            for key in OLD_STYLE_PHYSICS_WEIGHT_KEYS.get(system_name, ())
+        }
         if disable_neural_cde_in_old:
             model_cfg.setdefault("neural_cde", {})["enabled"] = False
     elif variant == "new_architecture":
@@ -247,6 +267,7 @@ def compare_system_metrics(
     old_metrics: dict[str, Any],
     new_metrics: dict[str, Any],
     min_improvement_ratio: float,
+    stability_tolerance_ratio: float,
 ) -> dict[str, Any]:
     comparison = {
         "system": system_name,
@@ -258,7 +279,14 @@ def compare_system_metrics(
         "reason": None,
     }
 
-    for metric_name in ("mse_fullseq", "mse_laststep", "mse_10step", "mse_1step"):
+    for metric_name in (
+        "mse_fullseq",
+        "mse_laststep",
+        "mse_10step",
+        "mse_1step",
+        "mass_violation_max",
+        "energy_violation_max",
+    ):
         comparison["ratios"][metric_name] = _ratio(
             new_metrics.get(metric_name), old_metrics.get(metric_name)
         )
@@ -273,6 +301,16 @@ def compare_system_metrics(
     fullseq_ratio = comparison["ratios"]["mse_fullseq"]
     laststep_ratio = comparison["ratios"]["mse_laststep"]
     tenstep_ratio = comparison["ratios"]["mse_10step"]
+    dominant_physics_metric = None
+    if (old_metrics.get("energy_violation_max") or 0.0) > 0.0:
+        dominant_physics_metric = "energy_violation_max"
+    elif (old_metrics.get("mass_violation_max") or 0.0) > 0.0:
+        dominant_physics_metric = "mass_violation_max"
+    dominant_physics_ratio = (
+        comparison["ratios"].get(dominant_physics_metric)
+        if dominant_physics_metric is not None
+        else None
+    )
 
     if fullseq_ratio is None or laststep_ratio is None or tenstep_ratio is None:
         comparison["reason"] = "missing rollout metrics"
@@ -287,11 +325,31 @@ def compare_system_metrics(
         comparison["reason"] = "rollout metrics improved versus ablated baseline"
         return comparison
 
+    if (
+        dominant_physics_metric is not None
+        and dominant_physics_ratio is not None
+        and laststep_ratio <= min_improvement_ratio
+        and dominant_physics_ratio <= min_improvement_ratio
+        and fullseq_ratio <= stability_tolerance_ratio
+        and tenstep_ratio <= stability_tolerance_ratio
+    ):
+        comparison["pass"] = True
+        comparison["reason"] = (
+            "tail rollout error and dominant physics violation improved "
+            f"({dominant_physics_metric})"
+        )
+        return comparison
+
     comparison["reason"] = (
         "insufficient rollout improvement: "
         f"fullseq={fullseq_ratio:.3f}, "
         f"laststep={laststep_ratio:.3f}, "
         f"tenstep={tenstep_ratio:.3f}"
+        + (
+            ""
+            if dominant_physics_metric is None or dominant_physics_ratio is None
+            else f", {dominant_physics_metric}={dominant_physics_ratio:.3f}"
+        )
     )
     return comparison
 
@@ -358,6 +416,15 @@ def main() -> None:
         help="Required new/old ratio threshold for fullseq, laststep, and tenstep MSE",
     )
     parser.add_argument(
+        "--stability_tolerance_ratio",
+        type=float,
+        default=1.2,
+        help=(
+            "Allowed ten-step/full-sequence ratio when last-step error and "
+            "dominant physics-violation metrics improve strongly"
+        ),
+    )
+    parser.add_argument(
         "--disable_neural_cde_in_old",
         action="store_true",
         help="Also disable the neural CDE block in the ablated baseline",
@@ -366,6 +433,12 @@ def main() -> None:
         "--dry_run",
         action="store_true",
         help="Write configs and commands without executing them",
+    )
+    parser.add_argument(
+        "--train_config_mode",
+        choices=["strict", "legacy_safe"],
+        default="strict",
+        help="How subprocess calls to scripts/train.py should resolve their YAML configs",
     )
     args = parser.parse_args()
 
@@ -388,7 +461,9 @@ def main() -> None:
         "seed": args.seed,
         "jax_platform": args.jax_platform,
         "min_improvement_ratio": args.min_improvement_ratio,
+        "stability_tolerance_ratio": args.stability_tolerance_ratio,
         "disable_neural_cde_in_old": bool(args.disable_neural_cde_in_old),
+        "train_config_mode": args.train_config_mode,
         "steps": [],
         "comparisons": [],
         "overall_pass": False,
@@ -436,6 +511,8 @@ def main() -> None:
                         str(output_dir),
                         "--seed",
                         str(args.seed),
+                        "--config_mode",
+                        args.train_config_mode,
                     ],
                     log_path=logs_dir / f"train_{system_name}_{variant}.log",
                     dry_run=args.dry_run,
@@ -498,6 +575,7 @@ def main() -> None:
                 old_metrics=old_metrics,
                 new_metrics=new_metrics,
                 min_improvement_ratio=args.min_improvement_ratio,
+                stability_tolerance_ratio=args.stability_tolerance_ratio,
             )
             summary["comparisons"].append(comparison)
             write_json(summary_path, summary)

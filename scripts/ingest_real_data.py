@@ -225,9 +225,11 @@ def main():
         print("=" * 60)
 
     if args.save_summary:
-        with open(args.save_summary, "w") as f:
+        save_summary_path = Path(args.save_summary)
+        save_summary_path.parent.mkdir(parents=True, exist_ok=True)
+        with save_summary_path.open("w") as f:
             json.dump(summary, f, indent=2)
-        print(f"Summary saved to: {args.save_summary}")
+        print(f"Summary saved to: {save_summary_path}")
 
     print("Done.")
 
