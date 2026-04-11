@@ -1,79 +1,146 @@
-# Digital Twin Engine — Complete Workflow
+# Digital Twin Engine Workflow
 
-Step-by-step guide from environment setup to production deployment. All four phases of the generalisation roadmap are complete.
+Updated for the post-Phase-7 architecture on 2026-04-10.
+
+This file replaces the earlier workflow that assumed only the older single-system stack plus a partial generalization effort. The repository now contains a broader architecture:
+
+- single-system unit modeling with `DigitalTwin`
+- universal mixed-system modeling with `UniversalDigitalTwin`
+- unit adapters and calibration
+- flowsheet graph modeling
+- modular law layers
+- customer adaptation workflow
+- demo website and demo API
+- generic MPC / RL-readiness interfaces
+
+Phase 8 from `plan.md` is still not implemented. Everything else through Phase 7 is now present in some usable form.
 
 ---
 
-## Phase 1: Environment Setup
+## 1. Choose The Workflow You Actually Need
 
-### 1.1 Clone and Create Virtual Environment
+Use this file as an entry-point selector.
+
+| Goal | Primary path |
+| --- | --- |
+| Train one system end to end | Section 4 |
+| Train one shared universal checkpoint | Section 5 |
+| Calibrate a universal model to a new unit | Section 6 |
+| Run customer onboarding and automatic adaptation | Section 7 |
+| Work on small flowsheets | Section 8 |
+| Use modular chemistry / thermo / biology law layers | Section 9 |
+| Run the demo website or demo API | Section 10 |
+| Use the repo for MPC or RL-style control experiments | Section 11 |
+| Validate a phase quickly | Section 12 |
+
+---
+
+## 2. Current Architecture In Practice
+
+The repo now has seven practical layers:
+
+1. **Unit model path**
+   - `dte/models/digital_twin.py`
+   - `scripts/train.py`
+   - `scripts/evaluate.py`
+
+2. **Universal foundation path**
+   - `dte/models/universal_digital_twin.py`
+   - `scripts/train_universal.py`
+   - `scripts/evaluate_universal.py`
+
+3. **Calibration and customer adaptation**
+   - `scripts/calibrate_unit.py`
+   - `scripts/adapt_customer.py`
+
+4. **Flowsheet graph path**
+   - `dte/flowsheet/*`
+   - `dte/models/flowsheet_model.py`
+   - `dte/training/flowsheet_trainer.py`
+
+5. **Law-layer path**
+   - `dte/laws/*`
+   - optional law-bundle integration through `dte/physics/registry.py`
+
+6. **Demo and serving path**
+   - `app/demo_app.py`
+   - `app/dashboard.py`
+   - `dte/api/service.py`
+
+7. **Control path**
+   - legacy: `dte/control/mpc.py`, `scripts/run_mpc.py`
+   - new: `dte/control/mpc_interface.py`, `dte/control/rl_env.py`, `dte/control/state_correction.py`
+
+Recommended reading if you need phase-specific detail:
+
+- [docs/repo_audit.md](docs/repo_audit.md)
+- [docs/implementation_mapping.md](docs/implementation_mapping.md)
+- [docs/phase1_unit_foundation_model.md](docs/phase1_unit_foundation_model.md)
+- [docs/phase2_adapters_and_calibration.md](docs/phase2_adapters_and_calibration.md)
+- [docs/phase3_flowsheet_graph_modeling.md](docs/phase3_flowsheet_graph_modeling.md)
+- [docs/phase4_modular_law_layers.md](docs/phase4_modular_law_layers.md)
+- [docs/phase5_customer_adaptation_workflow.md](docs/phase5_customer_adaptation_workflow.md)
+- [docs/phase6_demo_app.md](docs/phase6_demo_app.md)
+- [docs/phase7_mpc_and_drl_readiness.md](docs/phase7_mpc_and_drl_readiness.md)
+
+---
+
+## 3. Setup And Baseline Verification
+
+### 3.1 Environment
 
 ```bash
 cd digital-twin-engine
 python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -e .
 ```
 
-### 1.2 Verify Installation
+### 3.2 Verify Install
 
 ```bash
 python scripts/verify_install.py
-# Expected: "✓ ALL CHECKS PASSED"
 ```
 
-### 1.3 Run Tests
+### 3.3 Run The Test Suite
 
 ```bash
 pytest tests/ -v
 ```
 
-**Checkpoint:** all packages installed, tests passing.
+### 3.4 Quick Smoke Checks
+
+If you want fast validation instead of the full suite, use the phase smoke runners in Section 12.
 
 ---
 
-## Phase 2: Data
+## 4. Single-System Unit Workflow
 
-The engine supports three data sources: **synthetic simulation**, **generic simulator**, and **real plant files**.
+This is still the simplest path when you want one digital twin for one process system.
 
-### 2.1 Synthetic Data — CSTR (default)
+### 4.1 Generate Data
 
 ```bash
 python scripts/generate_data.py \
   --config configs/cstr_default.yaml \
-  --n_trajectories 10000 \
-  --n_steps 1000 \
+  --n_trajectories 1000 \
+  --n_steps 200 \
   --output_dir data/cstr/
 ```
 
-Output: `data/cstr/train_data.h5` (~400 MB)
-
-### 2.2 Synthetic Data — Heat Exchanger
+Any registered system works the same way:
 
 ```bash
 python scripts/generate_data.py \
   --config configs/heat_exchanger_default.yaml \
-  --n_trajectories 10000 \
-  --n_steps 1000 \
   --output_dir data/heat_exchanger/
-```
 
-### 2.3 Synthetic Data — Any Registered System
-
-The `--config` flag selects the system. The script routes to the appropriate generator automatically.
-
-```bash
 python scripts/generate_data.py \
   --config configs/two_tank_default.yaml \
   --output_dir data/two_tank/
-
-# Or any future registered system
-python scripts/generate_data.py \
-  --config configs/my_system_default.yaml \
-  --output_dir data/my_system/
 ```
 
-### 2.4 Real Plant Data (CSV / Parquet)
+### 4.2 Ingest Real Plant Data
 
 ```bash
 python scripts/ingest_real_data.py \
@@ -86,32 +153,10 @@ python scripts/ingest_real_data.py \
   --timestamp_column time \
   --dt 0.1 \
   --trajectory_duration 100.0 \
-  --trajectory_stride 10.0 \
-  --outlier_sigma 5.0
+  --trajectory_stride 10.0
 ```
 
-The ingestion pipeline handles:
-- Irregular timestamps (float seconds or ISO datetime strings)
-- Automatic sorting and deduplication
-- Linear interpolation to a uniform grid
-- Configurable large-gap handling (`--max_gap_fill`, `--drop_large_gaps`)
-- Z-score outlier detection and median replacement
-- Sensor noise characterisation
-- Output is a standards-compliant HDF5 file directly loadable by the trainer
-
-Save the ingestion summary as JSON for auditing:
-
-```bash
-python scripts/ingest_real_data.py ... --save_summary data/cstr_real/ingestion_summary.json
-```
-
-**Checkpoint:** HDF5 file created, shape and normalization stats printed.
-
----
-
-## Phase 3: Training
-
-### 3.1 Train from Scratch
+### 4.3 Train
 
 ```bash
 python scripts/train.py \
@@ -124,123 +169,15 @@ python scripts/train.py \
   --seed 42
 ```
 
-Training features (all configurable in `configs/training_default.yaml`):
+The single-system path remains backward-compatible, but can now optionally use the Phase 1 grouped encoder through config:
 
-| Feature | Config key | Description |
-|---|---|---|
-| Stochastic SDE training | `sde_training.enabled` | Activates the diffusion path; KL term regularises diffusion scale |
-| Curriculum learning | `curriculum.enabled` | `seq_len` ramps linearly from `initial_seq_len` to `final_seq_len` |
-| Teacher-forcing annealing | `teacher_forcing.initial_ratio` | One-step loss weight decays toward free-rollout loss |
-
-Outputs:
-- `outputs/cstr_v1/best_model.eqx` — best validation checkpoint
-- `outputs/cstr_v1/final_model.eqx` — final epoch
-- `outputs/cstr_v1/training_history.json` — loss curves
-- `outputs/cstr_v1/training_summary.json` — machine-readable summary
-
-### 3.2 Train a Different System
-
-Change only `--system_config` and `--data_dir`; everything else is system-agnostic:
-
-```bash
-python scripts/train.py \
-  --config configs/heat_exchanger_training.yaml \
-  --system_config configs/heat_exchanger_default.yaml \
-  --data_dir data/heat_exchanger/ \
-  --output_dir outputs/hx_v1/
-
-python scripts/train.py \
-  --config configs/two_tank_training.yaml \
-  --system_config configs/two_tank_default.yaml \
-  --data_dir data/two_tank/ \
-  --output_dir outputs/two_tank_v1/
+```yaml
+model:
+  grouped_encoder:
+    enabled: true
 ```
 
-### 3.3 Train a Shared Universal Baseline
-
-Train one checkpoint across all registered systems listed in
-`configs/training_universal.yaml`:
-
-```bash
-python scripts/train_universal.py \
-  --config configs/training_universal.yaml \
-  --output_dir outputs/universal_v1/ \
-  --n_epochs 20 \
-  --batch_size 128 \
-  --seed 42
-```
-
-For a bounded baseline or fast experiment loop, use the capped config instead:
-
-```bash
-python scripts/train_universal.py \
-  --config configs/training_universal_baseline_fast.yaml \
-  --output_dir outputs/universal_fast_baseline/ \
-  --seed 42
-```
-
-Evaluate the shared checkpoint:
-
-```bash
-python scripts/evaluate_universal.py \
-  --model_path outputs/universal_v1/best_model.eqx \
-  --config outputs/universal_v1/config.yaml \
-  --output_dir outputs/universal_v1/eval/
-```
-
-The universal path uses:
-- Mixed-system padded batches from `dte/data/multi_system_dataset.py`
-- Typed state groups from each system config (`thermal`, `concentration`, `inventory`, etc.)
-- One shared grouped universal model in `dte/models/universal_digital_twin.py`
-
-Outputs:
-- `outputs/universal_v1/best_model.eqx` — best mixed validation checkpoint
-- `outputs/universal_v1/final_model.eqx` — final epoch
-- `outputs/universal_v1/summary.json` — mixed + per-system validation summary
-- `outputs/universal_v1/eval/summary.json` — evaluation summary
-
-### 3.4 Few-Shot Transfer Learning (Fine-tune a Pre-trained Model)
-
-Freeze the encoder and latent SDE; update only the decoder on N new-unit trajectories:
-
-```bash
-python scripts/train.py \
-  --finetune outputs/cstr_v1/best_model.eqx \
-  --finetune_part decoder \
-  --system_config configs/cstr_default.yaml \
-  --data_dir data/cstr_unit2/ \
-  --output_dir outputs/cstr_unit2/ \
-  --n_epochs 10
-```
-
-Options for `--finetune_part`: `decoder` (default), `encoder`, `all`.
-
-### 3.5 Autoresearch Loop
-
-```bash
-python scripts/autoresearch.py \
-  --config configs/autoresearch_default.yaml \
-  --description baseline \
-  --data_dir data/test/
-```
-
-The harness runs training with a fixed wall-clock budget, logs results to `outputs/autoresearch/results.tsv`, and promotes only improvements to the baseline directory.
-
-```bash
-# Autonomous LLM-driven agent (Gemini by default)
-python scripts/agent.py --max-runs 50
-
-# Other providers
-python scripts/agent.py --claude    # Claude Sonnet
-python scripts/agent.py --openai    # OpenAI o3
-python scripts/agent.py --grok      # xAI Grok 3
-```
-
-**Checkpoint:** `best_val_loss` reported, model checkpoint saved.
-
----
-
-## Phase 4: Evaluation
+### 4.4 Evaluate
 
 ```bash
 python scripts/evaluate.py \
@@ -251,7 +188,53 @@ python scripts/evaluate.py \
   --output_dir outputs/cstr_v1/eval/
 ```
 
-For a shared universal checkpoint:
+### 4.5 Legacy Closed-Loop MPC
+
+```bash
+python scripts/run_mpc.py \
+  --model_path outputs/cstr_v1/best_model.eqx \
+  --model_config outputs/cstr_v1/config.yaml \
+  --system_config configs/cstr_default.yaml \
+  --setpoint_T 340.0 \
+  --setpoint_Ca 0.8 \
+  --disturbance_scenario step \
+  --n_steps 200 \
+  --output_dir outputs/mpc_results/
+```
+
+Notes:
+
+- `--compare_pid` is only meaningful for the legacy CSTR path.
+- For generic control workflows, prefer Section 11.
+
+---
+
+## 5. Universal Foundation Workflow
+
+Use this when you want one shared checkpoint across multiple systems.
+
+### 5.1 Prepare The Data Directories Referenced By `configs/training_universal.yaml`
+
+By default the universal config expects:
+
+- `data/cstr/`
+- `data/heat_exchanger/`
+- `data/two_tank/`
+
+Generate those datasets first if they do not exist.
+
+### 5.2 Train A Shared Checkpoint
+
+```bash
+python scripts/train_universal.py \
+  --config configs/training_universal.yaml \
+  --output_dir outputs/universal_v1/ \
+  --n_epochs 20 \
+  --batch_size 128 \
+  --seed 42
+```
+
+### 5.3 Evaluate The Shared Checkpoint
 
 ```bash
 python scripts/evaluate_universal.py \
@@ -260,459 +243,393 @@ python scripts/evaluate_universal.py \
   --output_dir outputs/universal_v1/eval/
 ```
 
-Generated artefacts:
-- Trajectory comparison plots (predicted vs ground truth)
-- Per-state prediction error plots
-- Physics violation metrics (mass / energy balance residuals)
-- Uncertainty calibration statistics (ensemble coverage)
+This path now includes Phase 1 and Phase 2 additions:
 
-Key metrics to target:
-
-| Metric | Target |
-|---|---|
-| 1-step normalised MSE | < 0.01 |
-| Full-sequence normalised MSE | < 0.1 |
-| Mass balance violation (mean) | < 0.01 |
-| Energy balance violation (mean) | < 1.0 |
-| Ensemble coverage (±2σ) | ~95% |
-
-### Zero-Shot and Few-Shot Transfer Evaluation (Python API)
-
-```python
-from dte.training.transfer import FewShotAdapter, zero_shot_eval
-
-# Zero-shot: evaluate pre-trained model on a new unit without any updates
-metrics = zero_shot_eval(pretrained_model, new_unit_dataset, n_batches=50)
-print(metrics)  # {"mse": ..., "rmse": ..., "norm_mse": ...}
-
-# Few-shot: fine-tune decoder on 5 trajectories, then evaluate
-adapter = FewShotAdapter(pretrained_model, system_spec, learning_rate=3e-4)
-finetuned = adapter.finetune(new_unit_dataset, n_steps=200, part="decoder")
-metrics_fs = zero_shot_eval(finetuned, new_unit_dataset)
-```
-
-**Checkpoint:** accuracy targets met, physics constraints satisfied.
+- typed unit metadata through `ProcessUnitSpec`
+- family / subtype / law-tag conditioning
+- optional adapters
+- multi-horizon loss support
+- uncertainty and local control-sensitivity reporting
 
 ---
 
-## Phase 5: Model Predictive Control
+## 6. Calibration Workflow For A New Unit
+
+Use this when you already have a pretrained universal checkpoint and want to adapt it to a new target unit dataset.
 
 ```bash
-python scripts/run_mpc.py \
-  --model_path outputs/cstr_v1/best_model.eqx \
+python scripts/calibrate_unit.py \
+  --model_path outputs/universal_v1/best_model.eqx \
+  --config configs/training_universal.yaml \
   --system_config configs/cstr_default.yaml \
-  --setpoint_T 340.0 \
-  --setpoint_Ca 0.8 \
-  --disturbance_scenario step \
-  --n_steps 200 \
-  --compare_pid \
-  --output_dir outputs/mpc_results/
+  --data_dir data/cstr_variant/ \
+  --system_name cstr_variant \
+  --output_dir outputs/cstr_variant_calibration/ \
+  --trainable_mode adapters \
+  --tune_normalization
 ```
 
-The `--compare_pid` flag is supported only for CSTR. For other systems, the script runs the AI-MPC only.
+Use this path when:
 
-Try different scenarios:
+- the target unit is already known
+- you have target data
+- you want direct calibration without the customer-onboarding/reporting wrapper
+
+---
+
+## 7. Customer Adaptation Workflow
+
+Use this when you want the full Phase 5 onboarding → template matching → adaptation → reporting flow.
 
 ```bash
-# Random disturbance
-python scripts/run_mpc.py ... --disturbance_scenario random
-
-# Different setpoint
-python scripts/run_mpc.py ... --setpoint_T 360.0 --setpoint_Ca 0.5
+python scripts/adapt_customer.py \
+  --onboarding path/to/customer_onboarding.yaml \
+  --model_path outputs/universal_v1/best_model.eqx \
+  --config configs/training_universal.yaml \
+  --system_config configs/cstr_default.yaml \
+  --data_dir data/cstr_variant/ \
+  --output_dir outputs/customer_cstr_variant/ \
+  --trainable_mode adapters \
+  --tune_normalization
 ```
 
-**Checkpoint:** MPC stable, ISE improvement over baseline reported.
+This path produces:
+
+- onboarding snapshot
+- template matches
+- calibrated target config
+- summary JSON
+- validation report JSON
+- validation report Markdown
+
+Current scope:
+
+- unit adaptation is end-to-end
+- flowsheet template matching exists
+- flowsheet calibration is not yet wired through this CLI
 
 ---
 
-## Phase 6: Online Adaptation
+## 8. Flowsheet Workflow
 
-Use `OnlineAdapter` when the model is deployed and new plant observations arrive in real time.
+Phase 3 added a small flowsheet graph stack. It is usable, but still a thin slice.
 
-```python
-from dte.training.online import OnlineAdapter, OnlineAdapterConfig
+### 8.1 Best Entry Point: The Smoke Runner
 
-adapter = OnlineAdapter(
-    model,
-    system_spec,
-    OnlineAdapterConfig(
-        window_size=500,       # ring buffer of recent observations
-        finetune_every=50,     # run gradient steps every N pushes
-        n_finetune_steps=10,   # gradient steps per trigger
-        seq_len=20,            # subsequence length sampled from buffer
-        drift_threshold=3.0,   # CUSUM alarm threshold
-        drift_slack=0.5,       # allowable deviation before CUSUM accumulates
-        ewc_lambda=0.0,        # set > 0 to penalise forgetting
-    ),
-    key=jax.random.PRNGKey(0),
-)
-
-# In the plant loop:
-for t, measurement in plant_stream:
-    result = adapter.push(
-        states=measurement.states,
-        controls=measurement.controls,
-        disturbances=measurement.disturbances,
-        t=t,
-    )
-    if result["drift"]:
-        print(f"Drift detected at t={t}  CUSUM={result['cusum']:.2f}")
-    model = adapter.model   # always up to date
-
-# Diagnostics
-print(adapter.get_diagnostics())
+```bash
+python scripts/smoke_phase3.py
 ```
 
-The CUSUM detector fires when rolling prediction error exceeds `drift_threshold` standard deviations above the baseline. Each alarm triggers an extra fine-tune pass in addition to the periodic schedule.
+This is currently the most practical end-to-end way to validate the flowsheet path because there is not yet a dedicated Phase 3 CLI beyond the synthetic/smoke tooling.
+
+### 8.2 Python API Workflow
+
+The intended path is:
+
+1. build an example flowsheet from `dte/flowsheet/examples.py`
+2. build a synthetic dataset from `dte/flowsheet/synthetic.py`
+3. train with `dte/training/flowsheet_trainer.py`
+
+See [docs/phase3_flowsheet_graph_modeling.md](docs/phase3_flowsheet_graph_modeling.md) for the working example.
+
+Current scope:
+
+- small plant-section graphs
+- synthetic graph datasets
+- train/validate loop
+- proxy plant losses
+
+Not yet present:
+
+- real-data flowsheet ingestion
+- a dedicated high-level CLI
+- full plant thermodynamics / chemistry
 
 ---
 
-## Phase 7: Dashboard
+## 9. Law-Layer Workflow
+
+Phase 4 adds reusable chemistry, thermo, and biology law bundles that can augment the existing physics-loss path.
+
+### 9.1 Exercise The Law Layer
+
+```bash
+python scripts/smoke_phase4.py
+```
+
+### 9.2 Use Example Configs
+
+Relevant examples:
+
+- `configs/cstr_law_example.yaml`
+- `configs/bioreactor_law_example.yaml`
+
+Law bundles are opt-in through config:
+
+```yaml
+laws:
+  enabled: true
+  chemistry:
+    - name: primary_reaction
+      kind: arrhenius_reaction
+```
+
+Important scope note:
+
+- the law layer augments the physics-loss path
+- it does not yet inject law features directly into the model encoder/decoder
+
+---
+
+## 10. Demo And Serving Workflow
+
+There are now two different Streamlit surfaces.
+
+### 10.1 Training / Inspection Dashboard
 
 ```bash
 streamlit run app/dashboard.py
 ```
 
-Access at `http://localhost:8501`.
+This remains the run-inspection dashboard.
 
-Optional password protection:
+### 10.2 Customer-Facing Demo Site
 
 ```bash
-STREAMLIT_AUTH_PASSWORD=secret streamlit run app/dashboard.py
+streamlit run app/demo_app.py
 ```
 
-Features:
-- Live simulation with Open Loop / PID / AI-MPC modes
-- State trajectory plots with uncertainty bands
-- Disturbance scenario selection
-- Performance metrics (ISE, settling time, overshoot)
-- System selection (CSTR, heat exchanger, or any registered system)
+This is the Phase 6 interactive demo surface.
+
+### 10.3 Demo API
+
+```bash
+python -m dte.api.service --host 0.0.0.0 --port 8000 \
+  --system_config configs/cstr_default.yaml,configs/heat_exchanger_default.yaml,configs/two_tank_default.yaml
+```
+
+The API now serves both the original inference routes and the demo routes:
+
+- `/health`
+- `/predict`
+- `/ensemble`
+- `/steady_state`
+- `/demo/catalog`
+- `/demo/simulate`
+- `/demo/rollout`
+- `/demo/optimize_control`
+- `/demo/compare_scenarios`
+
+### 10.4 Full Demo Smoke
+
+```bash
+python scripts/smoke_phase6.py
+```
+
+Important scope note:
+
+- the demo flowsheet surface is currently a preview/catalog, not a full interactive plant simulator
 
 ---
 
-## Phase 8: REST API
+## 11. Control Workflow
 
-### Local
+There are now two control entry styles: legacy script-level MPC and the new generic Phase 7 interfaces.
+
+### 11.1 Legacy Script-Level MPC
+
+Use [Section 4.5](#45-legacy-closed-loop-mpc) when you want the old `scripts/run_mpc.py` flow.
+
+### 11.2 Generic Control Runtime
+
+Use `ProcessMPCInterface` when you want a process-agnostic control-facing runtime:
+
+```python
+from dte.control import MPCInterfaceConfig, ProcessMPCInterface
+
+runtime = ProcessMPCInterface(spec, simulator, model=model, config=MPCInterfaceConfig(dt=0.1))
+runtime.reset()
+best = runtime.optimize_random_shooting(
+    target_state=spec.default_initial_state_array(),
+    horizon=12,
+    n_candidates=16,
+)
+```
+
+### 11.3 RL-Style Environment
+
+```python
+from dte.control import ProcessControlEnv
+
+env = ProcessControlEnv(spec, simulator)
+obs, info = env.reset(seed=0)
+action = env.action_space.sample(seed=1)
+obs, reward, terminated, truncated, info = env.step(action)
+```
+
+### 11.4 Measurement Correction
+
+```python
+from dte.control import StateCorrectionHook
+
+hook = StateCorrectionHook(spec, model=model)
+update = hook.correct(
+    prior_state=prior_state,
+    measurement=measurement,
+    control=control,
+)
+```
+
+### 11.5 Full Control Smoke
 
 ```bash
-# Set environment
+python scripts/smoke_phase7.py
+```
+
+Current scope:
+
+- generic rollout/evaluate hooks exist
+- the RL env is Gymnasium-style but does not require `gymnasium`
+- no bundled RL training algorithm stack exists yet
+
+---
+
+## 12. Smoke Runner Matrix
+
+Use these to validate one phase quickly.
+
+| Phase | Smoke runner | Purpose |
+| --- | --- | --- |
+| 1 | `scripts/smoke_phase1.py` | typed unit spec, grouped encoder, universal loss/eval additions |
+| 2 | `scripts/smoke_phase2.py` | family conditioning, adapters, calibration |
+| 3 | `scripts/smoke_phase3.py` | flowsheet graph synthetic train/eval path |
+| 4 | `scripts/smoke_phase4.py` | modular law bundles and law-augmented physics |
+| 5 | `scripts/smoke_phase5.py` | customer adaptation end to end |
+| 6 | `scripts/smoke_phase6.py` | demo API + demo frontend |
+| 7 | `scripts/smoke_phase7.py` | MPC runtime, RL env, correction hooks, control metrics |
+
+Default pattern:
+
+```bash
+source .venv/bin/activate
+python scripts/smoke_phaseN.py
+```
+
+Most smoke runners also support:
+
+- `--dry_run`
+- `--workspace_dir outputs/phaseN_smoke/manual_run`
+
+The later smoke runners default to CPU-oriented execution for reproducibility on ordinary dev machines.
+
+---
+
+## 13. Deployment Workflow
+
+### 13.1 Local API
+
+```bash
 export DTE_SYSTEM_CONFIG=configs/cstr_default.yaml
 export DTE_MODEL_PATH=outputs/cstr_v1/best_model.eqx
 export DTE_TRAINING_CONFIG=configs/training_default.yaml
-# Optional auth:
-# export DTE_API_KEY=your-secret-key
 
 uvicorn dte.api.service:app --host 0.0.0.0 --port 8000
 ```
 
-### Docker
+### 13.2 Docker Images
 
 ```bash
-# API only
 docker build --target api -t dte-api .
-docker run -p 8000:8000 \
-  -e DTE_MODEL_PATH=outputs/best_model.eqx \
-  -e DTE_API_KEY=your-secret-key \
-  -v $(pwd)/outputs:/app/outputs \
-  dte-api
+docker build --target train -t dte-train .
+```
 
-# Full stack (API + dashboard)
+### 13.3 Compose Stack
+
+```bash
 docker compose up
-
-# Include training and data-generation tools
 docker compose --profile tools up
 ```
 
-### Endpoints
+Important note:
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Service health + loaded systems |
-| `POST` | `/predict` | Deterministic mean-trajectory rollout |
-| `POST` | `/ensemble` | Stochastic ensemble (uncertainty bands) |
-| `POST` | `/steady_state` | Steady-state operating point |
-
-Authentication: include `X-API-Key: <key>` header when `DTE_API_KEY` is set.
-
-### Example Requests
-
-```bash
-# Health
-curl http://localhost:8000/health
-
-# Deterministic prediction (10-step horizon)
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "system": "cstr",
-    "initial_state": [0.8, 0.5, 325.0, 320.0],
-    "controls": [[55.0, 300.0], [56.0, 302.0], [55.0, 298.0]],
-    "dt": 0.1
-  }'
-
-# Stochastic ensemble (50 samples)
-curl -X POST http://localhost:8000/ensemble \
-  -H "Content-Type: application/json" \
-  -d '{
-    "system": "cstr",
-    "initial_state": [0.8, 0.5, 325.0, 320.0],
-    "controls": [[55.0, 300.0]],
-    "n_samples": 50,
-    "dt": 0.1
-  }'
-
-# Steady-state query
-curl -X POST http://localhost:8000/steady_state \
-  -H "Content-Type: application/json" \
-  -d '{"system": "cstr"}'
-```
+- `docker compose up` currently starts the API and the legacy `app/dashboard.py` dashboard
+- it does **not** currently start `app/demo_app.py`
 
 ---
 
-## Phase 9: Adding a New System
+## 14. Extending The Repository With A New Unit System
 
-The engine is fully decoupled from CSTR. Adding a new process requires only
-registry-boundary changes; the core model/training code stays untouched.
+The extension boundary is still registry-driven.
 
-### Step 1 — Simulator (`dte/simulators/my_system.py`)
+1. Add a simulator under `dte/simulators/`
+2. Add or reuse a `PhysicsLoss` under `dte/physics/`
+3. Add a system config under `configs/`
+4. Register the system in `dte/simulators/registry.py`
+5. Register physics / diagnostics in `dte/physics/registry.py`
 
-```python
-from dte.simulators.base import ProcessSimulator, SystemSpec
+With the newer architecture, you should also consider:
 
-class MySystemSimulator(ProcessSimulator):
-    @property
-    def spec(self) -> SystemSpec:
-        return ...  # build from config
+- typed `state_channels`
+- typed `control_channels`
+- typed `disturbance_channels`
+- `family`, `subtype`, `unit_type`
+- `law_tags`
+- `conditioning_tags`
+- topology ports if the unit will later connect into a flowsheet
 
-    def dynamics(self, state, control, disturbance, params, t):
-        ...  # ODEs
+That is enough for:
 
-    def simulate(self, initial_state, controls, disturbances, params, ts):
-        ...
-
-    def steady_state(self, nominal_control, nominal_disturbance):
-        ...
-```
-
-### Step 2 — Physics Loss (`dte/physics/my_system.py`)
-
-```python
-from dte.physics.base import PhysicsLoss
-
-class MySystemPhysicsLoss(PhysicsLoss):
-    def residual_names(self):
-        return ["energy"]
-
-    def compute_residuals(self, states, controls, disturbances, dt):
-        return {"energy": ...}  # JAX array
-```
-
-Skip this step and use `NullPhysicsLoss` if no physics constraints are needed.
-
-### Step 3 — Config (`configs/my_system_default.yaml`)
-
-Define `system.name`, `system.state_dim`, `system.state_names`, `system.normalization`, `system.decoder_constraints`, and simulator-specific parameters.
-
-### Step 4 — Register the System (`dte/simulators/registry.py`)
-
-Add builder entries for your spec and simulator in the registry tables.
-
-### Step 5 — Register Physics (`dte/physics/registry.py`)
-
-If the system has physics residuals or evaluation diagnostics, register the
-corresponding builders in the physics registry.
-
-That is the complete extension path. The training, evaluation, MPC, API, and dashboard all adapt automatically.
+- single-system training
+- universal training
+- calibration
+- customer template matching
+- demo-catalog inclusion
+- control-interface reuse
 
 ---
 
-## Phase 10: Hyperparameter Reference
+## 15. Current Scope Boundaries
 
-### Model (`configs/training_default.yaml → model`)
+These limits are important when planning work:
 
-```yaml
-model:
-  latent_dim: 32       # latent space dimension (try 8–32)
-  hidden_dim: 128      # MLP hidden width (try 64–256)
-  n_layers: 3
-  drift_layers: 3
-  diffusion_layers: 2
-  diffusion_hidden_dim: 64
-```
-
-### Training (`training`)
-
-```yaml
-training:
-  n_epochs: 100
-  batch_size: 128      # reduce if OOM
-  seq_len: 25          # sequence length (overridden by curriculum)
-  stride: 5
-  val_split: 0.2
-```
-
-### Loss Weights (`loss_weights`)
-
-```yaml
-loss_weights:
-  reconstruction: 1.0
-  kl: 0.0001
-  trajectory: 10.0
-  one_step: 0.0
-  mass_balance: 0.001
-  species_mass_balance: 0.001
-  energy_balance: 0.001
-```
-
-### Stochastic SDE (`sde_training`)
-
-```yaml
-sde_training:
-  enabled: false        # set true to activate diffusion path
-  warmup_steps: 2000    # delay before SDE path activates
-  sde_kl_weight: 0.00001
-```
-
-### Curriculum (`curriculum`)
-
-```yaml
-curriculum:
-  enabled: false
-  initial_seq_len: 5
-  final_seq_len: 50
-  warmup_epochs: 20
-```
-
-### Teacher Forcing (`teacher_forcing`)
-
-```yaml
-teacher_forcing:
-  initial_ratio: 1.0   # start: 100% one-step loss
-  final_ratio: 0.0     # end:   100% free-rollout loss
-  anneal_epochs: 30
-```
-
-### Optimizer (`optimizer`)
-
-```yaml
-optimizer:
-  peak_lr: 5.0e-4
-  warmup_steps: 200
-  total_steps: 5000
-  end_lr: 1.0e-6
-  gradient_clip: 0.5
-```
-
-### MPC (`configs/mpc_default.yaml`)
-
-```yaml
-mpc:
-  horizon: 10           # prediction horizon (try 5–20)
-  n_candidates: 500     # CEM candidate trajectories
-  n_elite: 50           # elite fraction for refinement
-  n_iterations: 3       # CEM iterations
-```
+- Phase 8 distributed / transport-aware modeling is still missing
+- flowsheet modeling is implemented as a thin slice, not a full plant stack
+- flowsheet adaptation is not yet wired through `scripts/adapt_customer.py`
+- the Phase 6 flowsheet demo is a preview surface, not a full interactive simulator
+- the Phase 7 control layer is usable, but still intentionally lightweight
 
 ---
 
-## Troubleshooting
+## 16. Recommended Order For New Users
 
-### Out of memory during training
+If you are new to the repo, the lowest-friction path is:
 
-```bash
-python scripts/train.py --batch_size 16 \
-  --config configs/training_default.yaml
-```
-Or reduce `seq_len` in the config.
+1. Set up the environment and run `scripts/verify_install.py`
+2. Generate one single-system dataset
+3. Train one single-system model
+4. Evaluate it
+5. Run `scripts/smoke_phase6.py` to see the demo/API surface
+6. Run `scripts/smoke_phase7.py` to see the control surface
+7. Move to universal training and customer adaptation only after the single-system path is familiar
 
-### NaN losses
+If you are validating the full roadmap rather than one feature, run:
 
-```yaml
-# configs/training_default.yaml
-optimizer:
-  peak_lr: 1.0e-4
-  gradient_clip: 0.5
-loss_weights:
-  mass_balance: 0.01
-  energy_balance: 0.01
-```
-
-### Training too slow
-
-```python
-import jax
-print(jax.devices())   # should list GPU(s)
-```
-If only CPU is shown, check your CUDA / JAX installation.
-
-### Real data: "No valid trajectory windows"
-
-- Reduce `--trajectory_duration` to match available data length.
-- Increase `--max_gap_fill` to tolerate larger sensor gaps.
-- Set `--drop_large_gaps` only when gaps are genuinely unusable.
-
-### API returns 503 on /predict
-
-The model checkpoint was not found. Check `DTE_MODEL_PATH` points to a valid `.eqx` file and that the path is mounted in the container (`-v $(pwd)/outputs:/app/outputs`).
-
-### Drift detector fires too often
-
-Increase `drift_threshold` or `drift_slack` in `OnlineAdapterConfig`, or increase `drift_reference_steps` to give the baseline estimator more data.
+1. `scripts/smoke_phase1.py`
+2. `scripts/smoke_phase2.py`
+3. `scripts/smoke_phase3.py`
+4. `scripts/smoke_phase4.py`
+5. `scripts/smoke_phase5.py`
+6. `scripts/smoke_phase6.py`
+7. `scripts/smoke_phase7.py`
 
 ---
 
-## Quick Reference
+## 17. Additional References
 
-```bash
-# Minimal end-to-end smoke test
-python scripts/generate_data.py --n_trajectories 100 --output_dir data/test/
-python scripts/train.py --data_dir data/test/ --n_epochs 3 --batch_size 8 \
-  --output_dir outputs/test/
-python scripts/evaluate.py \
-  --model_path outputs/test/final_model.eqx \
-  --config outputs/test/config.yaml \
-  --data_dir data/test/ --output_dir outputs/test/eval/
-
-# Heat exchanger end-to-end
-python scripts/generate_data.py \
-  --config configs/heat_exchanger_default.yaml --output_dir data/hx/
-python scripts/train.py \
-  --config configs/heat_exchanger_training.yaml \
-  --system_config configs/heat_exchanger_default.yaml \
-  --data_dir data/hx/ --output_dir outputs/hx_v1/
-
-# Deploy
-docker compose up
-# API: http://localhost:8000/docs
-# Dashboard: http://localhost:8501
-```
-
----
-
-## Success Metrics Summary
-
-| Phase | Metric | Target |
-|---|---|---|
-| Data generation | No NaN values | 100% |
-| Real data ingestion | Trajectories extracted | > 0 |
-| Training | Validation loss | < 0.1 |
-| Evaluation | 1-step normalised MSE | < 0.01 |
-| Evaluation | Mass balance violation | < 0.01 |
-| Evaluation | Energy balance violation | < 1.0 |
-| Control | AI-MPC vs PID ISE improvement | > 20% |
-| Transfer | Few-shot MSE vs zero-shot | Reduction |
-| Online adaptation | Drift detection and recovery | Working |
-| API | `/health` responds | 200 OK |
-| Dashboard | Interactive demo | Running |
-
----
-
-## Additional Resources
-
-- `README.md` — Project overview and API reference snippets
-- `QUICK_START.md` — Condensed getting started guide
-- `configs/training_default.yaml` — Annotated training configuration
-- `configs/cstr_default.yaml` — Annotated system spec with all fields
-- `notebooks/01_exploration.ipynb` — Interactive CSTR examples
-- `tests/` — Unit tests showing usage of every module
-- `program.md` — Autonomous agent operating rules
+- `README.md`
+- `QUICK_START.md`
+- `AGENTS.md`
+- `docs/repo_audit.md`
+- `docs/implementation_mapping.md`
+- `program.md`
+- `tests/`
