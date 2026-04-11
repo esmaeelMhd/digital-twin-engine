@@ -199,6 +199,35 @@ class MultiSystemTrajectoryDataset:
             )
         return cls(entries, seq_len=seq_len, stride=stride)
 
+    @classmethod
+    def metadata_from_sources(
+        cls,
+        sources: list[SystemDatasetSource],
+    ) -> UniversalSystemMetadata:
+        """Build universal metadata without loading or indexing full datasets.
+
+        This is useful for app/API inference paths that need to deserialize a
+        shared checkpoint but do not need the heavyweight subsequence dataset.
+        """
+
+        class _MetadataOnlyDataset:
+            n_samples = 0
+
+        entries: list[PreparedSystemDataset] = []
+        for source in sources:
+            with open(source.system_config, "r") as f:
+                system_config = yaml.safe_load(f)
+            spec = get_system_spec(system_config)
+            entries.append(
+                PreparedSystemDataset(
+                    source=source,
+                    spec=spec,
+                    dataset=_MetadataOnlyDataset(),
+                    system_config=system_config,
+                )
+            )
+        return cls(entries, seq_len=1, stride=1).metadata
+
     @property
     def n_systems(self) -> int:
         return len(self.entries)

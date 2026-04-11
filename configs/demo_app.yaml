@@ -1,7 +1,18 @@
 theme:
   product_name: Digital Twin Engine
-  headline: Industrial dynamics you can steer in real time.
-  summary: Interactive process demos for operators, engineers, and customers exploring control, forecast uncertainty, and operating risk.
+  headline: Physics-aware foundation models for industrial process dynamics.
+  summary: A V1 presentation surface for shared unit modeling, uncertainty-aware forecasting, customer adaptation, and control-oriented scenario comparison.
+
+runtime:
+  release_label: V1 milestone release
+  model_path: /tmp/dte_v1_milestone_release/outputs/universal_fast_baseline/best_model.eqx
+  config_path: /tmp/dte_v1_milestone_release/outputs/universal_fast_baseline/config.yaml
+  train_summary_path: /tmp/dte_v1_milestone_release/outputs/universal_fast_baseline/summary.json
+  eval_summary_path: /tmp/dte_v1_milestone_release/outputs/universal_fast_baseline/eval/summary.json
+  milestone_summary_path: /tmp/dte_v1_milestone_release/summary.json
+  customer_pilot_summary_path: /tmp/dte_v1_milestone_release/outputs/real_data_pilot/summary.json
+  customer_report_path: /tmp/dte_v1_milestone_release/outputs/real_data_pilot/outputs/customer_adaptation/validation_report.md
+  n_samples: 24
 
 demos:
   - id: cstr_live
@@ -9,35 +20,205 @@ demos:
     system: cstr
     kind: unit_demo
     description: Reactor temperature, conversion, and coolant action under changing feed conditions.
+    operator_goal: Keep product concentration high while preventing avoidable thermal drift.
     dt: 0.1
     n_steps: 25
-    highlight_states: [Ca, Cb, T]
+    highlight_states: [Cb, T, Tc]
     target_state:
       Ca: 0.35
       Cb: 0.85
       T: 338.0
       Tc: 304.0
+    baseline_control_profile:
+      type: constant
+      channels:
+        F_in: 55.0
+        Tc_in: 302.0
+    disturbance_presets:
+      - id: nominal_feed
+        title: Nominal feed
+        description: Feed composition and temperature remain close to the design point.
+        profile:
+          type: constant
+          channels:
+            Ca_in: 1.25
+            T_in: 320.0
+      - id: hot_feed_ramp
+        title: Hotter feed drift
+        description: Feed temperature climbs over the horizon and starts to push reactor temperature up.
+        profile:
+          type: ramp
+          start:
+            Ca_in: 1.20
+            T_in: 320.0
+          end:
+            Ca_in: 1.10
+            T_in: 338.0
+    candidate_profiles:
+      - id: throughput_push
+        title: Throughput push
+        description: Higher inlet flow to increase production rate with unchanged coolant supply.
+        profile:
+          type: constant
+          channels:
+            F_in: 68.0
+            Tc_in: 302.0
+      - id: temperature_recovery
+        title: Temperature recovery
+        description: Cooler jacket inlet to protect temperature while holding feed rate near baseline.
+        profile:
+          type: constant
+          channels:
+            F_in: 56.0
+            Tc_in: 294.0
+      - id: staged_recovery
+        title: Staged recovery
+        description: Feed and coolant are ramped together to bring the reactor back toward the target state.
+        profile:
+          type: ramp
+          start:
+            F_in: 62.0
+            Tc_in: 300.0
+          end:
+            F_in: 52.0
+            Tc_in: 292.0
+    optimization:
+      n_candidates: 72
+      seed: 17
+    optimize_button_label: Recommend stabilizing sequence
 
   - id: heat_exchanger_live
     title: Heat Exchanger
     system: heat_exchanger
     kind: unit_demo
-    description: Counter-current outlet temperatures and duty response under coordinated hot/cold-side flow changes.
+    description: Counter-current outlet temperatures and duty response under coordinated hot- and cold-side flow changes.
+    operator_goal: Recover outlet temperature targets without overdriving either side of the exchanger.
     dt: 0.1
     n_steps: 25
     highlight_states: [T_hot, T_cold]
     target_state:
       T_hot: 345.0
       T_cold: 320.0
+    baseline_control_profile:
+      type: constant
+      channels:
+        F_hot: 5.2
+        F_cold: 4.8
+    disturbance_presets:
+      - id: design_feed
+        title: Design feed
+        description: Nominal hot and cold inlet temperatures.
+        profile:
+          type: constant
+          channels:
+            T_hot_in: 390.0
+            T_cold_in: 290.0
+      - id: hot_side_surge
+        title: Hot-side surge
+        description: A hotter inlet stream arrives and forces the exchanger to absorb more duty.
+        profile:
+          type: pulse
+          base:
+            T_hot_in: 390.0
+            T_cold_in: 290.0
+          pulse:
+            T_hot_in: 410.0
+            T_cold_in: 290.0
+          start_step: 7
+          duration: 8
+    candidate_profiles:
+      - id: cold_side_boost
+        title: Cold-side boost
+        description: Increase the cold-side flow to recover hot outlet temperature quickly.
+        profile:
+          type: constant
+          channels:
+            F_hot: 5.2
+            F_cold: 6.4
+      - id: balanced_trim
+        title: Balanced trim
+        description: Adjust both streams to recover duty without creating a large flow mismatch.
+        profile:
+          type: ramp
+          start:
+            F_hot: 5.0
+            F_cold: 5.3
+          end:
+            F_hot: 4.5
+            F_cold: 6.0
+    optimization:
+      n_candidates: 80
+      seed: 23
+    optimize_button_label: Recommend outlet recovery sequence
 
   - id: two_tank_live
     title: Two-Tank System
     system: two_tank
     kind: unit_demo
     description: Inventory balancing, overflow margin, and valve action in a coupled hydraulic section.
+    operator_goal: Maintain safe inventory in both vessels while absorbing feed changes and downstream draw.
     dt: 0.1
     n_steps: 25
     highlight_states: [h1, h2]
     target_state:
       h1: 1.2
       h2: 1.0
+    baseline_control_profile:
+      type: constant
+      channels:
+        q_in: 0.72
+        valve: 0.84
+    disturbance_presets:
+      - id: steady_draw
+        title: Steady draw
+        description: Mild downstream demand and nominal interstage disturbance.
+        profile:
+          type: constant
+          channels:
+            d1: 0.05
+            d2: 0.03
+      - id: downstream_pull
+        title: Downstream pull
+        description: Downstream draw increases for a sustained period and pushes the levels down.
+        profile:
+          type: pulse
+          base:
+            d1: 0.05
+            d2: 0.03
+          pulse:
+            d1: 0.11
+            d2: 0.07
+          start_step: 8
+          duration: 9
+    candidate_profiles:
+      - id: inflow_boost
+        title: Inflow boost
+        description: Raise inlet flow to recover both inventories with limited valve movement.
+        profile:
+          type: constant
+          channels:
+            q_in: 0.92
+            valve: 0.84
+      - id: drain_protection
+        title: Drain protection
+        description: Reduce effective discharge by trimming the valve while holding inlet flow steady.
+        profile:
+          type: constant
+          channels:
+            q_in: 0.74
+            valve: 0.73
+      - id: staged_inventory_rebuild
+        title: Staged inventory rebuild
+        description: Inlet flow ramps up while the valve trims down to rebuild both tank levels.
+        profile:
+          type: ramp
+          start:
+            q_in: 0.76
+            valve: 0.82
+          end:
+            q_in: 0.98
+            valve: 0.72
+    optimization:
+      n_candidates: 72
+      seed: 29
+    optimize_button_label: Recommend inventory recovery sequence

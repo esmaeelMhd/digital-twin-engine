@@ -25,8 +25,10 @@ Or with the bundled entrypoint::
 Environment variables
 ---------------------
 - ``DTE_SYSTEM_CONFIG``  Path to system YAML (default: configs/cstr_default.yaml)
-- ``DTE_MODEL_PATH``     Path to trained model checkpoint (default: outputs/best_model.eqx)
+- ``DTE_MODEL_PATH``     Path to trained single-system checkpoint fallback
 - ``DTE_TRAINING_CONFIG`` Path to training YAML (default: configs/training_default.yaml)
+- ``DTE_DEMO_CONFIG``    Demo config; when its runtime section points to a universal
+  release checkpoint, the API will use that shared runtime first
 - ``DTE_API_KEY``        Optional API key for authentication
 """
 
@@ -64,11 +66,13 @@ from dte.api.models import (
     SteadyStateResponse,
 )
 from dte.demo.engine import (
+    UniversalDemoRuntime,
     compare_scenarios,
     constraint_summary,
     default_disturbance_sequence,
     demo_catalog_from_config,
     load_demo_config,
+    load_demo_model_runtime,
     optimize_control_sequence,
     rollout_scenario,
     simulate_open_loop,
@@ -86,19 +90,31 @@ from dte.simulators.registry import get_system_spec, get_simulator
 _models: Dict[str, DigitalTwin] = {}
 _specs: Dict[str, SystemSpec] = {}
 _system_configs: Dict[str, dict] = {}
+_universal_runtime: UniversalDemoRuntime | None = None
 _startup_time: float = 0.0
 
 
-def _load_system(system_config_path: str, model_path: Optional[str], training_config_path: str):
-    """Load a system spec and optionally a model checkpoint."""
+def _register_system(system_config_path: str):
+    """Load a system spec and register it for API use."""
+    with open(system_config_path) as f:
+        sys_cfg = yaml.safe_load(f)
+    spec = get_system_spec(sys_cfg)
+    _specs[spec.name] = spec
+    _system_configs[spec.name] = sys_cfg
+
+
+def _load_single_system_model(
+    system_config_path: str,
+    model_path: Optional[str],
+    training_config_path: str,
+):
+    """Load a legacy single-system checkpoint for one registered system."""
+
     with open(system_config_path) as f:
         sys_cfg = yaml.safe_load(f)
     with open(training_config_path) as f:
         train_cfg = yaml.safe_load(f)
-
     spec = get_system_spec(sys_cfg)
-    _specs[spec.name] = spec
-    _system_configs[spec.name] = sys_cfg
 
     if model_path and os.path.exists(model_path):
         model = DigitalTwin.load(
@@ -119,20 +135,53 @@ def _load_system(system_config_path: str, model_path: Optional[str], training_co
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Load models at startup."""
-    global _startup_time
+    global _startup_time, _universal_runtime
     _startup_time = time.time()
+    _models.clear()
+    _specs.clear()
+    _system_configs.clear()
+    _universal_runtime = None
 
     sys_config_env = os.environ.get("DTE_SYSTEM_CONFIG", "configs/cstr_default.yaml")
     model_path_env = os.environ.get("DTE_MODEL_PATH", "outputs/best_model.eqx")
     train_config_env = os.environ.get("DTE_TRAINING_CONFIG", "configs/training_default.yaml")
+    demo_config_env = os.environ.get("DTE_DEMO_CONFIG", "configs/demo_app.yaml")
+    disable_universal_runtime = os.environ.get("DTE_DISABLE_UNIVERSAL_RUNTIME", "").strip() in {
+        "1",
+        "true",
+        "TRUE",
+        "yes",
+        "YES",
+    }
 
     # Support comma-separated list for multiple systems
+    system_paths: list[str] = []
     for sys_path in sys_config_env.split(","):
         sys_path = sys_path.strip()
         if sys_path and os.path.exists(sys_path):
-            _load_system(sys_path, model_path_env, train_config_env)
+            system_paths.append(sys_path)
+            _register_system(sys_path)
         elif sys_path:
             print(f"[DTE API] System config not found: {sys_path}")
+
+    if not disable_universal_runtime:
+        try:
+            demo_config = load_demo_config(demo_config_env)
+            _universal_runtime = load_demo_model_runtime(
+                demo_config,
+                config_path=demo_config_env,
+            )
+            if _universal_runtime is not None:
+                print(
+                    "[DTE API] Loaded shared universal runtime from "
+                    f"{_universal_runtime.model_path}"
+                )
+        except Exception as exc:
+            print(f"[DTE API] Universal runtime load failed: {exc}")
+
+    if _universal_runtime is None:
+        for sys_path in system_paths:
+            _load_single_system_model(sys_path, model_path_env, train_config_env)
 
     print(f"[DTE API] Ready.  Loaded systems: {list(_specs.keys())}")
     yield
@@ -179,19 +228,24 @@ async def _verify_api_key(api_key: Optional[str] = Security(_api_key_header)):
 # ---------------------------------------------------------------------------
 
 
-def _get_model_and_spec(system: str):
+def _get_inference_runtime_and_spec(system: str):
     spec = _specs.get(system)
     if spec is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"System '{system}' not registered.  Available: {list(_specs.keys())}",
         )
+    if _universal_runtime is not None and system in _universal_runtime.system_ids:
+        return _universal_runtime, spec
     model = _models.get(system)
     if model is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"No trained model loaded for system '{system}'.  "
-                   "Set DTE_MODEL_PATH and restart the service.",
+            detail=(
+                f"No trained runtime loaded for system '{system}'. "
+                "Configure DTE_DEMO_CONFIG for the universal release runtime or "
+                "set DTE_MODEL_PATH for the legacy single-system path."
+            ),
         )
     return model, spec
 
@@ -216,8 +270,229 @@ def _get_demo_runtime(system: str):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Could not instantiate simulator for '{system}': {exc}",
         )
-    model = _models.get(system)
+    if _universal_runtime is not None and system in _universal_runtime.system_ids:
+        model = _universal_runtime
+    else:
+        model = _models.get(system)
     return spec, simulator, model
+
+
+def _validate_state_vector(spec: SystemSpec, values: List[float]) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float32)
+    if arr.shape != (spec.state_dim,):
+        raise HTTPException(
+            status_code=422,
+            detail=f"initial_state must have shape [{spec.state_dim}] for '{spec.name}'.",
+        )
+    return arr
+
+
+def _validate_control_sequence(spec: SystemSpec, controls: List[List[float]]) -> np.ndarray:
+    arr = np.asarray(controls, dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] != spec.control_dim:
+        raise HTTPException(
+            status_code=422,
+            detail=f"controls must have shape [T, {spec.control_dim}] for '{spec.name}'.",
+        )
+    return arr
+
+
+def _validate_params(spec: SystemSpec, params: Optional[List[float]]) -> np.ndarray:
+    if params is None:
+        return np.ones(spec.param_dim, dtype=np.float32)
+    arr = np.asarray(params, dtype=np.float32)
+    if arr.shape != (spec.param_dim,):
+        raise HTTPException(
+            status_code=422,
+            detail=f"params must have shape [{spec.param_dim}] for '{spec.name}'.",
+        )
+    return arr
+
+
+def _prepare_universal_inputs(
+    runtime: UniversalDemoRuntime,
+    spec: SystemSpec,
+    *,
+    initial_state: np.ndarray,
+    controls: np.ndarray,
+    disturbances: np.ndarray,
+    params: np.ndarray,
+    dt: float,
+) -> dict[str, jax.Array]:
+    model = runtime.model
+    system_id = runtime.system_ids.get(spec.name)
+    if system_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Universal runtime does not contain system '{spec.name}'.",
+        )
+
+    system_id_arr = jnp.asarray(system_id, dtype=jnp.int32)
+    n_steps = int(controls.shape[0])
+    padded_state = jnp.zeros((model.max_state_dim,), dtype=jnp.float32).at[: spec.state_dim].set(
+        jnp.asarray(initial_state, dtype=jnp.float32)
+    )
+    padded_controls = jnp.zeros((n_steps, model.max_control_dim), dtype=jnp.float32).at[
+        :, : spec.control_dim
+    ].set(jnp.asarray(controls, dtype=jnp.float32))
+    padded_disturbances = jnp.zeros(
+        (n_steps, model.max_disturbance_dim),
+        dtype=jnp.float32,
+    ).at[:, : spec.disturbance_dim].set(jnp.asarray(disturbances, dtype=jnp.float32))
+    padded_params = jnp.zeros((model.max_param_dim,), dtype=jnp.float32).at[: spec.param_dim].set(
+        jnp.asarray(params, dtype=jnp.float32)
+    )
+
+    state_mask = model.state_mask_table[system_id_arr]
+    control_mask = model.control_mask_table[system_id_arr]
+    disturbance_mask = model.disturbance_mask_table[system_id_arr]
+    param_mask = model.param_mask_table[system_id_arr]
+    ts = _build_time_array(n_steps, dt)
+
+    controls_norm = model.normalize_controls(padded_controls, system_id_arr) * control_mask
+    disturbances_norm = (
+        model.normalize_disturbances(padded_disturbances, system_id_arr) * disturbance_mask
+    )
+    params_scaled = model.scale_params(padded_params, system_id_arr) * param_mask
+    state_norm = model.normalize_states(padded_state, system_id_arr) * state_mask
+    return {
+        "system_id": system_id_arr,
+        "ts": ts,
+        "state_mask": state_mask,
+        "control_mask": control_mask,
+        "disturbance_mask": disturbance_mask,
+        "param_mask": param_mask,
+        "controls_norm": controls_norm,
+        "disturbances_norm": disturbances_norm,
+        "params_scaled": params_scaled,
+        "state_norm": state_norm,
+    }
+
+
+def _predict_with_universal_runtime(
+    runtime: UniversalDemoRuntime,
+    spec: SystemSpec,
+    *,
+    initial_state: np.ndarray,
+    controls: np.ndarray,
+    disturbances: np.ndarray,
+    params: np.ndarray,
+    dt: float,
+    return_latent: bool,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    model = runtime.model
+    context = _prepare_universal_inputs(
+        runtime,
+        spec,
+        initial_state=initial_state,
+        controls=controls,
+        disturbances=disturbances,
+        params=params,
+        dt=dt,
+    )
+    z_mean = model.encode(
+        context["state_norm"],
+        context["params_scaled"],
+        context["controls_norm"][0],
+        context["state_mask"],
+        context["control_mask"],
+        context["param_mask"],
+        context["system_id"],
+        None,
+    )[1]
+    z_traj = model.rollout_latent(
+        context["ts"],
+        z_mean,
+        context["controls_norm"],
+        context["disturbances_norm"],
+        context["params_scaled"],
+        context["control_mask"],
+        context["disturbance_mask"],
+        context["param_mask"],
+        context["system_id"],
+    )
+    pred_norm = jax.vmap(
+        lambda z_t, control_t: model.decode(
+            z_t,
+            context["params_scaled"],
+            control_t,
+            context["state_mask"],
+            context["control_mask"],
+            context["param_mask"],
+            context["system_id"],
+        )
+    )(z_traj, context["controls_norm"])
+    pred_states = np.asarray(
+        model.denormalize_states(pred_norm, context["system_id"])[:, : spec.state_dim]
+    )
+    latent = np.asarray(z_traj) if return_latent else None
+    return pred_states, latent
+
+
+def _ensemble_with_universal_runtime(
+    runtime: UniversalDemoRuntime,
+    spec: SystemSpec,
+    *,
+    initial_state: np.ndarray,
+    controls: np.ndarray,
+    disturbances: np.ndarray,
+    params: np.ndarray,
+    dt: float,
+    n_samples: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    model = runtime.model
+    context = _prepare_universal_inputs(
+        runtime,
+        spec,
+        initial_state=initial_state,
+        controls=controls,
+        disturbances=disturbances,
+        params=params,
+        dt=dt,
+    )
+    keys = jax.random.split(jax.random.PRNGKey(0), int(n_samples))
+
+    def _one_sample(sample_key):
+        z0 = model.encode(
+            context["state_norm"],
+            context["params_scaled"],
+            context["controls_norm"][0],
+            context["state_mask"],
+            context["control_mask"],
+            context["param_mask"],
+            context["system_id"],
+            sample_key,
+        )[0]
+        z_traj = model.rollout_latent(
+            context["ts"],
+            z0,
+            context["controls_norm"],
+            context["disturbances_norm"],
+            context["params_scaled"],
+            context["control_mask"],
+            context["disturbance_mask"],
+            context["param_mask"],
+            context["system_id"],
+        )
+        pred_norm = jax.vmap(
+            lambda z_t, control_t: model.decode(
+                z_t,
+                context["params_scaled"],
+                control_t,
+                context["state_mask"],
+                context["control_mask"],
+                context["param_mask"],
+                context["system_id"],
+            )
+        )(z_traj, context["controls_norm"])
+        return model.denormalize_states(pred_norm, context["system_id"])[:, : spec.state_dim]
+
+    all_samples = np.asarray(jax.vmap(_one_sample)(keys))
+    mean = np.mean(all_samples, axis=0)
+    std = np.std(all_samples, axis=0)
+    p05 = np.percentile(all_samples, 5.0, axis=0)
+    p95 = np.percentile(all_samples, 95.0, axis=0)
+    return mean, std, p05, p95
 
 
 def _build_time_array(n_steps: int, dt: float) -> jnp.ndarray:
@@ -284,17 +559,12 @@ async def demo_simulate(req: DemoSimulateRequest):
     """Run a deterministic simulator rollout for the demo app."""
 
     spec, simulator, _ = _get_demo_runtime(req.system)
-    controls = np.asarray(req.controls, dtype=np.float32)
-    if controls.shape[1] != spec.control_dim:
-        raise HTTPException(
-            status_code=422,
-            detail=f"controls must have shape [T, {spec.control_dim}] for '{req.system}'.",
-        )
+    controls = _validate_control_sequence(spec, req.controls)
     disturbances = _ensure_disturbance_sequence(spec, req.disturbances, controls.shape[0])
     states = simulate_open_loop(
         spec,
         simulator,
-        np.asarray(req.initial_state, dtype=np.float32),
+        _validate_state_vector(spec, req.initial_state),
         controls,
         disturbances,
         float(req.dt),
@@ -321,22 +591,17 @@ async def demo_rollout(req: DemoRolloutRequest):
     """Return mean trajectory and uncertainty bands for one scenario."""
 
     spec, simulator, model = _get_demo_runtime(req.system)
-    controls = np.asarray(req.controls, dtype=np.float32)
-    if controls.shape[1] != spec.control_dim:
-        raise HTTPException(
-            status_code=422,
-            detail=f"controls must have shape [T, {spec.control_dim}] for '{req.system}'.",
-        )
+    controls = _validate_control_sequence(spec, req.controls)
     disturbances = _ensure_disturbance_sequence(spec, req.disturbances, controls.shape[0])
     result = rollout_scenario(
         spec,
         simulator,
-        initial_state=np.asarray(req.initial_state, dtype=np.float32),
+        initial_state=_validate_state_vector(spec, req.initial_state),
         controls=controls,
         disturbances=disturbances,
         dt=float(req.dt),
         model=model,
-        params=None if req.params is None else np.asarray(req.params, dtype=np.float32),
+        params=_validate_params(spec, req.params) if req.params is not None else None,
         n_samples=int(req.n_samples),
         seed=int(req.seed),
     )
@@ -376,10 +641,10 @@ async def demo_optimize_control(req: DemoOptimizeControlRequest):
     result = optimize_control_sequence(
         spec,
         simulator,
-        initial_state=np.asarray(req.initial_state, dtype=np.float32),
+        initial_state=_validate_state_vector(spec, req.initial_state),
         disturbances=disturbances,
         dt=float(req.dt),
-        target_state=np.asarray(req.target_state, dtype=np.float32),
+        target_state=_validate_state_vector(spec, req.target_state),
         tracked_state_names=req.tracked_state_names,
         n_candidates=int(req.n_candidates),
         seed=int(req.seed),
@@ -407,17 +672,12 @@ async def demo_compare_scenarios(req: DemoCompareScenariosRequest):
     """Compare baseline and candidate control schedules for one demo system."""
 
     spec, simulator, model = _get_demo_runtime(req.system)
-    baseline_controls = np.asarray(req.baseline_controls, dtype=np.float32)
-    candidate_controls = np.asarray(req.candidate_controls, dtype=np.float32)
+    baseline_controls = _validate_control_sequence(spec, req.baseline_controls)
+    candidate_controls = _validate_control_sequence(spec, req.candidate_controls)
     if baseline_controls.shape != candidate_controls.shape:
         raise HTTPException(
             status_code=422,
             detail="baseline_controls and candidate_controls must have the same shape.",
-        )
-    if baseline_controls.shape[1] != spec.control_dim:
-        raise HTTPException(
-            status_code=422,
-            detail=f"controls must have shape [T, {spec.control_dim}] for '{req.system}'.",
         )
     disturbances = _ensure_disturbance_sequence(
         spec,
@@ -427,13 +687,13 @@ async def demo_compare_scenarios(req: DemoCompareScenariosRequest):
     result = compare_scenarios(
         spec,
         simulator,
-        initial_state=np.asarray(req.initial_state, dtype=np.float32),
+        initial_state=_validate_state_vector(spec, req.initial_state),
         baseline_controls=baseline_controls,
         candidate_controls=candidate_controls,
         disturbances=disturbances,
         dt=float(req.dt),
         model=model,
-        params=None if req.params is None else np.asarray(req.params, dtype=np.float32),
+        params=_validate_params(spec, req.params) if req.params is not None else None,
         n_samples=int(req.n_samples),
         seed=int(req.seed),
     )
@@ -469,43 +729,52 @@ async def predict(req: PredictRequest):
 
     Returns the predicted state sequence over the control horizon.
     """
-    model, spec = _get_model_and_spec(req.system)
+    runtime, spec = _get_inference_runtime_and_spec(req.system)
 
-    n_steps = len(req.controls)
-    if n_steps == 0:
-        raise HTTPException(status_code=422, detail="controls must be non-empty.")
+    controls = _validate_control_sequence(spec, req.controls)
+    disturbances = _ensure_disturbance_sequence(spec, req.disturbances, controls.shape[0])
+    params = _validate_params(spec, req.params)
+    initial_state = _validate_state_vector(spec, req.initial_state)
 
-    controls = jnp.array(req.controls, dtype=jnp.float32)  # (T, control_dim)
-    disturbances = (
-        jnp.array(req.disturbances, dtype=jnp.float32)
-        if req.disturbances
-        else jnp.zeros((n_steps, spec.disturbance_dim), dtype=jnp.float32)
-    )
-    params = (
-        jnp.array(req.params, dtype=jnp.float32)
-        if req.params
-        else jnp.ones(spec.param_dim, dtype=jnp.float32)
-    )
-    initial_state = jnp.array(req.initial_state, dtype=jnp.float32)
-    ts = _build_time_array(n_steps, req.dt)
-
-    key = jax.random.PRNGKey(0)
-    _, z_mean, _ = model.encode(initial_state, params, controls[0], key)
-    z_traj = model.rollout_latent(
-        ts, z_mean, controls, params, disturbances=disturbances, stochastic=False
-    )
-
-    import equinox as eqx
-    decode_fn = jax.vmap(lambda z, u: model.decode(z, params, u), in_axes=(0, 0))
-    pred_states = decode_fn(z_traj, controls)
+    if isinstance(runtime, UniversalDemoRuntime):
+        pred_states, latent = _predict_with_universal_runtime(
+            runtime,
+            spec,
+            initial_state=initial_state,
+            controls=controls,
+            disturbances=disturbances,
+            params=params,
+            dt=float(req.dt),
+            return_latent=bool(req.return_latent),
+        )
+    else:
+        model = runtime
+        ts = _build_time_array(controls.shape[0], req.dt)
+        _, z_mean, _ = model.encode(
+            jnp.asarray(initial_state, dtype=jnp.float32),
+            jnp.asarray(params, dtype=jnp.float32),
+            jnp.asarray(controls[0], dtype=jnp.float32),
+            jax.random.PRNGKey(0),
+        )
+        z_traj = model.rollout_latent(
+            ts,
+            z_mean,
+            jnp.asarray(controls, dtype=jnp.float32),
+            jnp.asarray(params, dtype=jnp.float32),
+            disturbances=jnp.asarray(disturbances, dtype=jnp.float32),
+            stochastic=False,
+        )
+        decode_fn = jax.vmap(lambda z, u: model.decode(z, jnp.asarray(params, dtype=jnp.float32), u), in_axes=(0, 0))
+        pred_states = np.asarray(decode_fn(z_traj, jnp.asarray(controls, dtype=jnp.float32)))
+        latent = np.asarray(z_traj) if req.return_latent else None
 
     return PredictResponse(
         system=req.system,
         predicted_states=pred_states.tolist(),
         state_names=spec.state_names,
-        latent_trajectory=z_traj.tolist() if req.return_latent else None,
+        latent_trajectory=latent.tolist() if latent is not None else None,
         dt=req.dt,
-        n_steps=n_steps,
+        n_steps=int(controls.shape[0]),
     )
 
 
@@ -520,58 +789,63 @@ async def ensemble(req: EnsembleRequest):
 
     Returns mean, standard deviation, and 5th/95th percentile bands.
     """
-    model, spec = _get_model_and_spec(req.system)
+    runtime, spec = _get_inference_runtime_and_spec(req.system)
+    controls = _validate_control_sequence(spec, req.controls)
+    disturbances = _ensure_disturbance_sequence(spec, req.disturbances, controls.shape[0])
+    params = _validate_params(spec, req.params)
+    initial_state = _validate_state_vector(spec, req.initial_state)
 
-    n_steps = len(req.controls)
-    if n_steps == 0:
-        raise HTTPException(status_code=422, detail="controls must be non-empty.")
-
-    controls = jnp.array(req.controls, dtype=jnp.float32)
-    disturbances = (
-        jnp.array(req.disturbances, dtype=jnp.float32)
-        if req.disturbances
-        else jnp.zeros((n_steps, spec.disturbance_dim), dtype=jnp.float32)
-    )
-    params = (
-        jnp.array(req.params, dtype=jnp.float32)
-        if req.params
-        else jnp.ones(spec.param_dim, dtype=jnp.float32)
-    )
-    initial_state = jnp.array(req.initial_state, dtype=jnp.float32)
-    ts = _build_time_array(n_steps, req.dt)
-
-    base_key = jax.random.PRNGKey(0)
-    enc_key, *sde_keys = jax.random.split(base_key, req.n_samples + 1)
-
-    _, z_mean, _ = model.encode(initial_state, params, controls[0], enc_key)
-
-    def _one_sample(sde_key):
-        z_traj = model.rollout_latent(
-            ts,
-            z_mean,
-            controls,
-            params,
+    if isinstance(runtime, UniversalDemoRuntime):
+        mean, std, p05, p95 = _ensemble_with_universal_runtime(
+            runtime,
+            spec,
+            initial_state=initial_state,
+            controls=controls,
             disturbances=disturbances,
-            key=sde_key,
-            stochastic=True,
+            params=params,
+            dt=float(req.dt),
+            n_samples=int(req.n_samples),
         )
-        decode_fn = jax.vmap(lambda z, u: model.decode(z, params, u), in_axes=(0, 0))
-        return decode_fn(z_traj, controls)
+    else:
+        model = runtime
+        ts = _build_time_array(controls.shape[0], req.dt)
+        base_key = jax.random.PRNGKey(0)
+        enc_key, *sde_keys = jax.random.split(base_key, req.n_samples + 1)
+        _, z_mean, _ = model.encode(
+            jnp.asarray(initial_state, dtype=jnp.float32),
+            jnp.asarray(params, dtype=jnp.float32),
+            jnp.asarray(controls[0], dtype=jnp.float32),
+            enc_key,
+        )
 
-    sde_keys_arr = jnp.stack(sde_keys)
-    all_samples = jax.vmap(_one_sample)(sde_keys_arr)  # (n_samples, T, state_dim)
+        def _one_sample(sde_key):
+            z_traj = model.rollout_latent(
+                ts,
+                z_mean,
+                jnp.asarray(controls, dtype=jnp.float32),
+                jnp.asarray(params, dtype=jnp.float32),
+                disturbances=jnp.asarray(disturbances, dtype=jnp.float32),
+                key=sde_key,
+                stochastic=True,
+            )
+            decode_fn = jax.vmap(
+                lambda z, u: model.decode(z, jnp.asarray(params, dtype=jnp.float32), u),
+                in_axes=(0, 0),
+            )
+            return decode_fn(z_traj, jnp.asarray(controls, dtype=jnp.float32))
 
-    mean = jnp.mean(all_samples, axis=0)
-    std = jnp.std(all_samples, axis=0)
-    p05 = jnp.percentile(all_samples, 5, axis=0)
-    p95 = jnp.percentile(all_samples, 95, axis=0)
+        all_samples = np.asarray(jax.vmap(_one_sample)(jnp.stack(sde_keys)))
+        mean = np.mean(all_samples, axis=0)
+        std = np.std(all_samples, axis=0)
+        p05 = np.percentile(all_samples, 5.0, axis=0)
+        p95 = np.percentile(all_samples, 95.0, axis=0)
 
     return EnsembleResponse(
         system=req.system,
-        mean=mean.tolist(),
-        std=std.tolist(),
-        p05=p05.tolist(),
-        p95=p95.tolist(),
+        mean=np.asarray(mean).tolist(),
+        std=np.asarray(std).tolist(),
+        p05=np.asarray(p05).tolist(),
+        p95=np.asarray(p95).tolist(),
         state_names=spec.state_names,
         n_samples=req.n_samples,
         dt=req.dt,
@@ -591,7 +865,13 @@ async def steady_state(req: SteadyStateRequest):
     control = (
         jnp.array(req.nominal_control, dtype=jnp.float32)
         if req.nominal_control
-        else jnp.array(spec.default_initial_state[:spec.control_dim], dtype=jnp.float32)
+        else jnp.asarray(
+            [
+                0.5 * sum(spec.control_ranges[name])
+                for name in spec.control_names
+            ],
+            dtype=jnp.float32,
+        )
     )
     disturbance = (
         jnp.array(req.nominal_disturbance, dtype=jnp.float32)

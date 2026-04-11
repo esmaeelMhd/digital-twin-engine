@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,16 +14,28 @@ import jax.numpy as jnp
 import numpy as np
 import yaml
 
+from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
 from dte.flowsheet.examples import (
     build_exchanger_reactor_tank_flowsheet,
     build_reactor_separator_recycle_flowsheet,
 )
 from dte.models.digital_twin import DigitalTwin
+from dte.models.universal_digital_twin import UniversalDigitalTwin
 from dte.simulators.base import ProcessSimulator, ProcessUnitSpec
 from dte.simulators.registry import get_system_spec
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEMO_CONFIG_PATH = PROJECT_ROOT / "configs" / "demo_app.yaml"
+
+
+@dataclass(frozen=True)
+class UniversalDemoRuntime:
+    """Loaded universal checkpoint plus the metadata required for inference."""
+
+    model: UniversalDigitalTwin
+    system_ids: dict[str, int]
+    model_path: str
+    config_path: str
 
 
 def load_demo_config(path: str | Path | None = None) -> dict[str, Any]:
@@ -29,6 +44,174 @@ def load_demo_config(path: str | Path | None = None) -> dict[str, Any]:
     config_path = DEFAULT_DEMO_CONFIG_PATH if path is None else Path(path)
     with config_path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
+
+
+def _resolve_configured_path(
+    value: str | Path | None,
+    *,
+    anchor: str | Path | None = None,
+) -> Path | None:
+    if value is None:
+        return None
+    text = os.path.expandvars(str(value)).strip()
+    if not text:
+        return None
+    raw_path = Path(text)
+    if raw_path.is_absolute():
+        return raw_path
+    candidates: list[Path] = []
+    if anchor is not None:
+        candidates.append(Path(anchor).resolve().parent / raw_path)
+    candidates.append(PROJECT_ROOT / raw_path)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _load_json_if_exists(path: Path | None) -> dict[str, Any] | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _load_universal_sources(
+    universal_config: dict[str, Any],
+    *,
+    anchor: str | Path | None,
+) -> list[SystemDatasetSource]:
+    systems = universal_config.get("data", {}).get("systems", [])
+    sources: list[SystemDatasetSource] = []
+    for item in systems:
+        system_config_path = _resolve_configured_path(item.get("system_config"), anchor=anchor)
+        data_dir_path = _resolve_configured_path(item.get("data_dir"), anchor=anchor)
+        if system_config_path is None or data_dir_path is None:
+            continue
+        sources.append(
+            SystemDatasetSource(
+                name=str(item["name"]),
+                system_config=str(system_config_path),
+                data_dir=str(data_dir_path),
+                weight=float(item.get("weight", 1.0)),
+            )
+        )
+    return sources
+
+
+def load_demo_release_snapshot(
+    config: dict[str, Any],
+    *,
+    config_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Return a condensed release snapshot for the presentation UI."""
+
+    runtime_cfg = config.get("runtime", {})
+    anchor = DEFAULT_DEMO_CONFIG_PATH if config_path is None else Path(config_path)
+    model_path = _resolve_configured_path(runtime_cfg.get("model_path"), anchor=anchor)
+    universal_config_path = _resolve_configured_path(runtime_cfg.get("config_path"), anchor=anchor)
+    train_summary_path = _resolve_configured_path(
+        runtime_cfg.get("train_summary_path"),
+        anchor=anchor,
+    )
+    eval_summary_path = _resolve_configured_path(
+        runtime_cfg.get("eval_summary_path"),
+        anchor=anchor,
+    )
+    milestone_summary_path = _resolve_configured_path(
+        runtime_cfg.get("milestone_summary_path"),
+        anchor=anchor,
+    )
+    customer_summary_path = _resolve_configured_path(
+        runtime_cfg.get("customer_pilot_summary_path"),
+        anchor=anchor,
+    )
+    customer_report_path = _resolve_configured_path(
+        runtime_cfg.get("customer_report_path"),
+        anchor=anchor,
+    )
+
+    train_summary = _load_json_if_exists(train_summary_path)
+    eval_summary = _load_json_if_exists(eval_summary_path)
+    milestone_summary = _load_json_if_exists(milestone_summary_path)
+    customer_summary = _load_json_if_exists(customer_summary_path)
+
+    per_system_total_loss: dict[str, float] = {}
+    for system_name, metrics in (eval_summary or {}).get("per_system_val_losses", {}).items():
+        if isinstance(metrics, dict):
+            total = _safe_float(metrics.get("total"))
+            if total is not None:
+                per_system_total_loss[system_name] = total
+
+    return {
+        "release_label": runtime_cfg.get("release_label", "V1 milestone release"),
+        "model_available": bool(model_path and model_path.exists()),
+        "config_available": bool(universal_config_path and universal_config_path.exists()),
+        "runtime_samples": int(runtime_cfg.get("n_samples", 24)),
+        "model_path": str(model_path) if model_path is not None else None,
+        "config_path": str(universal_config_path) if universal_config_path is not None else None,
+        "train_best_val_loss": _safe_float((train_summary or {}).get("best_val_loss")),
+        "eval_metric_name": (eval_summary or {}).get(
+            "aggregate_metric_name",
+            (eval_summary or {}).get("aggregate_method"),
+        ),
+        "eval_metric_value": _safe_float((eval_summary or {}).get("aggregate_metric_value")),
+        "per_system_total_loss": per_system_total_loss,
+        "milestone_status": (milestone_summary or {}).get("status"),
+        "customer_status": (customer_summary or {}).get("adaptation_status", (customer_summary or {}).get("status")),
+        "customer_best_unit_template": (customer_summary or {}).get("best_unit_template"),
+        "customer_best_val_loss": _safe_float((customer_summary or {}).get("best_val_loss")),
+        "customer_forecast_rmse": _safe_float((customer_summary or {}).get("forecast_rmse")),
+        "customer_rollout_rmse": _safe_float((customer_summary or {}).get("rollout_rmse")),
+        "customer_report_path": str(customer_report_path) if customer_report_path is not None else None,
+        "customer_report_exists": bool(customer_report_path and customer_report_path.exists()),
+    }
+
+
+def load_demo_model_runtime(
+    config: dict[str, Any],
+    *,
+    config_path: str | Path | None = None,
+) -> UniversalDemoRuntime | None:
+    """Load the blessed universal checkpoint used by the V1 demo app."""
+
+    runtime_cfg = config.get("runtime", {})
+    anchor = DEFAULT_DEMO_CONFIG_PATH if config_path is None else Path(config_path)
+    model_path = _resolve_configured_path(runtime_cfg.get("model_path"), anchor=anchor)
+    universal_config_path = _resolve_configured_path(runtime_cfg.get("config_path"), anchor=anchor)
+    if model_path is None or universal_config_path is None:
+        return None
+    if not model_path.exists() or not universal_config_path.exists():
+        return None
+
+    with universal_config_path.open("r", encoding="utf-8") as handle:
+        universal_config = yaml.safe_load(handle) or {}
+    sources = _load_universal_sources(universal_config, anchor=universal_config_path)
+    if not sources:
+        return None
+    metadata = MultiSystemTrajectoryDataset.metadata_from_sources(sources)
+    model = UniversalDigitalTwin.load(str(model_path), universal_config, metadata)
+    system_ids = {name: idx for idx, name in enumerate(metadata.system_names)}
+    return UniversalDemoRuntime(
+        model=model,
+        system_ids=system_ids,
+        model_path=str(model_path),
+        config_path=str(universal_config_path),
+    )
 
 
 def _state_bounds(spec: ProcessUnitSpec) -> tuple[np.ndarray, np.ndarray]:
@@ -97,6 +280,85 @@ def time_axis(n_steps: int, dt: float) -> np.ndarray:
     return np.linspace(0.0, max(n_steps - 1, 0) * dt, n_steps, dtype=np.float32)
 
 
+def _apply_named_updates(
+    names: list[str],
+    base_vector: np.ndarray,
+    updates: dict[str, Any] | None,
+) -> np.ndarray:
+    vector = np.asarray(base_vector, dtype=np.float32).copy()
+    if not updates:
+        return vector
+    name_to_idx = {name: idx for idx, name in enumerate(names)}
+    for name, value in updates.items():
+        idx = name_to_idx.get(name)
+        if idx is not None:
+            vector[idx] = float(value)
+    return vector
+
+
+def build_signal_sequence(
+    spec: ProcessUnitSpec,
+    n_steps: int,
+    *,
+    signal_kind: str,
+    profile: dict[str, Any] | None = None,
+) -> np.ndarray:
+    """Build a preset control or disturbance sequence from demo config."""
+
+    if signal_kind == "control":
+        names = list(spec.control_names)
+        sequence = default_control_sequence(spec, n_steps)
+        clip_fn = lambda arr: _clip_controls(spec, arr)
+    elif signal_kind == "disturbance":
+        names = list(spec.disturbance_names)
+        sequence = default_disturbance_sequence(spec, n_steps)
+        clip_fn = lambda arr: _clip_disturbances(spec, arr)
+    else:
+        raise ValueError(f"Unsupported signal kind: {signal_kind}")
+
+    if profile is None:
+        return clip_fn(sequence)
+
+    profile_type = str(profile.get("type", "constant")).lower()
+    if profile_type == "constant":
+        vector = _apply_named_updates(
+            names,
+            sequence[0],
+            profile.get("channels") or profile.get("values"),
+        )
+        sequence = np.tile(vector[None, :], (n_steps, 1))
+    elif profile_type == "ramp":
+        start = _apply_named_updates(
+            names,
+            sequence[0],
+            profile.get("start") or profile.get("channels"),
+        )
+        end = _apply_named_updates(names, start, profile.get("end"))
+        sequence = np.stack(
+            [
+                np.linspace(start[idx], end[idx], n_steps, dtype=np.float32)
+                for idx in range(len(names))
+            ],
+            axis=-1,
+        )
+    elif profile_type == "pulse":
+        base = _apply_named_updates(names, sequence[0], profile.get("base"))
+        pulse = _apply_named_updates(
+            names,
+            base,
+            profile.get("pulse") or profile.get("channels"),
+        )
+        start_step = int(profile.get("start_step", max(n_steps // 3, 1)))
+        duration = int(profile.get("duration", max(n_steps // 5, 1)))
+        end_step = min(max(start_step, 0) + max(duration, 1), n_steps)
+        sequence = np.tile(base[None, :], (n_steps, 1))
+        sequence[max(start_step, 0):end_step] = pulse
+    else:
+        raise ValueError(f"Unsupported demo profile type: {profile_type}")
+
+    return clip_fn(sequence.astype(np.float32))
+
+
 def simulate_open_loop(
     spec: ProcessUnitSpec,
     simulator: ProcessSimulator,
@@ -118,15 +380,29 @@ def simulate_open_loop(
 
     controls = _clip_controls(spec, np.asarray(controls, dtype=np.float32))
     disturbances = _clip_disturbances(spec, np.asarray(disturbances, dtype=np.float32))
+    lower_state, upper_state = _state_bounds(spec)
+    finite_lower = np.where(np.isfinite(lower_state), lower_state, -np.inf)
+    finite_upper = np.where(np.isfinite(upper_state), upper_state, np.inf)
     for step in range(1, n_steps):
         prev = states[step - 1]
+        if not np.all(np.isfinite(prev)):
+            states[step:] = prev
+            break
         control = controls[step - 1]
         disturbance = disturbances[step - 1]
         deriv = np.asarray(
             simulator.dynamics((step - 1) * dt, prev, control, disturbance),
             dtype=np.float32,
         )
-        states[step] = prev + float(dt) * deriv
+        if not np.all(np.isfinite(deriv)):
+            states[step:] = prev
+            break
+        next_state = prev + float(dt) * deriv
+        next_state = np.clip(next_state, finite_lower, finite_upper)
+        if not np.all(np.isfinite(next_state)):
+            states[step:] = prev
+            break
+        states[step] = next_state
     return states
 
 
@@ -208,6 +484,130 @@ def rollout_with_model(
     }
 
 
+def nominal_parameter_vector(
+    spec: ProcessUnitSpec,
+    simulator: ProcessSimulator,
+    *,
+    seed: int = 0,
+) -> np.ndarray:
+    """Return a pragmatic parameter vector for demo inference."""
+
+    try:
+        params = np.asarray(
+            simulator.sample_data_generation_params(jax.random.PRNGKey(seed)),
+            dtype=np.float32,
+        ).reshape(-1)
+    except Exception:
+        params = np.ones(spec.param_dim, dtype=np.float32)
+    if params.shape[0] < spec.param_dim:
+        padded = np.ones(spec.param_dim, dtype=np.float32)
+        padded[: params.shape[0]] = params
+        return padded
+    return params[: spec.param_dim]
+
+
+def rollout_with_universal_model(
+    runtime: UniversalDemoRuntime,
+    spec: ProcessUnitSpec,
+    simulator: ProcessSimulator,
+    initial_state: np.ndarray,
+    controls: np.ndarray,
+    disturbances: np.ndarray,
+    params: np.ndarray,
+    dt: float,
+    *,
+    n_samples: int = 16,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """Generate mean and uncertainty bands from the blessed universal checkpoint."""
+
+    system_id = runtime.system_ids.get(spec.name)
+    if system_id is None:
+        raise ValueError(f"System '{spec.name}' is not available in the universal demo runtime.")
+
+    model = runtime.model
+    n_steps = int(controls.shape[0])
+    system_id_arr = jnp.asarray(system_id, dtype=jnp.int32)
+    state_mask = model.state_mask_table[system_id_arr]
+    control_mask = model.control_mask_table[system_id_arr]
+    disturbance_mask = model.disturbance_mask_table[system_id_arr]
+    param_mask = model.param_mask_table[system_id_arr]
+
+    padded_state = np.zeros(model.max_state_dim, dtype=np.float32)
+    padded_state[: spec.state_dim] = np.asarray(initial_state, dtype=np.float32)
+    padded_controls = np.zeros((n_steps, model.max_control_dim), dtype=np.float32)
+    padded_controls[:, : spec.control_dim] = np.asarray(controls, dtype=np.float32)
+    padded_disturbances = np.zeros((n_steps, model.max_disturbance_dim), dtype=np.float32)
+    padded_disturbances[:, : spec.disturbance_dim] = np.asarray(disturbances, dtype=np.float32)
+    padded_params = np.zeros(model.max_param_dim, dtype=np.float32)
+    active_params = np.asarray(params, dtype=np.float32).reshape(-1)
+    padded_params[: min(active_params.shape[0], spec.param_dim)] = active_params[: spec.param_dim]
+
+    ts = jnp.asarray(time_axis(n_steps, dt), dtype=jnp.float32)
+    state_norm = model.normalize_states(jnp.asarray(padded_state), system_id_arr) * state_mask
+    controls_norm = model.normalize_controls(
+        jnp.asarray(padded_controls),
+        system_id_arr,
+    ) * control_mask
+    disturbances_norm = model.normalize_disturbances(
+        jnp.asarray(padded_disturbances),
+        system_id_arr,
+    ) * disturbance_mask
+    params_scaled = model.scale_params(jnp.asarray(padded_params), system_id_arr) * param_mask
+
+    sample_keys = jax.random.split(jax.random.PRNGKey(seed), max(int(n_samples), 2))
+    trajectories = []
+    for sample_key in sample_keys:
+        z0, _, _ = model.encode(
+            state_norm,
+            params_scaled,
+            controls_norm[0],
+            state_mask,
+            control_mask,
+            param_mask,
+            system_id_arr,
+            sample_key,
+        )
+        z_traj = model.rollout_latent(
+            ts,
+            z0,
+            controls_norm,
+            disturbances_norm,
+            params_scaled,
+            control_mask,
+            disturbance_mask,
+            param_mask,
+            system_id_arr,
+        )
+        pred_norm = jax.vmap(
+            lambda z_t, control_t: model.decode(
+                z_t,
+                params_scaled,
+                control_t,
+                state_mask,
+                control_mask,
+                param_mask,
+                system_id_arr,
+            )
+        )(z_traj, controls_norm)
+        pred_states = model.denormalize_states(pred_norm, system_id_arr)
+        trajectories.append(np.asarray(pred_states[:, : spec.state_dim], dtype=np.float32))
+
+    samples = np.asarray(trajectories, dtype=np.float32)
+    mean = np.mean(samples, axis=0)
+    std = np.std(samples, axis=0)
+    return {
+        "source": "universal_model",
+        "times": np.asarray(ts),
+        "mean": mean,
+        "std": std,
+        "p05": np.percentile(samples, 5.0, axis=0),
+        "p95": np.percentile(samples, 95.0, axis=0),
+        "samples": samples,
+        "constraint_summary": constraint_summary(spec, mean),
+    }
+
+
 def rollout_with_simulator_ensemble(
     spec: ProcessUnitSpec,
     simulator: ProcessSimulator,
@@ -263,7 +663,7 @@ def rollout_scenario(
     controls: np.ndarray,
     disturbances: np.ndarray,
     dt: float,
-    model: DigitalTwin | None = None,
+    model: DigitalTwin | UniversalDemoRuntime | None = None,
     params: np.ndarray | None = None,
     n_samples: int = 16,
     seed: int = 0,
@@ -272,6 +672,24 @@ def rollout_scenario(
 
     controls = _clip_controls(spec, np.asarray(controls, dtype=np.float32))
     disturbances = _clip_disturbances(spec, np.asarray(disturbances, dtype=np.float32))
+    if isinstance(model, UniversalDemoRuntime):
+        params_arr = (
+            np.asarray(params, dtype=np.float32)
+            if params is not None
+            else nominal_parameter_vector(spec, simulator, seed=seed)
+        )
+        return rollout_with_universal_model(
+            model,
+            spec,
+            simulator,
+            np.asarray(initial_state, dtype=np.float32),
+            controls,
+            disturbances,
+            params_arr,
+            dt,
+            n_samples=n_samples,
+            seed=seed,
+        )
     if model is not None:
         params_arr = (
             np.asarray(params, dtype=np.float32)
@@ -310,7 +728,7 @@ def compare_scenarios(
     candidate_controls: np.ndarray,
     disturbances: np.ndarray,
     dt: float,
-    model: DigitalTwin | None = None,
+    model: DigitalTwin | UniversalDemoRuntime | None = None,
     params: np.ndarray | None = None,
     n_samples: int = 16,
     seed: int = 0,
@@ -392,6 +810,16 @@ def optimize_control_sequence(
         disturbances,
         dt,
     )
+    tracked_scale = np.maximum(
+        np.maximum(
+            np.abs(np.asarray(initial_state, dtype=np.float32)[tracked_indices]),
+            np.abs(target_state[tracked_indices]),
+        ),
+        1.0,
+    )
+    tracked_guard = 20.0 * tracked_scale
+    terminal_guard = 25.0 * tracked_scale
+    huge_cost = float(1e12)
 
     for _ in range(max(int(n_candidates), 1)):
         start = rng.uniform(lower, upper).astype(np.float32)
@@ -411,14 +839,26 @@ def optimize_control_sequence(
             disturbances,
             dt,
         )
+        tracked_states = states[:, tracked_indices]
+        terminal_state = states[-1, tracked_indices]
+        if not np.all(np.isfinite(tracked_states)) or not np.all(np.isfinite(terminal_state)):
+            continue
+        if np.any(np.abs(tracked_states) > tracked_guard[None, :]):
+            continue
+        if np.any(np.abs(terminal_state) > terminal_guard):
+            continue
         tracked_error = states[:, tracked_indices] - target_state[tracked_indices][None, :]
         terminal_error = states[-1, tracked_indices] - target_state[tracked_indices]
         smoothness = np.diff(controls, axis=0) if n_steps > 1 else np.zeros_like(controls)
+        tracked_error = np.clip(tracked_error, -tracked_guard[None, :], tracked_guard[None, :])
+        terminal_error = np.clip(terminal_error, -terminal_guard, terminal_guard)
         cost = (
             float(np.mean(tracked_error ** 2))
             + 2.0 * float(np.mean(terminal_error ** 2))
             + 0.05 * float(np.mean(smoothness ** 2))
         )
+        if not np.isfinite(cost):
+            cost = huge_cost
         if cost < best_cost:
             best_cost = cost
             best_controls = controls

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import yaml
 
 from dte.demo.engine import (
+    build_signal_sequence,
     compare_scenarios,
     constraint_summary,
     default_control_sequence,
@@ -60,6 +63,50 @@ def test_simulate_open_loop_and_constraints_return_expected_shapes():
     assert summary["below_lower_bound_rate"] >= 0.0
 
 
+def test_build_signal_sequence_supports_configured_profiles():
+    spec, _, _ = _load_system("heat_exchanger")
+
+    constant_controls = build_signal_sequence(
+        spec,
+        8,
+        signal_kind="control",
+        profile={
+            "type": "constant",
+            "channels": {"F_hot": 6.0, "F_cold": 5.5},
+        },
+    )
+    ramp_disturbances = build_signal_sequence(
+        spec,
+        8,
+        signal_kind="disturbance",
+        profile={
+            "type": "ramp",
+            "start": {"T_hot_in": 385.0, "T_cold_in": 288.0},
+            "end": {"T_hot_in": 405.0, "T_cold_in": 296.0},
+        },
+    )
+    pulse_controls = build_signal_sequence(
+        spec,
+        8,
+        signal_kind="control",
+        profile={
+            "type": "pulse",
+            "base": {"F_hot": 5.0, "F_cold": 5.0},
+            "pulse": {"F_hot": 8.0, "F_cold": 6.0},
+            "start_step": 2,
+            "duration": 3,
+        },
+    )
+
+    assert constant_controls.shape == (8, spec.control_dim)
+    assert np.allclose(constant_controls[0], [6.0, 5.5])
+    assert np.allclose(ramp_disturbances[0], [385.0, 288.0])
+    assert np.allclose(ramp_disturbances[-1], [405.0, 296.0])
+    assert np.allclose(pulse_controls[1], [5.0, 5.0])
+    assert np.allclose(pulse_controls[2], [8.0, 6.0])
+    assert np.allclose(pulse_controls[5], [5.0, 5.0])
+
+
 def test_compare_and_optimize_control_sequences():
     spec, simulator, _ = _load_system("heat_exchanger")
     baseline_controls = default_control_sequence(spec, 12)
@@ -102,3 +149,32 @@ def test_compare_and_optimize_control_sequences():
     assert "final_state_delta_norm" in comparison["summary"]
     assert optimized["control_sequence"].shape == (12, spec.control_dim)
     assert optimized["predicted_states"].shape == (12, spec.state_dim)
+
+
+def test_cstr_optimizer_rejects_unstable_candidates_without_runtime_warnings():
+    spec, simulator, _ = _load_system("cstr")
+    disturbances = default_disturbance_sequence(spec, 25)
+    target_state = np.asarray(spec.default_initial_state, dtype=np.float32).copy()
+    target_state[0] = 0.35
+    target_state[1] = 0.85
+    target_state[2] = 338.0
+    target_state[3] = 304.0
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        optimized = optimize_control_sequence(
+            spec,
+            simulator,
+            initial_state=np.asarray(spec.default_initial_state, dtype=np.float32),
+            disturbances=disturbances,
+            dt=0.1,
+            target_state=target_state,
+            tracked_state_names=["Cb", "T", "Tc"],
+            n_candidates=72,
+            seed=17,
+        )
+
+    runtime_warnings = [item for item in caught if issubclass(item.category, RuntimeWarning)]
+    assert not runtime_warnings
+    assert np.isfinite(optimized["objective"])
+    assert np.all(np.isfinite(optimized["predicted_states"]))
