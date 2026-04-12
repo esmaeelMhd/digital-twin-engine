@@ -76,20 +76,30 @@ def _inject_css() -> None:
           --serif: 'Playfair Display',Georgia,'Times New Roman',serif;
         }
 
-        /* ── Base ── */
-        .stApp {
-          background: linear-gradient(180deg,#f9f5ec 0%,#faf7f0 40%,#f5f0e5 100%);
-          color: var(--txt);
-          font-family: var(--sans);
+        /* ── Base — force light regardless of OS/Streamlit theme ── */
+        html, body { color-scheme: light !important; }
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"] {
+          background: linear-gradient(180deg,#f9f5ec 0%,#faf7f0 40%,#f5f0e5 100%) !important;
+          color: var(--txt) !important;
+          font-family: var(--sans) !important;
+        }
+        /* Ensure every direct text node picks up the dark ink, not Streamlit's theme text */
+        .stApp p, .stApp span, .stApp li, .stApp label,
+        .stApp [data-testid="stMarkdownContainer"] {
+          color: var(--txt) !important;
+          font-family: var(--sans) !important;
         }
         .block-container {
           max-width: 1280px;
           padding: 0 2rem 4rem 2rem;
         }
-        h1,h2,h3,h4 { font-family: var(--serif); color: var(--ink); }
+        h1,h2,h3,h4 { font-family: var(--serif) !important; color: var(--ink) !important; }
         #MainMenu { visibility: hidden; }
         footer { visibility: hidden; }
-        header[data-testid="stHeader"] { background: transparent; }
+        header[data-testid="stHeader"] { background: transparent !important; }
 
         /* ── Metric cards ── */
         [data-testid="stMetric"] {
@@ -105,43 +115,68 @@ def _inject_css() -> None:
           background: var(--glass-h);
           box-shadow: var(--sh-m);
         }
-        [data-testid="stMetricLabel"] {
+        [data-testid="stMetricLabel"],
+        [data-testid="stMetricLabel"] * {
           font-family: var(--sans) !important;
           font-size: .82rem !important;
-          font-weight: 500;
-          color: var(--txt-m) !important;
+          font-weight: 500 !important;
+          color: rgba(26,43,34,.62) !important;
           text-transform: uppercase;
           letter-spacing: .04em;
         }
-        [data-testid="stMetricValue"] {
+        [data-testid="stMetricValue"],
+        [data-testid="stMetricValue"] * {
           font-family: var(--serif) !important;
           font-size: 1.45rem !important;
-          font-weight: 600;
-          color: var(--ink) !important;
+          font-weight: 600 !important;
+          color: #0f1a14 !important;
+        }
+        [data-testid="stMetricDelta"],
+        [data-testid="stMetricDelta"] * {
+          font-family: var(--sans) !important;
+          font-size: .82rem !important;
         }
 
         /* ── Tabs ── */
         .stTabs [data-baseweb="tab-list"] {
           gap: 0;
-          border-bottom: 1px solid var(--line-h);
+          border-bottom: 1px solid rgba(15,26,20,.15) !important;
+          background: transparent !important;
         }
         .stTabs [data-baseweb="tab"] {
-          font-family: var(--sans);
-          font-weight: 500;
-          font-size: .9rem;
-          color: var(--txt-m);
-          padding: .8rem 1.4rem;
-          border-radius: var(--r-s) var(--r-s) 0 0;
+          font-family: var(--sans) !important;
+          font-weight: 500 !important;
+          font-size: .9rem !important;
+          color: rgba(26,43,34,.58) !important;
+          padding: .8rem 1.4rem !important;
+          border-radius: var(--r-s) var(--r-s) 0 0 !important;
+          background: transparent !important;
           transition: all 160ms ease;
         }
         .stTabs [data-baseweb="tab"]:hover {
-          color: var(--moss);
-          background: rgba(26,74,62,.04);
+          color: #1a4a3e !important;
+          background: rgba(26,74,62,.04) !important;
         }
         .stTabs [aria-selected="true"] {
-          color: var(--moss) !important;
-          border-bottom: 2px solid var(--moss) !important;
-          font-weight: 600;
+          color: #1a4a3e !important;
+          border-bottom: 2px solid #1a4a3e !important;
+          font-weight: 600 !important;
+        }
+        /* Caption text */
+        .stCaption, .stCaption * {
+          color: rgba(26,43,34,.55) !important;
+          font-family: var(--sans) !important;
+        }
+        /* Expander */
+        .streamlit-expanderHeader, .streamlit-expanderHeader * {
+          color: var(--txt) !important;
+          font-family: var(--sans) !important;
+        }
+        /* Select / slider labels */
+        .stSelectbox label, .stSlider label,
+        .stCheckbox label, .stRadio label {
+          color: var(--txt) !important;
+          font-family: var(--sans) !important;
         }
 
         /* ── Buttons ── */
