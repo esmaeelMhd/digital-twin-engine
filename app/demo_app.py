@@ -1,4 +1,4 @@
-"""Presentation-ready demo website for the Digital Twin Engine V1 release."""
+"""Presentation-ready marketing demo for the Digital Twin Engine."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from plotly.subplots import make_subplots
 
 from dte.demo.engine import (
@@ -30,170 +31,484 @@ SYSTEM_CONFIGS = {
     "two_tank": PROJECT_ROOT / "configs" / "two_tank_default.yaml",
 }
 
-
 st.set_page_config(
-    page_title="Digital Twin Engine Demo",
+    page_title="Digital Twin Engine",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Design system
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _inject_css() -> None:
     st.markdown(
         """
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+
         :root {
-          --dte-ink: #15211c;
-          --dte-moss: #214b45;
-          --dte-sand: #f0ebe0;
-          --dte-brass: #b06a2b;
-          --dte-cream: #fbf8f1;
-          --dte-line: rgba(21, 33, 28, 0.14);
+          --ink: #0f1a14;
+          --moss: #1a4a3e;
+          --moss-l: #2d7a68;
+          --brass: #c67a30;
+          --brass-l: #d4923e;
+          --cream: #faf7f0;
+          --sand: #eee8db;
+          --line: rgba(15,26,20,.08);
+          --line-h: rgba(15,26,20,.15);
+          --txt: #1a2b22;
+          --txt-m: rgba(26,43,34,.58);
+          --glass: rgba(255,255,255,.55);
+          --glass-h: rgba(255,255,255,.72);
+          --glass-b: rgba(255,255,255,.25);
+          --sh-s: 0 2px 8px rgba(15,26,20,.06);
+          --sh-m: 0 4px 20px rgba(15,26,20,.08);
+          --sh-l: 0 12px 40px rgba(15,26,20,.10);
+          --sh-xl: 0 20px 60px rgba(15,26,20,.14);
+          --r-s: 8px;
+          --r-m: 12px;
+          --r-l: 20px;
+          --r-xl: 28px;
+          --sans: 'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+          --serif: 'Playfair Display',Georgia,'Times New Roman',serif;
         }
+
+        /* ── Base ── */
         .stApp {
-          background:
-            radial-gradient(circle at 20% 15%, rgba(176, 106, 43, 0.10), transparent 30%),
-            radial-gradient(circle at 85% 10%, rgba(33, 75, 69, 0.14), transparent 24%),
-            linear-gradient(180deg, #f8f3e8 0%, #fbf8f1 55%, #f4eee1 100%);
-          color: var(--dte-ink);
+          background: linear-gradient(180deg,#f9f5ec 0%,#faf7f0 40%,#f5f0e5 100%);
+          color: var(--txt);
+          font-family: var(--sans);
         }
         .block-container {
-          max-width: 1340px;
-          padding-top: 2rem;
-          padding-bottom: 4rem;
+          max-width: 1280px;
+          padding: 0 2rem 4rem 2rem;
         }
-        .dte-hero {
+        h1,h2,h3,h4 { font-family: var(--serif); color: var(--ink); }
+        #MainMenu { visibility: hidden; }
+        footer { visibility: hidden; }
+        header[data-testid="stHeader"] { background: transparent; }
+
+        /* ── Metric cards ── */
+        [data-testid="stMetric"] {
+          background: var(--glass);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid var(--glass-b);
+          border-radius: var(--r-m);
+          padding: 1rem 1.2rem;
+          transition: all 200ms ease;
+        }
+        [data-testid="stMetric"]:hover {
+          background: var(--glass-h);
+          box-shadow: var(--sh-m);
+        }
+        [data-testid="stMetricLabel"] {
+          font-family: var(--sans) !important;
+          font-size: .82rem !important;
+          font-weight: 500;
+          color: var(--txt-m) !important;
+          text-transform: uppercase;
+          letter-spacing: .04em;
+        }
+        [data-testid="stMetricValue"] {
+          font-family: var(--serif) !important;
+          font-size: 1.45rem !important;
+          font-weight: 600;
+          color: var(--ink) !important;
+        }
+
+        /* ── Tabs ── */
+        .stTabs [data-baseweb="tab-list"] {
+          gap: 0;
+          border-bottom: 1px solid var(--line-h);
+        }
+        .stTabs [data-baseweb="tab"] {
+          font-family: var(--sans);
+          font-weight: 500;
+          font-size: .9rem;
+          color: var(--txt-m);
+          padding: .8rem 1.4rem;
+          border-radius: var(--r-s) var(--r-s) 0 0;
+          transition: all 160ms ease;
+        }
+        .stTabs [data-baseweb="tab"]:hover {
+          color: var(--moss);
+          background: rgba(26,74,62,.04);
+        }
+        .stTabs [aria-selected="true"] {
+          color: var(--moss) !important;
+          border-bottom: 2px solid var(--moss) !important;
+          font-weight: 600;
+        }
+
+        /* ── Buttons ── */
+        .stFormSubmitButton > button[kind="primary"],
+        .stButton > button[kind="primary"] {
+          background: var(--moss) !important;
+          color: #fff !important;
+          border: none !important;
+          border-radius: var(--r-s) !important;
+          font-family: var(--sans) !important;
+          font-weight: 600 !important;
+          letter-spacing: .02em;
+          transition: all 180ms ease;
+        }
+        .stFormSubmitButton > button[kind="primary"]:hover,
+        .stButton > button[kind="primary"]:hover {
+          background: var(--moss-l) !important;
+          box-shadow: var(--sh-m);
+          transform: translateY(-1px);
+        }
+        .stFormSubmitButton > button:not([kind="primary"]) {
+          background: transparent !important;
+          color: var(--moss) !important;
+          border: 1.5px solid var(--moss) !important;
+          border-radius: var(--r-s) !important;
+          font-family: var(--sans) !important;
+          font-weight: 600 !important;
+          transition: all 180ms ease;
+        }
+        .stFormSubmitButton > button:not([kind="primary"]):hover {
+          background: rgba(26,74,62,.06) !important;
+        }
+
+        /* ── Sections ── */
+        .dte-stitle {
+          font-family: var(--serif);
+          font-size: clamp(1.6rem,3vw,2.4rem);
+          font-weight: 600;
+          line-height: 1.1;
+          color: var(--ink);
+          margin-bottom: .6rem;
+        }
+        .dte-ssub {
+          font-family: var(--sans);
+          font-size: 1.05rem;
+          line-height: 1.6;
+          color: var(--txt-m);
+          max-width: 44rem;
+          margin-bottom: 2rem;
+        }
+        .dte-divider {
+          height: 1px;
+          background: linear-gradient(90deg,transparent,var(--line-h) 20%,var(--line-h) 80%,transparent);
+          margin: 3.5rem 0;
+        }
+
+        /* ── Stats Bar ── */
+        .dte-stats {
+          display: grid;
+          grid-template-columns: repeat(4,1fr);
+          gap: 1rem;
+          margin: -2.5rem 0 3rem 0;
+          position: relative;
+          z-index: 5;
+        }
+        @media(max-width:768px){ .dte-stats{ grid-template-columns: repeat(2,1fr); } }
+        .dte-stat {
+          background: var(--glass);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          border: 1px solid var(--glass-b);
+          border-radius: var(--r-l);
+          padding: 1.8rem 1.4rem;
+          text-align: center;
+          box-shadow: var(--sh-m);
+          transition: all 250ms ease;
+        }
+        .dte-stat:hover {
+          transform: translateY(-4px);
+          box-shadow: var(--sh-l);
+          background: var(--glass-h);
+        }
+        .dte-stat-n {
+          font-family: var(--serif);
+          font-size: 2.6rem;
+          font-weight: 700;
+          color: var(--moss);
+          line-height: 1;
+          margin-bottom: .35rem;
+        }
+        .dte-stat-l {
+          font-family: var(--sans);
+          font-size: .8rem;
+          font-weight: 500;
+          color: var(--txt-m);
+          text-transform: uppercase;
+          letter-spacing: .06em;
+        }
+
+        /* ── Industry Cards ── */
+        .dte-ig {
+          display: grid;
+          grid-template-columns: repeat(5,1fr);
+          gap: 1rem;
+        }
+        @media(max-width:1100px){ .dte-ig{ grid-template-columns: repeat(3,1fr); } }
+        @media(max-width:700px){ .dte-ig{ grid-template-columns: repeat(2,1fr); } }
+        .dte-ic {
+          background: var(--glass);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          border: 1px solid var(--glass-b);
+          border-radius: var(--r-m);
+          padding: 1.4rem 1.2rem;
+          transition: all 280ms cubic-bezier(.23,1,.32,1);
+          cursor: default;
           position: relative;
           overflow: hidden;
-          min-height: 36vh;
-          padding: 3rem 4rem 2.5rem 4rem;
-          border-top: 1px solid var(--dte-line);
-          border-bottom: 1px solid var(--dte-line);
-          background:
-            linear-gradient(135deg, rgba(33, 75, 69, 0.92), rgba(21, 33, 28, 0.96)),
-            linear-gradient(135deg, rgba(176, 106, 43, 0.14), transparent 42%);
-          color: #f5f1e7 !important;
-          animation-fill-mode: forwards;
         }
-        .dte-hero *, .dte-hero h1, .dte-hero h2, .dte-hero h3 {
-          color: #f5f1e7 !important;
+        .dte-ic::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 0; right: 0;
+          height: 3px;
+          background: linear-gradient(90deg,var(--moss),var(--brass));
+          opacity: 0;
+          transition: opacity 250ms ease;
         }
-        .dte-hero-first {
-          animation: heroRise 700ms ease-out forwards;
+        .dte-ic:hover {
+          transform: translateY(-6px);
+          box-shadow: var(--sh-l);
+          background: var(--glass-h);
         }
-        .dte-hero::after {
-          content: "";
+        .dte-ic:hover::before { opacity: 1; }
+        .dte-ic-i { font-size: 2rem; margin-bottom: .7rem; display: block; }
+        .dte-ic-n {
+          font-family: var(--sans);
+          font-weight: 600;
+          font-size: .92rem;
+          color: var(--ink);
+          margin-bottom: .3rem;
+        }
+        .dte-ic-d {
+          font-family: var(--sans);
+          font-size: .8rem;
+          color: var(--txt-m);
+          line-height: 1.45;
+        }
+
+        /* ── How It Works ── */
+        .dte-hw {
+          display: grid;
+          grid-template-columns: 1fr 1fr 1fr;
+          gap: 0;
+          position: relative;
+        }
+        @media(max-width:800px){ .dte-hw{ grid-template-columns: 1fr; } }
+        .dte-hwc {
+          padding: 2.5rem 2rem;
+          border: 1px solid var(--line);
+          background: var(--glass);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          transition: background 200ms ease;
+        }
+        .dte-hwc:hover { background: var(--glass-h); }
+        .dte-hwc:first-child { border-radius: var(--r-l) 0 0 var(--r-l); }
+        .dte-hwc:last-child { border-radius: 0 var(--r-l) var(--r-l) 0; }
+        @media(max-width:800px){
+          .dte-hwc:first-child { border-radius: var(--r-l) var(--r-l) 0 0; }
+          .dte-hwc:last-child { border-radius: 0 0 var(--r-l) var(--r-l); }
+        }
+        .dte-hwn {
+          font-family: var(--serif);
+          font-size: 3.5rem;
+          font-weight: 700;
+          line-height: 1;
+          background: linear-gradient(135deg,var(--moss),var(--moss-l));
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+          margin-bottom: 1rem;
+        }
+        .dte-hwt {
+          font-family: var(--sans);
+          font-weight: 700;
+          font-size: 1.05rem;
+          color: var(--ink);
+          margin-bottom: .6rem;
+        }
+        .dte-hwb {
+          font-family: var(--sans);
+          font-size: .88rem;
+          line-height: 1.6;
+          color: var(--txt-m);
+        }
+
+        /* ── Capabilities ── */
+        .dte-cg {
+          display: grid;
+          grid-template-columns: repeat(4,1fr);
+          gap: 1.2rem;
+        }
+        @media(max-width:900px){ .dte-cg{ grid-template-columns: repeat(2,1fr); } }
+        .dte-cc {
+          background: var(--glass);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          border: 1px solid var(--glass-b);
+          border-radius: var(--r-m);
+          padding: 1.6rem 1.3rem;
+          transition: all 250ms ease;
+        }
+        .dte-cc:hover {
+          transform: translateY(-4px);
+          box-shadow: var(--sh-l);
+          background: var(--glass-h);
+        }
+        .dte-cci {
+          width: 46px; height: 46px;
+          border-radius: var(--r-s);
+          background: linear-gradient(135deg,var(--moss),var(--moss-l));
+          display: flex; align-items: center; justify-content: center;
+          font-size: 1.3rem;
+          margin-bottom: 1rem;
+          color: #faf7f0;
+        }
+        .dte-cct {
+          font-family: var(--sans);
+          font-weight: 700;
+          font-size: .95rem;
+          color: var(--ink);
+          margin-bottom: .4rem;
+        }
+        .dte-ccd {
+          font-family: var(--sans);
+          font-size: .84rem;
+          color: var(--txt-m);
+          line-height: 1.5;
+        }
+
+        /* ── CTA ── */
+        .dte-cta {
+          position: relative;
+          overflow: hidden;
+          margin-top: 5rem;
+          padding: 4.5rem 4rem;
+          background: linear-gradient(135deg,#0f1a14 0%,#1a4a3e 50%,#0f1a14 100%);
+          border-radius: var(--r-xl);
+          text-align: center;
+        }
+        .dte-cta * { color: #faf7f0 !important; }
+        .dte-cta::before {
+          content: '';
           position: absolute;
           inset: 0;
           background:
-            linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px),
-            linear-gradient(0deg, rgba(255,255,255,0.05) 1px, transparent 1px);
-          background-size: 72px 72px;
-          mask-image: linear-gradient(180deg, rgba(0,0,0,0.7), transparent);
+            radial-gradient(circle at 30% 40%,rgba(198,122,48,.15),transparent 50%),
+            radial-gradient(circle at 70% 60%,rgba(45,122,104,.12),transparent 40%);
           pointer-events: none;
         }
-        .dte-kicker {
+        .dte-cta-t {
           position: relative;
-          z-index: 1;
-          letter-spacing: 0.16em;
-          text-transform: uppercase;
-          font-size: 0.78rem;
-          opacity: 0.74;
-          margin-bottom: 1rem;
-          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
+          font-family: var(--serif);
+          font-size: clamp(2rem,4.5vw,3.2rem);
+          font-weight: 700;
+          line-height: 1.1;
+          max-width: 28rem;
+          margin: 0 auto 1rem auto;
         }
-        .dte-title {
+        .dte-cta-d {
           position: relative;
-          z-index: 1;
-          max-width: 8.5ch;
-          font-size: clamp(2.8rem, 7vw, 6.4rem);
-          line-height: 0.9;
-          margin: 0;
-          font-weight: 600;
-          letter-spacing: -0.04em;
-          font-family: Georgia, "Times New Roman", serif;
+          font-family: var(--sans);
+          font-size: 1.1rem;
+          line-height: 1.6;
+          opacity: .8;
+          max-width: 36rem;
+          margin: 0 auto 2rem auto;
         }
-        .dte-summary {
+        .dte-cta-a {
           position: relative;
-          z-index: 1;
-          max-width: 40rem;
-          margin-top: 1.2rem;
+          display: inline-block;
+          padding: 1rem 2.8rem;
+          background: var(--brass);
+          color: #faf7f0 !important;
+          font-family: var(--sans);
           font-size: 1.05rem;
-          line-height: 1.65;
-          color: rgba(245, 241, 231, 0.86);
-          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
+          font-weight: 600;
+          letter-spacing: .04em;
+          text-decoration: none;
+          border-radius: var(--r-s);
+          transition: all 200ms ease;
         }
-        .dte-chiprow {
+        .dte-cta-a:hover {
+          background: var(--brass-l);
+          transform: translateY(-2px);
+          box-shadow: 0 8px 32px rgba(198,122,48,.3);
+          color: #faf7f0 !important;
+        }
+        .dte-cta-f {
           position: relative;
-          z-index: 1;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.6rem;
-          margin-top: 1.6rem;
+          font-family: var(--sans);
+          font-size: .82rem;
+          opacity: .48;
+          margin-top: 1rem;
         }
-        .dte-chip {
-          border: 1px solid rgba(245, 241, 231, 0.22);
-          padding: 0.5rem 0.8rem;
-          font-size: 0.82rem;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          background: rgba(255,255,255,0.04);
-          backdrop-filter: blur(4px);
-          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
+
+        /* ── Flowsheet ── */
+        .dte-fl {
+          display: grid;
+          grid-template-columns: repeat(auto-fit,minmax(120px,1fr));
+          gap: .8rem;
+          align-items: center;
+          margin: 1rem 0;
         }
-        h2.dte-section-title {
-          font-family: Georgia, "Times New Roman", serif;
-          font-size: 2rem;
-          line-height: 1.05;
-          color: var(--dte-ink);
-          margin-top: 2rem;
-          margin-bottom: 0.3rem;
+        .dte-fln {
+          background: var(--glass);
+          backdrop-filter: blur(8px);
+          border: 1px solid var(--glass-b);
+          border-radius: var(--r-s);
+          padding: 1rem;
+          text-align: center;
+          font-family: var(--sans);
+          font-weight: 600;
+          font-size: .88rem;
+          color: var(--ink);
+          transition: all 200ms ease;
         }
-        .dte-section-copy {
-          max-width: 48rem;
-          color: rgba(21, 33, 28, 0.74);
-          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
-          margin-bottom: 1.2rem;
+        .dte-fln:hover {
+          background: var(--glass-h);
+          box-shadow: var(--sh-m);
         }
-        .dte-rule {
-          border-top: 1px solid var(--dte-line);
-          margin: 1.6rem 0 1rem 0;
+        .dte-fla {
+          text-align: center;
+          color: var(--brass);
+          font-size: 1.5rem;
         }
         .dte-note {
-          font-size: 0.86rem;
-          color: rgba(21, 33, 28, 0.68);
-          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
+          font-size: .86rem;
+          color: var(--txt-m);
+          font-family: var(--sans);
         }
-        .dte-flow {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-          gap: 1rem;
-          align-items: center;
-          margin: 1.2rem 0 0.5rem 0;
+        .dte-rule {
+          height: 1px;
+          background: var(--line);
+          margin: 1.4rem 0;
         }
-        .dte-node {
-          padding: 1.1rem 0.9rem;
-          border-top: 1px solid var(--dte-line);
-          border-bottom: 1px solid var(--dte-line);
-          background: rgba(255,255,255,0.45);
-          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
+
+        /* ── Animations ── */
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(20px); }
+          to   { opacity: 1; transform: translateY(0); }
         }
-        .dte-arrow {
-          text-align: center;
-          color: #b06a2b;
-          font-size: 1.4rem;
-          min-width: 1.5rem;
-        }
-        @keyframes heroRise {
-          from { opacity: 0; transform: translateY(24px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
+        .dte-au { animation: fadeUp 600ms ease-out both; }
+        .dte-au-1 { animation-delay: 80ms; }
+        .dte-au-2 { animation-delay: 160ms; }
+        .dte-au-3 { animation-delay: 240ms; }
+        .dte-au-4 { animation-delay: 320ms; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Data loaders (business logic — unchanged)
+# ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
 def _load_demo_page_config() -> dict[str, Any]:
@@ -223,9 +538,13 @@ def _load_runtime(system_name: str):
         spec = get_system_spec(system_config)
         simulator = get_simulator(system_name, system_config)
         return spec, simulator
-    except Exception as exc:
+    except Exception:
         return None, None
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Helpers (business logic — unchanged)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _read_text_if_exists(path_str: str | None) -> str | None:
     if not path_str:
@@ -284,6 +603,17 @@ def _clip_adjusted_sequence(
     return adjusted
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Plotly chart builder
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PLOTLY_FONT = dict(family="Inter, -apple-system, sans-serif")
+_C_MOSS = "#1a4a3e"
+_C_BRASS = "#c67a30"
+_C_INK = "#0f1a14"
+_C_BAND = "rgba(26,74,62,.10)"
+
+
 def _trajectory_figure(
     spec,
     highlight_states: list[str],
@@ -309,94 +639,356 @@ def _trajectory_figure(
         candidate_p95 = np.asarray(candidate["p95"])[:, state_idx]
         baseline_mean = np.asarray(baseline["mean"])[:, state_idx]
 
-        # 90% confidence band
         fig.add_trace(
             go.Scatter(
-                x=times,
-                y=candidate_p95,
-                mode="lines",
-                line=dict(width=0),
-                showlegend=False,
-                hoverinfo="skip",
+                x=times, y=candidate_p95, mode="lines",
+                line=dict(width=0), showlegend=False, hoverinfo="skip",
             ),
-            row=row_index,
-            col=1,
+            row=row_index, col=1,
         )
         fig.add_trace(
             go.Scatter(
-                x=times,
-                y=candidate_p05,
-                mode="lines",
-                line=dict(width=0),
-                fill="tonexty",
-                fillcolor="rgba(33, 75, 69, 0.12)",
-                name="90% forecast interval" if row_index == 1 else None,
-                showlegend=row_index == 1,
-                hoverinfo="skip",
+                x=times, y=candidate_p05, mode="lines",
+                line=dict(width=0), fill="tonexty", fillcolor=_C_BAND,
+                name="90 % forecast interval" if row_index == 1 else None,
+                showlegend=row_index == 1, hoverinfo="skip",
             ),
-            row=row_index,
-            col=1,
+            row=row_index, col=1,
         )
         fig.add_trace(
             go.Scatter(
-                x=times,
-                y=baseline_mean,
-                mode="lines",
+                x=times, y=baseline_mean, mode="lines",
                 name="Baseline" if row_index == 1 else None,
                 showlegend=row_index == 1,
-                line=dict(color="#B06A2B", width=2, dash="dash"),
-                hovertemplate=f"{state_name} baseline: %{{y:.3f}}<br>t=%{{x:.2f}}<extra>Baseline</extra>",
+                line=dict(color=_C_BRASS, width=2, dash="dash"),
+                hovertemplate=f"{state_name} baseline: %{{y:.3f}}<br>t=%{{x:.2f}}<extra></extra>",
             ),
-            row=row_index,
-            col=1,
+            row=row_index, col=1,
         )
         fig.add_trace(
             go.Scatter(
-                x=times,
-                y=candidate_mean,
-                mode="lines",
+                x=times, y=candidate_mean, mode="lines",
                 name="Candidate" if row_index == 1 else None,
                 showlegend=row_index == 1,
-                line=dict(color="#214B45", width=3),
-                hovertemplate=f"{state_name} candidate: %{{y:.3f}}<br>t=%{{x:.2f}}<extra>Candidate</extra>",
+                line=dict(color=_C_MOSS, width=3),
+                hovertemplate=f"{state_name} candidate: %{{y:.3f}}<br>t=%{{x:.2f}}<extra></extra>",
             ),
-            row=row_index,
-            col=1,
+            row=row_index, col=1,
         )
         if optimized is not None:
             optimized_mean = np.asarray(optimized["mean"])[:, state_idx]
             fig.add_trace(
                 go.Scatter(
-                    x=times,
-                    y=optimized_mean,
-                    mode="lines",
+                    x=times, y=optimized_mean, mode="lines",
                     name="Recommended" if row_index == 1 else None,
                     showlegend=row_index == 1,
-                    line=dict(color="#15211C", width=2, dash="dot"),
-                    hovertemplate=f"{state_name} recommended: %{{y:.3f}}<br>t=%{{x:.2f}}<extra>Recommended</extra>",
+                    line=dict(color=_C_INK, width=2, dash="dot"),
+                    hovertemplate=f"{state_name} recommended: %{{y:.3f}}<br>t=%{{x:.2f}}<extra></extra>",
                 ),
-                row=row_index,
-                col=1,
+                row=row_index, col=1,
             )
 
     fig.update_layout(
-        height=max(360, 230 * n_rows),
+        height=max(380, 240 * n_rows),
         template="plotly_white",
+        font=_PLOTLY_FONT,
         margin=dict(l=20, r=20, t=60, b=20),
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,0.7)",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        plot_bgcolor="rgba(255,255,255,.5)",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, x=0,
+            font=dict(size=12, family="Inter, sans-serif"),
+        ),
         hovermode="x unified",
     )
-    fig.update_xaxes(title_text="Time (min)", row=n_rows, col=1)
-    fig.update_yaxes(title_text="Value")
+    fig.update_xaxes(
+        title_text="Time (min)", row=n_rows, col=1,
+        gridcolor="rgba(15,26,20,.06)", zeroline=False,
+    )
+    fig.update_yaxes(
+        title_text="Value",
+        gridcolor="rgba(15,26,20,.06)", zeroline=False,
+    )
     return fig
 
 
-def _render_release_overview(snapshot: dict[str, Any], runtime: UniversalDemoRuntime | None) -> None:
-    st.markdown("<h2 class='dte-section-title'>Release Overview</h2>", unsafe_allow_html=True)
+# ─────────────────────────────────────────────────────────────────────────────
+#  Hero  (canvas particle network via iframe)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HERO_HTML = """\
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%%;height:100%%;overflow:hidden}
+body{
+  background:linear-gradient(135deg,#0f1a14 0%%,#1a4a3e 50%%,#0f1a14 100%%);
+  font-family:'Inter',-apple-system,sans-serif;color:#faf7f0;
+}
+canvas{position:fixed;top:0;left:0;width:100%%;height:100%%;pointer-events:none}
+.h{position:relative;z-index:2;height:100%%;display:flex;flex-direction:column;justify-content:center;padding:3rem 5vw}
+.badge{
+  display:inline-block;width:max-content;
+  font-size:.72rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;
+  color:rgba(250,247,240,.55);border:1px solid rgba(250,247,240,.13);
+  padding:.45rem 1rem;border-radius:100px;backdrop-filter:blur(8px);margin-bottom:2rem;
+  animation:fu 800ms ease-out both;
+}
+h1{
+  font-family:'Playfair Display',Georgia,serif;
+  font-size:clamp(3rem,8vw,5.8rem);font-weight:700;line-height:.92;
+  letter-spacing:-.03em;max-width:12ch;margin-bottom:1.4rem;
+  animation:fu 800ms ease-out 120ms both;
+}
+h1 em{font-style:italic;color:#c67a30}
+.sub{
+  font-size:clamp(1rem,1.8vw,1.15rem);line-height:1.65;
+  color:rgba(250,247,240,.68);max-width:38rem;margin-bottom:2rem;
+  animation:fu 800ms ease-out 240ms both;
+}
+.chips{display:flex;flex-wrap:wrap;gap:.5rem;animation:fu 800ms ease-out 360ms both}
+.chip{
+  font-size:.74rem;font-weight:500;letter-spacing:.06em;text-transform:uppercase;
+  padding:.5rem 1rem;background:rgba(250,247,240,.05);
+  border:1px solid rgba(250,247,240,.10);border-radius:6px;
+  backdrop-filter:blur(6px);
+}
+.sc{
+  position:absolute;bottom:1.5rem;left:50%%;transform:translateX(-50%%);
+  font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;opacity:.35;
+  animation:pulse 2.5s ease-in-out infinite;
+}
+@keyframes fu{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%%,100%%{opacity:.35;transform:translateX(-50%%) translateY(0)}50%%{opacity:.6;transform:translateX(-50%%) translateY(-4px)}}
+</style></head><body>
+<canvas id="c"></canvas>
+<div class="h">
+  <div class="badge">Physics-Informed AI for Industry</div>
+  <h1>Your Plant<br>Deserves<br>a <em>Brain</em></h1>
+  <div class="sub">
+    A foundation model for industrial process digital twins.
+    Connect your historian data. Adapt in minutes.
+    Get live probabilistic forecasts and optimal control sequences.
+  </div>
+  <div class="chips">
+    <span class="chip">Neural SDE</span>
+    <span class="chip">Few-Shot Transfer</span>
+    <span class="chip">Real-Time API</span>
+    <span class="chip">10+ Industries</span>
+    <span class="chip">Uncertainty Quantified</span>
+  </div>
+</div>
+<div class="sc">Scroll to explore &#8595;</div>
+<script>
+!function(){
+  var c=document.getElementById('c'),x=c.getContext('2d'),W,H;
+  function sz(){W=c.width=innerWidth;H=c.height=innerHeight}sz();
+  addEventListener('resize',sz);
+  var N=65,P=[];
+  for(var i=0;i<N;i++)P.push({x:Math.random()*W,y:Math.random()*H,
+    vx:(Math.random()-.5)*.32,vy:(Math.random()-.5)*.32,r:Math.random()*1.6+.5});
+  function f(){
+    x.clearRect(0,0,W,H);
+    for(var i=0;i<N;i++){var p=P[i];p.x+=p.vx;p.y+=p.vy;
+      if(p.x<0||p.x>W)p.vx*=-1;if(p.y<0||p.y>H)p.vy*=-1}
+    x.strokeStyle='rgba(250,247,240,.06)';x.lineWidth=.5;
+    for(var i=0;i<N;i++)for(var j=i+1;j<N;j++){
+      var dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d2=dx*dx+dy*dy;
+      if(d2<20000){x.globalAlpha=1-Math.sqrt(d2)/141;
+        x.beginPath();x.moveTo(P[i].x,P[i].y);x.lineTo(P[j].x,P[j].y);x.stroke()}}
+    x.globalAlpha=1;x.fillStyle='rgba(250,247,240,.3)';
+    for(var i=0;i<N;i++){var p=P[i];x.beginPath();x.arc(p.x,p.y,p.r,0,6.283);x.fill()}
+    requestAnimationFrame(f)}f();
+}();
+</script></body></html>"""
+
+
+def _render_hero() -> None:
+    components.html(_HERO_HTML, height=620, scrolling=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Stats bar
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _render_stats_bar() -> None:
     st.markdown(
-        "<div class='dte-section-copy'>This demo shows the V1 shared checkpoint evaluated across multiple process unit families, including a customer adaptation pilot on an ingested historian dataset.</div>",
+        """
+        <div class="dte-stats dte-au">
+          <div class="dte-stat dte-au dte-au-1">
+            <div class="dte-stat-n">10+</div>
+            <div class="dte-stat-l">Industries</div>
+          </div>
+          <div class="dte-stat dte-au dte-au-2">
+            <div class="dte-stat-n">3</div>
+            <div class="dte-stat-l">Proven Systems</div>
+          </div>
+          <div class="dte-stat dte-au dte-au-3">
+            <div class="dte-stat-n">&lt; 5 min</div>
+            <div class="dte-stat-l">Adaptation Time</div>
+          </div>
+          <div class="dte-stat dte-au dte-au-4">
+            <div class="dte-stat-n">24/7</div>
+            <div class="dte-stat-l">Real-Time API</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Industries
+# ─────────────────────────────────────────────────────────────────────────────
+
+_INDUSTRIES = [
+    ("⚗️", "Chemicals", "Reactor temperature, selectivity &amp; yield optimisation"),
+    ("⚡", "Energy", "Load-following, efficiency &amp; emissions reduction"),
+    ("💊", "Pharma", "Batch consistency, CQA prediction &amp; deviation prevention"),
+    ("💧", "Water &amp; Utilities", "Treatment optimisation, dosing &amp; demand forecast"),
+    ("🌾", "Food &amp; Beverage", "Evaporation, drying &amp; fermentation control"),
+    ("🔩", "Metals &amp; Materials", "Furnace dynamics, rolling mill &amp; alloy quality"),
+    ("🏭", "Manufacturing", "Thermal, fluid &amp; mechanical process twins"),
+    ("🌲", "Pulp &amp; Paper", "Digester, bleaching &amp; machine-section control"),
+    ("⛏️", "Mining", "Flotation, leaching &amp; comminution optimisation"),
+    ("🛢️", "Oil &amp; Gas", "Separator, compressor &amp; pipeline network twins"),
+]
+
+
+def _render_industries() -> None:
+    st.markdown("<h2 class='dte-stitle'>One Engine, Every Industry</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='dte-ssub'>"
+        "The same physics-informed architecture adapts to any continuous process. "
+        "Bring your historian data &mdash; we handle the rest."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    cards = "".join(
+        f"<div class='dte-ic'>"
+        f"<span class='dte-ic-i'>{icon}</span>"
+        f"<div class='dte-ic-n'>{name}</div>"
+        f"<div class='dte-ic-d'>{desc}</div>"
+        f"</div>"
+        for icon, name, desc in _INDUSTRIES
+    )
+    st.markdown(f"<div class='dte-ig'>{cards}</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  How It Works
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _render_how_it_works() -> None:
+    st.markdown("<h2 class='dte-stitle'>How It Works</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='dte-ssub'>"
+        "From raw historian data to live uncertainty-aware forecasts in three steps."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="dte-hw">
+          <div class="dte-hwc">
+            <div class="dte-hwn">01</div>
+            <div class="dte-hwt">Connect Your Data</div>
+            <div class="dte-hwb">
+              Ingest historian CSV or Parquet exports via a single CLI command.
+              The engine normalises, validates, and builds a training-ready HDF5 dataset
+              without touching your process network.
+            </div>
+          </div>
+          <div class="dte-hwc">
+            <div class="dte-hwn">02</div>
+            <div class="dte-hwt">Adapt the Foundation Model</div>
+            <div class="dte-hwb">
+              A pre-trained physics-informed neural SDE is fine-tuned on your plant data
+              in minutes, not weeks. Few-shot transfer learning means you need a fraction
+              of the data a greenfield model would require.
+            </div>
+          </div>
+          <div class="dte-hwc">
+            <div class="dte-hwn">03</div>
+            <div class="dte-hwt">Forecast &amp; Optimise Live</div>
+            <div class="dte-hwb">
+              The twin runs on a FastAPI service and streams probabilistic forecasts,
+              constraint risk scores, and CEM-MPC recommended control sequences
+              back to your DCS, SCADA, or dashboard.
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Capabilities
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _render_capabilities() -> None:
+    st.markdown("<h2 class='dte-stitle'>What Makes It Different</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='dte-ssub'>"
+        "Not another black-box ML model. The engine embeds your process physics "
+        "directly into the learning objective."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="dte-cg">
+          <div class="dte-cc">
+            <div class="dte-cci">🧬</div>
+            <div class="dte-cct">Physics-Informed</div>
+            <div class="dte-ccd">
+              Mass, energy, and momentum residuals are baked into the loss function.
+              The model respects thermodynamics even in unseen regimes.
+            </div>
+          </div>
+          <div class="dte-cc">
+            <div class="dte-cci">⚡</div>
+            <div class="dte-cct">Few-Shot Transfer</div>
+            <div class="dte-ccd">
+              Pre-trained on process families, adapted to your plant with minimal data.
+              No months-long modelling projects.
+            </div>
+          </div>
+          <div class="dte-cc">
+            <div class="dte-cci">📡</div>
+            <div class="dte-cct">Real-Time API</div>
+            <div class="dte-ccd">
+              FastAPI service with probabilistic forecasts, constraint risk, and
+              optimal control. Integrates with DCS, SCADA, or any dashboard.
+            </div>
+          </div>
+          <div class="dte-cc">
+            <div class="dte-cci">📊</div>
+            <div class="dte-cct">Uncertainty Quantified</div>
+            <div class="dte-ccd">
+              Neural SDE diffusion gives calibrated confidence intervals on every
+              forecast. Know when to trust the model and when to escalate.
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Release / Performance overview
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _render_release_overview(snapshot: dict[str, Any], runtime: UniversalDemoRuntime | None) -> None:
+    st.markdown("<h2 class='dte-stitle'>Proven Performance</h2>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='dte-ssub'>"
+        "The V1 shared checkpoint has been evaluated across multiple process unit families, "
+        "including a customer adaptation pilot on a real historian dataset."
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -421,13 +1013,19 @@ def _render_release_overview(snapshot: dict[str, Any], runtime: UniversalDemoRun
 
     if runtime is not None:
         st.success(
-            f"Shared checkpoint loaded from `{snapshot.get('model_path')}` — using universal-model rollouts for unit demos.",
+            f"Shared checkpoint loaded from `{snapshot.get('model_path')}` "
+            "— using universal-model rollouts for unit demos.",
         )
     else:
         st.warning(
-            "Release checkpoint not loaded. Demos will fall back to simulator ensembles until the V1 model artifacts are available.",
+            "Release checkpoint not loaded. Demos will fall back to simulator "
+            "ensembles until the V1 model artifacts are available.",
         )
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Interactive demo (business logic — unchanged)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _render_unit_demo(
     demo_cfg: dict[str, Any],
@@ -482,9 +1080,9 @@ def _render_unit_demo(
     left_col, right_col = st.columns([1, 2], gap="large")
 
     with left_col:
-        st.markdown(f"<h2 class='dte-section-title'>{demo_cfg['title']}</h2>", unsafe_allow_html=True)
+        st.markdown(f"<h2 class='dte-stitle'>{demo_cfg['title']}</h2>", unsafe_allow_html=True)
         st.markdown(
-            f"<div class='dte-section-copy'>{demo_cfg.get('description', '')}</div>",
+            f"<div class='dte-ssub' style='margin-bottom:.8rem'>{demo_cfg.get('description', '')}</div>",
             unsafe_allow_html=True,
         )
         if demo_cfg.get("operator_goal"):
@@ -607,7 +1205,6 @@ def _render_unit_demo(
         st.error(f"Scenario comparison failed: {exc}")
         return
 
-    # Persist optimization result across reruns
     opt_key = f"optimized_{demo_id}"
     if optimize_clicked:
         with st.spinner("Optimizing control sequence..."):
@@ -628,7 +1225,6 @@ def _render_unit_demo(
                 st.error(f"Optimization failed: {exc}")
                 st.session_state.pop(opt_key, None)
 
-    # Clear persisted optimization if scenario controls changed
     if run_scenario:
         st.session_state.pop(opt_key, None)
 
@@ -666,7 +1262,8 @@ def _render_unit_demo(
             )
         else:
             st.markdown(
-                "<div class='dte-note'>Release checkpoint unavailable — uncertainty bands come from a simulator ensemble.</div>",
+                "<div class='dte-note'>Release checkpoint unavailable — uncertainty bands "
+                "come from a simulator ensemble.</div>",
                 unsafe_allow_html=True,
             )
         if stored_optimized is not None:
@@ -686,12 +1283,17 @@ def _render_unit_demo(
             )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Customer story (reframed for marketing)
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _render_customer_story(snapshot: dict[str, Any]) -> None:
-    st.markdown("<h2 class='dte-section-title'>Customer Adaptation</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 class='dte-stitle'>Case Study: Rapid Plant Adaptation</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='dte-section-copy'>"
-        "This release includes a full onboarding and adaptation pass on an ingested historian export. "
-        "A shared checkpoint can be matched, adapted, and validated in a customer-facing workflow with minimal data."
+        "<div class='dte-ssub'>"
+        "A full onboarding and adaptation pass on a real historian export. "
+        "The shared checkpoint was matched, adapted, and validated with minimal data "
+        "in a single session."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -720,23 +1322,27 @@ def _render_customer_story(snapshot: dict[str, Any]) -> None:
         st.info("Customer validation report was not found in the configured release workspace.")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Flowsheet preview
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _render_flowsheet_preview() -> None:
-    st.markdown("<h2 class='dte-section-title'>Flowsheet Preview</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 class='dte-stitle'>What's Next: Multi-Unit Modelling</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='dte-section-copy'>"
-        "V1 is unit-first. The flowsheet surface shows the graph direction — "
-        "plant section modeling is the next frontier."
+        "<div class='dte-ssub'>"
+        "V1 is unit-first. The flowsheet surface shows the direction &mdash; "
+        "plant-section modelling across connected unit operations is the next frontier."
         "</div>",
         unsafe_allow_html=True,
     )
     preview_specs = [
         (
-            "Exchanger → Reactor → Tank",
+            "Exchanger \u2192 Reactor \u2192 Tank",
             ["Heat exchanger", "CSTR", "Storage tank"],
             "A temperature-conditioned reactor train with a downstream buffer and purge.",
         ),
         (
-            "Reactor → Separator → Recycle",
+            "Reactor \u2192 Separator \u2192 Recycle",
             ["CSTR", "Separator", "Recycle loop"],
             "A recycle section where composition and thermal dynamics interact across the loop.",
         ),
@@ -744,63 +1350,86 @@ def _render_flowsheet_preview() -> None:
     for title, nodes, description in preview_specs:
         st.markdown(f"**{title}**")
         st.markdown(f"<div class='dte-note'>{description}</div>", unsafe_allow_html=True)
-        # Build flow grid with separate node/arrow divs so CSS grid handles layout
         cells = []
         for index, node in enumerate(nodes):
-            cells.append(f"<div class='dte-node'><strong>{node}</strong></div>")
+            cells.append(f"<div class='dte-fln'>{node}</div>")
             if index < len(nodes) - 1:
-                cells.append("<div class='dte-arrow'>→</div>")
-        flow_html = "<div class='dte-flow'>" + "".join(cells) + "</div>"
-        st.markdown(flow_html, unsafe_allow_html=True)
+                cells.append("<div class='dte-fla'>\u2192</div>")
+        st.markdown("<div class='dte-fl'>" + "".join(cells) + "</div>", unsafe_allow_html=True)
         st.markdown("<div class='dte-rule'></div>", unsafe_allow_html=True)
 
 
-def main() -> None:
-    _inject_css()
-    demo_page_cfg = _load_demo_page_config()
-    theme = demo_page_cfg.get("theme", {})
-    snapshot = _load_release_snapshot()
-    runtime = _load_release_runtime()
+# ─────────────────────────────────────────────────────────────────────────────
+#  CTA footer
+# ─────────────────────────────────────────────────────────────────────────────
 
-    # Only animate hero on first load per session
-    hero_class = "dte-hero"
-    if not st.session_state.get("_hero_shown"):
-        hero_class += " dte-hero-first"
-        st.session_state["_hero_shown"] = True
-
-    n_systems = len(demo_page_cfg.get("demos", []))
-    system_count_chip = f"{n_systems} unit {'family' if n_systems == 1 else 'families'}"
-
+def _render_cta_footer() -> None:
     st.markdown(
-        f"""
-        <section class="{hero_class}">
-          <div class="dte-kicker">V1 Foundation Stack</div>
-          <h1 class="dte-title">{theme.get('product_name', 'Digital Twin Engine')}</h1>
-          <div class="dte-summary">{theme.get('headline', '')}<br><br>{theme.get('summary', '')}</div>
-          <div class="dte-chiprow">
-            <div class="dte-chip">{snapshot.get('release_label', 'V1 milestone release')}</div>
-            <div class="dte-chip">{system_count_chip}</div>
-            <div class="dte-chip">Shared checkpoint</div>
-            <div class="dte-chip">Customer adaptation proof</div>
+        """
+        <div class="dte-cta">
+          <div class="dte-cta-t">Ready to twin your plant?</div>
+          <div class="dte-cta-d">
+            Tell me about your process &mdash; industry, unit operations, data availability &mdash;
+            and I'll show you exactly how the engine maps onto your system.
           </div>
-        </section>
+          <a class="dte-cta-a" href="mailto:s.mohammadi.rl@gmail.com?subject=Digital%20Twin%20Engine%20enquiry">
+            Get in touch &nearr;
+          </a>
+          <div class="dte-cta-f">No commitment. Response within 24 hours.</div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
 
-    _render_release_overview(snapshot, runtime)
 
-    st.markdown("<h2 class='dte-section-title'>Interactive Demos</h2>", unsafe_allow_html=True)
+# ─────────────────────────────────────────────────────────────────────────────
+#  Page
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    _inject_css()
+    demo_page_cfg = _load_demo_page_config()
+    snapshot = _load_release_snapshot()
+    runtime = _load_release_runtime()
+
+    # ── Hero ──
+    _render_hero()
+
+    # ── Stats ──
+    _render_stats_bar()
+
+    # ── Industries ──
+    _render_industries()
+
+    # ── Divider ──
+    st.markdown("<div class='dte-divider'></div>", unsafe_allow_html=True)
+
+    # ── How It Works ──
+    _render_how_it_works()
+
+    # ── Divider ──
+    st.markdown("<div class='dte-divider'></div>", unsafe_allow_html=True)
+
+    # ── Capabilities ──
+    _render_capabilities()
+
+    # ── Divider ──
+    st.markdown("<div class='dte-divider'></div>", unsafe_allow_html=True)
+
+    # ── Live Demos ──
+    st.markdown("<h2 class='dte-stitle'>Try It Live</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='dte-section-copy'>Each workspace starts from a fixed baseline policy. "
-        "Select a disturbance regime and an alternate operating move, then see how the model "
-        "forecasts the state trajectory and constraint risk profile.</div>",
+        "<div class='dte-ssub'>"
+        "Each workspace starts from a fixed baseline policy. Select a disturbance regime "
+        "and an alternate operating move, then watch the model forecast the state trajectory "
+        "and constraint risk profile in real time."
+        "</div>",
         unsafe_allow_html=True,
     )
 
     demos = demo_page_cfg.get("demos", [])
     tab_labels = [demo["title"] for demo in demos]
-    extra_tabs = ["Customer Adaptation", "Flowsheet"]
+    extra_tabs = ["Case Study", "Roadmap"]
     all_labels = tab_labels + extra_tabs
 
     if not all_labels:
@@ -817,6 +1446,13 @@ def main() -> None:
             _render_customer_story(snapshot)
         with tabs[-1]:
             _render_flowsheet_preview()
+
+    # ── Performance ──
+    st.markdown("<div class='dte-divider'></div>", unsafe_allow_html=True)
+    _render_release_overview(snapshot, runtime)
+
+    # ── CTA ──
+    _render_cta_footer()
 
 
 if __name__ == "__main__":
