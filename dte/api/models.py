@@ -85,13 +85,13 @@ class EnsembleRequest(BaseModel):
     Runs N stochastic SDE samples to estimate prediction uncertainty.
     """
 
-    system: str = Field("cstr")
-    initial_state: List[float]
-    controls: List[List[float]]
-    disturbances: Optional[List[List[float]]] = None
-    params: Optional[List[float]] = None
-    dt: float = Field(0.1, gt=0)
-    n_samples: int = Field(50, ge=1, le=1000)
+    system: str = Field("cstr", description="Registered system name (e.g. 'cstr', 'heat_exchanger', 'two_tank').")
+    initial_state: List[float] = Field(..., description="Initial physical state vector (length = state_dim).")
+    controls: List[List[float]] = Field(..., description="Control sequence, shape [T, control_dim].")
+    disturbances: Optional[List[List[float]]] = Field(None, description="Disturbance sequence, shape [T, disturbance_dim]. Zeros if omitted.")
+    params: Optional[List[float]] = Field(None, description="Parameter vector (length = param_dim). Ones if omitted.")
+    dt: float = Field(0.1, gt=0, description="Sampling interval in seconds.")
+    n_samples: int = Field(50, ge=1, le=1000, description="Number of stochastic SDE samples for uncertainty estimation.")
 
 
 class EnsembleResponse(BaseModel):
@@ -280,9 +280,11 @@ class DemoCompareScenariosResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Response body for /health."""
 
-    status: str = "ok"
-    loaded_systems: List[str] = Field(default_factory=list)
-    version: str = "0.1.0"
+    status: str = Field("ok", description="'ok' when models are ready, 'degraded' when no models loaded.")
+    loaded_systems: List[str] = Field(default_factory=list, description="Names of registered process systems.")
+    version: str = Field("0.1.0", description="API version.")
+    uptime_seconds: Optional[float] = Field(None, description="Seconds since service startup.")
+    models_ready: bool = Field(True, description="True when at least one model or universal runtime is loaded.")
 
 
 # ---------------------------------------------------------------------------

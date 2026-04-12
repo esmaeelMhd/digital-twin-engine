@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-import json
 import os
 import re
 import shlex
 import subprocess
 from collections import deque
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
+import json
 
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 import yaml
+
+from app._theme import inject_theme
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,17 @@ LEGACY_LOG_FILE = PROJECT_ROOT / "agent.log"
 CAMPAIGN_RUNNER_DIR = PROJECT_ROOT / "outputs" / "campaign_runner"
 IDEA_MARKER_RE = re.compile(r"\[idea:([a-zA-Z0-9_.-]+)\]")
 
+_STATUS_COLOR = {
+    "keep": "#16a34a",
+    "crash": "#dc2626",
+    "discard": "#6b7280",
+    "timeout": "#d97706",
+}
+
+
+# ---------------------------------------------------------------------------
+# Data helpers (all cached)
+# ---------------------------------------------------------------------------
 
 def _list_config_options() -> list[Path]:
     config_dir = PROJECT_ROOT / "configs"
@@ -70,6 +83,7 @@ def _resolve_config_path() -> Path:
     return DEFAULT_AUTORESEARCH_CONFIG
 
 
+@st.cache_data(ttl=30)
 def _load_config(config_path: Path) -> dict:
     try:
         with config_path.open("r", encoding="utf-8") as handle:
@@ -155,8 +169,9 @@ def _display_description(description: str) -> str:
     return " ".join((description or "").split())
 
 
-def _load_results(config: dict) -> list[dict]:
-    path = _results_path(config)
+@st.cache_data(ttl=5)
+def _load_results(results_path_str: str) -> list[dict]:
+    path = Path(results_path_str)
     if not path.exists():
         return []
 
@@ -220,7 +235,9 @@ def _campaign_runner_summary_paths() -> list[Path]:
     return sorted(CAMPAIGN_RUNNER_DIR.glob("*/summary.json"))
 
 
-def _load_campaign_runner_session(summary_path: Path) -> dict | None:
+@st.cache_data(ttl=10)
+def _load_campaign_runner_session(summary_path_str: str) -> dict | None:
+    summary_path = Path(summary_path_str)
     summary = _read_json_file(summary_path)
     if not summary:
         return None
@@ -232,7 +249,7 @@ def _load_campaign_runner_session(summary_path: Path) -> dict | None:
         if not config_path.is_absolute():
             config_path = PROJECT_ROOT / config_path
         config = _load_config(config_path)
-        rows = _load_results(config)
+        rows = _load_results(str(_results_path(config)))
         started_at = _parse_iso_datetime(campaign.get("started_at"))
         finished_at = _parse_iso_datetime(campaign.get("finished_at"))
 
@@ -300,13 +317,15 @@ def _tail_lines(path: Path, limit: int = 120) -> list[str]:
         return []
 
 
-def _tail_log_lines(limit: int = 120) -> list[str]:
+@st.cache_data(ttl=5)
+def _tail_log_lines(limit: int = 80) -> list[str]:
     lines = _tail_lines(LOG_FILE, limit=limit)
     if lines:
         return lines
     return _tail_lines(LEGACY_LOG_FILE, limit=limit)
 
 
+@st.cache_data(ttl=5)
 def _agent_processes() -> list[dict]:
     try:
         result = subprocess.run(
@@ -381,6 +400,7 @@ def _max_runs_from_agent_command(command: str) -> int | None:
     return None
 
 
+@st.cache_data(ttl=5)
 def _gpu_stats() -> dict:
     try:
         from pynvml import (
@@ -415,6 +435,10 @@ def _gpu_stats() -> dict:
             "vram_total_mb": 0.0,
         }
 
+
+# ---------------------------------------------------------------------------
+# Chart helpers
+# ---------------------------------------------------------------------------
 
 def _loss_chart_series(results: list[dict]) -> tuple[list[float], list[float]]:
     valid_losses = [row["val_loss"] for row in results if row["val_loss"] is not None]
@@ -461,7 +485,6 @@ def _quantile(values: list[float], q: float) -> float | None:
 
 def _high_outlier_cutoff(values: list[float]) -> float | None:
     """Return a robust display cutoff for unusually large validation losses."""
-
     if len(values) < 5:
         return None
     q1 = _quantile(values, 0.25)
@@ -481,7 +504,7 @@ def _short_label(text: str, limit: int = 40) -> str:
     return clean[: limit - 3].rstrip() + "..."
 
 
-def _render_validation_trend(
+def _render_validation_trend_plotly(
     results: list[dict],
     *,
     title_prefix: str = "Validation Trend",
@@ -513,62 +536,68 @@ def _render_validation_trend(
     best_losses = [point["best_so_far"] for point in visible_points]
     keep_points = [point for point in visible_points if point["status"] == "keep"]
 
-    fig, ax = plt.subplots(figsize=(12, 5))
-    line_label = "kept val_loss" if showing_keep_only else "val_loss"
-    ax.plot(x_vals, val_losses, color="#4C78A8", marker="o", linewidth=1.8, markersize=4, label=line_label)
+    fig = go.Figure()
+
+    line_label = "Kept val loss" if showing_keep_only else "Val loss"
+    fig.add_trace(go.Scatter(
+        x=x_vals,
+        y=val_losses,
+        mode="lines+markers",
+        name=line_label,
+        line=dict(color="#4C78A8", width=2),
+        marker=dict(size=5),
+        hovertemplate="Exp %{x}<br>Val loss: %{y:.6f}<extra></extra>",
+    ))
+
     if not showing_keep_only:
-        ax.plot(x_vals, best_losses, color="#54A24B", linewidth=2.0, linestyle="--", label="best_so_far")
+        fig.add_trace(go.Scatter(
+            x=x_vals,
+            y=best_losses,
+            mode="lines",
+            name="Best so far",
+            line=dict(color="#54A24B", width=2, dash="dash"),
+            hovertemplate="Exp %{x}<br>Best so far: %{y:.6f}<extra></extra>",
+        ))
 
     if keep_points:
-        keep_x = [point["x"] for point in keep_points]
-        keep_y = [point["val_loss"] for point in keep_points]
-        ax.scatter(keep_x, keep_y, color="#E45756", s=50, zorder=3, label="kept improvement")
-
-        for idx, point in enumerate(keep_points):
-            upward = idx % 2 == 0
-            y_offset = 12 if upward else -12
-            rotation = 45 if upward else -45
-            valign = "bottom" if upward else "top"
-            label = _short_label(point["description"])
-            ax.annotate(
-                label,
-                xy=(point["x"], point["val_loss"]),
-                xytext=(4, y_offset),
-                textcoords="offset points",
-                fontsize=6.5,
-                rotation=rotation,
-                rotation_mode="anchor",
-                va=valign,
-                ha="left",
-                color="#222222",
-                bbox={"boxstyle": "round,pad=0.12", "fc": "#FFF7D6", "ec": "#D9C98E", "alpha": 0.9},
-                arrowprops={"arrowstyle": "-", "color": "#D9C98E", "lw": 0.8},
-            )
+        fig.add_trace(go.Scatter(
+            x=[p["x"] for p in keep_points],
+            y=[p["val_loss"] for p in keep_points],
+            mode="markers+text",
+            name="Kept improvement",
+            marker=dict(color="#E45756", size=10, symbol="star"),
+            text=[_short_label(p["description"]) for p in keep_points],
+            textposition="top center",
+            textfont=dict(size=9),
+            hovertemplate="Exp %{x}<br>Val loss: %{y:.6f}<br>%{text}<extra>kept</extra>",
+        ))
 
     title = title_prefix
     if showing_keep_only:
         title += " (kept changes only)"
     if hidden_points:
-        title += f" ({len(hidden_points)} high outlier"
-        if len(hidden_points) != 1:
-            title += "s"
-        title += " hidden)"
-    ax.set_title(title)
-    ax.set_xlabel("Experiment")
-    ax.set_ylabel("best_val_loss")
-    ax.grid(True, linestyle=":", linewidth=0.7, alpha=0.5)
-    ax.legend(loc="best")
-    fig.tight_layout()
-    st.pyplot(fig, width="stretch")
-    plt.close(fig)
+        title += f" · {len(hidden_points)} outlier{'s' if len(hidden_points) != 1 else ''} hidden"
+
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        height=400,
+        margin=dict(l=20, r=20, t=50, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        xaxis_title="Experiment #",
+        yaxis_title="Validation Loss",
+        hovermode="x unified",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
 
     caption_bits: list[str] = []
     if showing_keep_only:
         caption_bits.append("Showing baseline plus kept improvements only.")
     if keep_points:
-        caption_bits.append("Kept points use short diagonal labels.")
+        caption_bits.append("Stars mark kept improvements.")
     if hidden_points and cutoff is not None:
-        caption_bits.append(f"High outliers above {cutoff:.3f} are hidden from the plot only.")
+        caption_bits.append(f"High outliers above {cutoff:.3f} are hidden.")
     if caption_bits:
         st.caption(" ".join(caption_bits))
 
@@ -591,9 +620,13 @@ def _render_baseline_details(baseline_payload: dict | None) -> None:
     st.caption(f"Promoted: `{promoted_at}`")
     if description:
         st.write(description)
-    with st.expander("Baseline metadata JSON"):
+    with st.expander("Full baseline details"):
         st.json(baseline_payload)
 
+
+# ---------------------------------------------------------------------------
+# Page config
+# ---------------------------------------------------------------------------
 
 st.set_page_config(
     page_title="Autoresearch Monitor",
@@ -602,49 +635,32 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-config_path = _resolve_config_path()
-config = _load_config(config_path)
-workspace_dir = _workspace_dir(config)
-results = _load_results(config)
-baseline_metadata = _read_json_file(_baseline_metadata_path(config))
-campaign_runner_summaries = _campaign_runner_summary_paths()
-state = _read_json_file(STATE_FILE)
-processes = _agent_processes()
-if not state and processes:
-    for process in processes:
-        process_config = _config_from_agent_command(process.get("command", ""))
-        if process_config != config_path:
-            continue
-        estimated_experiment = len(results) + 1 if results else 1
-        state = {
-            "phase": "RUNNING",
-            "experiment_num": estimated_experiment,
-            "max_runs": _max_runs_from_agent_command(process.get("command", "")),
-            "description": "Live text-mode run detected; fine-grained phase tracking starts on the next agent launch.",
-            "config_path": str(config_path.relative_to(PROJECT_ROOT)),
-            "workspace_dir": str(workspace_dir.relative_to(PROJECT_ROOT)),
-            "command": process.get("command", ""),
-        }
-        break
-gpu = _gpu_stats()
-log_tail = _tail_log_lines()
+inject_theme()
 
-st.title("🧪 Autoresearch Monitor")
-st.caption("Web dashboard for the autonomous experiment loop.")
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
+
+config_path = _resolve_config_path()
+campaign_runner_summaries = _campaign_runner_summary_paths()
 
 with st.sidebar:
-    st.header("Monitor")
     config_options = _list_config_options()
-    option_labels = [str(path.relative_to(PROJECT_ROOT)) for path in config_options]
-    selected_label = st.selectbox(
+    option_labels = [path.stem for path in config_options]
+    full_labels = [str(path.relative_to(PROJECT_ROOT)) for path in config_options]
+    current_label_short = config_path.stem
+    default_idx = option_labels.index(current_label_short) if current_label_short in option_labels else 0
+
+    selected_short = st.selectbox(
         "Autoresearch config",
         option_labels,
-        index=option_labels.index(str(config_path.relative_to(PROJECT_ROOT)))
-        if str(config_path.relative_to(PROJECT_ROOT)) in option_labels else 0,
+        index=default_idx,
+        help="Full path shown in workspace info below",
     )
-    selected_config_path = PROJECT_ROOT / selected_label
+    selected_idx = option_labels.index(selected_short)
+    selected_config_path = config_options[selected_idx]
     if selected_config_path != config_path:
-        st.query_params["config"] = selected_label
+        st.query_params["config"] = full_labels[selected_idx]
         st.rerun()
 
     selected_session_summary = None
@@ -678,24 +694,34 @@ with st.sidebar:
         view_mode = "Active config"
 
     auto_refresh = st.toggle("Auto-refresh", value=True)
-    refresh_seconds = st.slider("Refresh every (seconds)", min_value=2, max_value=30, value=30)
+    refresh_seconds = st.slider("Refresh every (seconds)", min_value=5, max_value=60, value=30)
     st.divider()
-    st.subheader("Launch URLs")
-    st.code(
-        "streamlit run app/agent_dashboard.py "
-        "--server.address 127.0.0.1 --server.port 8502",
-        language="bash",
-    )
-    st.code(
-        "streamlit run app/agent_dashboard.py "
-        "--server.address 0.0.0.0 --server.port 8502",
-        language="bash",
-    )
-    st.caption(
-        "Use `127.0.0.1` for local-only access. Use `0.0.0.0` for LAN access from trusted devices, "
-        "then open `http://<your-machine-ip>:8502`."
-    )
-    st.warning("This dashboard has no authentication. Do not expose it to the public internet.")
+
+    with st.expander("Launch commands"):
+        st.code(
+            "streamlit run app/agent_dashboard.py "
+            "--server.address 127.0.0.1 --server.port 8502",
+            language="bash",
+        )
+        st.code(
+            "streamlit run app/agent_dashboard.py "
+            "--server.address 0.0.0.0 --server.port 8502",
+            language="bash",
+        )
+        st.caption("Use `127.0.0.1` for local-only access. `0.0.0.0` for LAN access from trusted devices.")
+
+# ---------------------------------------------------------------------------
+# Load all data (cached)
+# ---------------------------------------------------------------------------
+
+config = _load_config(config_path)
+workspace_dir = _workspace_dir(config)
+results = _load_results(str(_results_path(config)))
+baseline_metadata = _read_json_file(_baseline_metadata_path(config))
+state = _read_json_file(STATE_FILE)
+processes = _agent_processes()
+gpu = _gpu_stats()
+log_tail = _tail_log_lines()
 
 if selected_session_summary is not None:
     st.query_params["session"] = selected_session_label
@@ -704,20 +730,25 @@ else:
     st.query_params.pop("session", None)
     st.query_params.pop("view", None)
 
-if auto_refresh:
-    components.html(
-        f"""
-        <script>
-        setTimeout(function() {{
-            window.parent.location.reload();
-        }}, {refresh_seconds * 1000});
-        </script>
-        """,
-        height=0,
-    )
+if not state and processes:
+    for process in processes:
+        process_config = _config_from_agent_command(process.get("command", ""))
+        if process_config != config_path:
+            continue
+        estimated_experiment = len(results) + 1 if results else 1
+        state = {
+            "phase": "RUNNING",
+            "experiment_num": estimated_experiment,
+            "max_runs": _max_runs_from_agent_command(process.get("command", "")),
+            "description": "Live text-mode run detected; fine-grained phase tracking starts on the next agent launch.",
+            "config_path": str(config_path.relative_to(PROJECT_ROOT)),
+            "workspace_dir": str(workspace_dir.relative_to(PROJECT_ROOT)),
+            "command": process.get("command", ""),
+        }
+        break
 
 campaign_runner_session = (
-    _load_campaign_runner_session(selected_session_summary)
+    _load_campaign_runner_session(str(selected_session_summary))
     if selected_session_summary is not None
     else None
 )
@@ -769,71 +800,159 @@ else:
     display_baseline_payload = baseline_metadata
     display_baseline_header = "Promoted Baseline"
 
+# ---------------------------------------------------------------------------
+# Auto-refresh via st.rerun (native, state-preserving)
+# ---------------------------------------------------------------------------
+
+if auto_refresh:
+    last_refresh = st.session_state.get("_last_refresh", 0.0)
+    import time as _time
+    now = _time.time()
+    if now - last_refresh >= refresh_seconds:
+        st.session_state["_last_refresh"] = now
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# Page header
+# ---------------------------------------------------------------------------
+
+st.title("🧪 Autoresearch Monitor")
+st.caption("Autonomous experiment loop — live view")
+
+# ---------------------------------------------------------------------------
+# Status banner
+# ---------------------------------------------------------------------------
+
+is_running = bool(processes)
+if is_running:
+    st.success(f"Agent running · {len(processes)} process(es) active", icon="✅")
+else:
+    st.warning("No active agent process detected. The state below may be stale.", icon="⚠️")
+
+# ---------------------------------------------------------------------------
+# Top metrics
+# ---------------------------------------------------------------------------
+
 status_col, phase_col, exp_col, best_col, keep_col, crash_col = st.columns(6)
-status_col.metric("Agent Process", "Running" if processes else "Stopped")
+status_col.metric("Agent", "Running" if is_running else "Stopped")
 phase_col.metric("Phase", display_phase_label)
 exp_col.metric("Experiment", display_experiment)
-best_col.metric("Best Val Loss", f"{display_best_val_loss:.6f}" if isinstance(display_best_val_loss, (int, float)) else "—")
+best_col.metric(
+    "Best Val Loss",
+    f"{display_best_val_loss:.6f}" if isinstance(display_best_val_loss, (int, float)) else "—",
+)
 keep_col.metric("Keeps", display_keep_count)
 crash_col.metric("Crashes", display_crash_count)
 
-st.caption(f"Workspace: `{display_workspace_text}`")
-st.caption(f"Config/View: `{display_config_text}`")
-st.caption(f"Results source: `{display_results_text}`")
+with st.expander("Workspace info", expanded=False):
+    st.caption(f"Workspace: `{display_workspace_text}`")
+    st.caption(f"Config: `{display_config_text}`")
+    st.caption(f"Results source: `{display_results_text}`")
 
-left, right = st.columns([3, 2])
+# ---------------------------------------------------------------------------
+# Main tabs
+# ---------------------------------------------------------------------------
 
-with left:
-    st.subheader(display_state_header)
-    if display_state_payload:
-        st.json(display_state_payload)
-    else:
-        st.info("No data available.")
+overview_tab, results_tab, trend_tab, hardware_tab, logs_tab = st.tabs(
+    ["Overview", "Results", "Validation Trend", "Hardware", "Activity Log"]
+)
 
+# --- Overview tab ---
+with overview_tab:
+    left, right = st.columns([3, 2])
+
+    with left:
+        st.subheader(display_state_header)
+        if display_state_payload:
+            # Extract key fields for prominent display
+            key_fields: dict[str, Any] = {}
+            if isinstance(display_state_payload, dict):
+                for key in ("phase", "experiment_num", "max_runs", "description"):
+                    if key in display_state_payload:
+                        key_fields[key] = display_state_payload[key]
+
+            if key_fields:
+                kf_cols = st.columns(min(len(key_fields), 3))
+                for i, (k, v) in enumerate(key_fields.items()):
+                    kf_cols[i % len(kf_cols)].metric(k.replace("_", " ").title(), str(v)[:60])
+                with st.expander("Full agent state JSON"):
+                    st.json(display_state_payload)
+            else:
+                st.json(display_state_payload)
+        else:
+            st.info("No agent state found yet. Start the agent with `python scripts/agent.py`.")
+            st.code("python scripts/agent.py --config configs/autoresearch_default.yaml", language="bash")
+
+    with right:
+        st.subheader(display_baseline_header)
+        if display_baseline_payload:
+            _render_baseline_details(display_baseline_payload)
+        elif using_campaign_session and campaign_runner_session:
+            st.dataframe(
+                [
+                    {
+                        "campaign": row["campaign"],
+                        "stage": row["stage"],
+                        "runs": row["runs"],
+                        "keeps": row["keeps"],
+                        "crashes": row["crashes"],
+                        "best_val_loss": row["best_val_loss"],
+                        "merged_into_main": row["merged_into_main"],
+                    }
+                    for row in campaign_runner_session["campaign_rows"]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No baseline metadata found yet.")
+
+# --- Results tab ---
+with results_tab:
     st.subheader("Recent Results" if not using_campaign_session else "Campaign Results")
     display_rows = []
     table_rows = display_results if using_campaign_session else display_results[-20:]
     table_start = 1 if using_campaign_session else max(1, len(display_results) - 19)
-    for index, row in enumerate(table_rows, start=table_start):
-        display_row = {
-            "#": index,
-            "status": row["status"],
-            "val_loss": row["val_loss"],
-            "file": row["file"],
-            "description": row["description"],
-            "commit": row["commit"][:7] if row["commit"] else "—",
-        }
-        if using_campaign_session:
-            display_row["campaign"] = row.get("campaign", "")
-            display_row["stage"] = row.get("stage", "")
-        display_rows.append(display_row)
-    if display_rows:
-        st.dataframe(display_rows, width="stretch", hide_index=True)
+
+    if not table_rows:
+        st.info("No results logged yet. The agent hasn't completed any experiments.")
+        st.code("python scripts/agent.py --config configs/autoresearch_default.yaml", language="bash")
     else:
-        st.info("No results logged yet.")
+        for index, row in enumerate(table_rows, start=table_start):
+            status = row["status"]
+            status_badge = f"🟢 {status}" if status == "keep" else (
+                f"🔴 {status}" if status == "crash" else f"⚪ {status}"
+            )
+            display_row = {
+                "#": index,
+                "status": status_badge,
+                "val_loss": row["val_loss"],
+                "file": row["file"],
+                "description": row["description"],
+                "commit": row["commit"][:7] if row["commit"] else "—",
+            }
+            if using_campaign_session:
+                display_row["campaign"] = row.get("campaign", "")
+                display_row["stage"] = row.get("stage", "")
+            display_rows.append(display_row)
 
-with right:
-    st.subheader("Hardware")
-    gpu_temp = "N/A" if gpu["temp"] is None else f"{gpu['temp']} C"
-    vram_text = "N/A"
-    if gpu["vram_total_mb"] > 0:
-        vram_text = f"{gpu['vram_used_mb']:.0f}/{gpu['vram_total_mb']:.0f} MB"
-    gpu_col1, gpu_col2 = st.columns(2)
-    gpu_col1.metric("GPU", gpu["name"])
-    gpu_col2.metric("Temp", gpu_temp)
-    gpu_col1.metric("Utilization", f"{gpu['gpu_util']}%")
-    gpu_col2.metric("VRAM", vram_text)
+        st.dataframe(display_rows, use_container_width=True, hide_index=True)
 
-    st.subheader("Processes")
-    if processes:
-        st.code("\n".join(f"{proc['pid']}  {proc['command']}" for proc in processes), language="text")
-    else:
-        st.info("No live `scripts/agent.py` process detected.")
+    if campaign_runner_session and campaign_runner_session["rows"] and not using_campaign_session:
+        st.divider()
+        st.subheader("Campaign Runner History")
+        session_summary = campaign_runner_session["summary"]
+        session_rows = campaign_runner_session["rows"]
+        session_campaign_rows = campaign_runner_session["campaign_rows"]
+        session_valid_losses = [row["val_loss"] for row in session_rows if row["val_loss"] is not None]
+        session_best = min(session_valid_losses) if session_valid_losses else None
+        sess_col1, sess_col2, sess_col3, sess_col4 = st.columns(4)
+        sess_col1.metric("Session", str(session_summary.get("session_tag", "—")))
+        sess_col2.metric("Campaigns", len(session_campaign_rows))
+        sess_col3.metric("Session Best", f"{session_best:.6f}" if isinstance(session_best, (int, float)) else "—")
+        sess_col4.metric("Merged Campaigns", sum(1 for row in session_campaign_rows if row["merged_into_main"]))
 
-    st.subheader(display_baseline_header)
-    if display_baseline_payload:
-        _render_baseline_details(display_baseline_payload)
-    elif using_campaign_session and campaign_runner_session:
+        st.subheader("Campaign Summary")
         st.dataframe(
             [
                 {
@@ -844,80 +963,78 @@ with right:
                     "crashes": row["crashes"],
                     "best_val_loss": row["best_val_loss"],
                     "merged_into_main": row["merged_into_main"],
+                    "branch": row["branch"],
                 }
-                for row in campaign_runner_session["campaign_rows"]
+                for row in session_campaign_rows
             ],
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )
+
+        st.subheader("Aggregated Recent Runs")
+        st.dataframe(
+            [
+                {
+                    "#": index,
+                    "campaign": row["campaign"],
+                    "status": row["status"],
+                    "val_loss": row["val_loss"],
+                    "file": row["file"],
+                    "description": row["description"],
+                    "commit": row["commit"][:7] if row["commit"] else "—",
+                }
+                for index, row in enumerate(session_rows[-30:], start=max(1, len(session_rows) - 29))
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+# --- Validation Trend tab ---
+with trend_tab:
+    if any(row["val_loss"] is not None for row in display_results):
+        _render_validation_trend_plotly(
+            display_results,
+            title_prefix="Campaign Runner Validation Trend" if using_campaign_session else "Validation Trend",
+            keep_only=False if using_campaign_session else None,
+            hide_high_outliers=not using_campaign_session,
+        )
+
+        if campaign_runner_session and campaign_runner_session["rows"] and not using_campaign_session:
+            st.divider()
+            st.subheader("Campaign Runner Validation Trend")
+            _render_validation_trend_plotly(
+                campaign_runner_session["rows"],
+                title_prefix="Campaign Runner",
+                keep_only=False,
+                hide_high_outliers=False,
+            )
+            st.caption("Aggregated from all campaign workspaces, filtered to each campaign's time window.")
     else:
-        st.info("No baseline metadata found yet.")
+        st.info("No validation-loss data yet. Run an experiment first.")
 
-if any(row["val_loss"] is not None for row in display_results):
-    st.subheader("Validation Trend")
-    _render_validation_trend(
-        display_results,
-        title_prefix="Campaign Runner Validation Trend" if using_campaign_session else "Validation Trend",
-        keep_only=False if using_campaign_session else None,
-        hide_high_outliers=not using_campaign_session,
-    )
+# --- Hardware tab ---
+with hardware_tab:
+    st.subheader("Hardware")
+    gpu_temp = "N/A" if gpu["temp"] is None else f"{gpu['temp']}°C"
+    vram_text = "N/A"
+    if gpu["vram_total_mb"] > 0:
+        vram_text = f"{gpu['vram_used_mb']:.0f}/{gpu['vram_total_mb']:.0f} MB"
+    gpu_col1, gpu_col2, gpu_col3, gpu_col4 = st.columns(4)
+    gpu_col1.metric("GPU", gpu["name"])
+    gpu_col2.metric("Temperature", gpu_temp)
+    gpu_col3.metric("Utilization", f"{gpu['gpu_util']}%")
+    gpu_col4.metric("VRAM", vram_text)
 
-if campaign_runner_session and campaign_runner_session["rows"] and not using_campaign_session:
-    st.subheader("Campaign Runner History")
-    session_summary = campaign_runner_session["summary"]
-    session_rows = campaign_runner_session["rows"]
-    session_campaign_rows = campaign_runner_session["campaign_rows"]
-    session_valid_losses = [row["val_loss"] for row in session_rows if row["val_loss"] is not None]
-    session_best = min(session_valid_losses) if session_valid_losses else None
-    sess_col1, sess_col2, sess_col3, sess_col4 = st.columns(4)
-    sess_col1.metric("Session", str(session_summary.get("session_tag", "—")))
-    sess_col2.metric("Campaigns", len(session_campaign_rows))
-    sess_col3.metric("Session Best", f"{session_best:.6f}" if isinstance(session_best, (int, float)) else "—")
-    sess_col4.metric("Merged Campaigns", sum(1 for row in session_campaign_rows if row["merged_into_main"]))
+    st.subheader("Agent Processes")
+    if processes:
+        st.code("\n".join(f"{proc['pid']}  {proc['command']}" for proc in processes), language="text")
+    else:
+        st.info("No live `scripts/agent.py` process detected.")
 
-    _render_validation_trend(session_rows, title_prefix="Campaign Runner Validation Trend", keep_only=False, hide_high_outliers=False)
-
-    st.caption("Aggregated from all campaign workspaces in the selected runner session, filtered to each campaign's start and finish window.")
-
-    st.subheader("Campaign Summary")
-    st.dataframe(
-        [
-            {
-                "campaign": row["campaign"],
-                "stage": row["stage"],
-                "runs": row["runs"],
-                "keeps": row["keeps"],
-                "crashes": row["crashes"],
-                "best_val_loss": row["best_val_loss"],
-                "merged_into_main": row["merged_into_main"],
-                "branch": row["branch"],
-            }
-            for row in session_campaign_rows
-        ],
-        width="stretch",
-        hide_index=True,
-    )
-
-    st.subheader("Aggregated Recent Runs")
-    st.dataframe(
-        [
-            {
-                "#": index,
-                "campaign": row["campaign"],
-                "status": row["status"],
-                "val_loss": row["val_loss"],
-                "file": row["file"],
-                "description": row["description"],
-                "commit": row["commit"][:7] if row["commit"] else "—",
-            }
-            for index, row in enumerate(session_rows[-30:], start=max(1, len(session_rows) - 29))
-        ],
-        width="stretch",
-        hide_index=True,
-    )
-
-st.subheader("Activity Log")
-if log_tail:
-    st.code("".join(log_tail[-80:]), language="text")
-else:
-    st.info("No `agent.log` entries yet.")
+# --- Logs tab ---
+with logs_tab:
+    st.subheader("Activity Log")
+    if log_tail:
+        st.code("".join(log_tail), language="text")
+    else:
+        st.info("No `agent.log` entries found yet. Logs appear here once the agent starts writing.")

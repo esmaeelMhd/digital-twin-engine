@@ -66,15 +66,18 @@ def _inject_css() -> None:
         .dte-hero {
           position: relative;
           overflow: hidden;
-          min-height: 58vh;
-          padding: 4.5rem 4rem 3rem 4rem;
+          min-height: 36vh;
+          padding: 3rem 4rem 2.5rem 4rem;
           border-top: 1px solid var(--dte-line);
           border-bottom: 1px solid var(--dte-line);
           background:
             linear-gradient(135deg, rgba(33, 75, 69, 0.92), rgba(21, 33, 28, 0.96)),
             linear-gradient(135deg, rgba(176, 106, 43, 0.14), transparent 42%);
           color: #f5f1e7;
-          animation: heroRise 700ms ease-out;
+          animation-fill-mode: forwards;
+        }
+        .dte-hero-first {
+          animation: heroRise 700ms ease-out forwards;
         }
         .dte-hero::after {
           content: "";
@@ -95,13 +98,13 @@ def _inject_css() -> None:
           font-size: 0.78rem;
           opacity: 0.74;
           margin-bottom: 1rem;
-          font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
         }
         .dte-title {
           position: relative;
           z-index: 1;
           max-width: 8.5ch;
-          font-size: clamp(3.2rem, 9vw, 7.6rem);
+          font-size: clamp(2.8rem, 7vw, 6.4rem);
           line-height: 0.9;
           margin: 0;
           font-weight: 600;
@@ -112,11 +115,11 @@ def _inject_css() -> None:
           position: relative;
           z-index: 1;
           max-width: 40rem;
-          margin-top: 1.35rem;
+          margin-top: 1.2rem;
           font-size: 1.05rem;
           line-height: 1.65;
           color: rgba(245, 241, 231, 0.86);
-          font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
         }
         .dte-chiprow {
           position: relative;
@@ -124,19 +127,19 @@ def _inject_css() -> None:
           display: flex;
           flex-wrap: wrap;
           gap: 0.6rem;
-          margin-top: 1.8rem;
+          margin-top: 1.6rem;
         }
         .dte-chip {
           border: 1px solid rgba(245, 241, 231, 0.22);
-          padding: 0.55rem 0.85rem;
+          padding: 0.5rem 0.8rem;
           font-size: 0.82rem;
           text-transform: uppercase;
           letter-spacing: 0.08em;
           background: rgba(255,255,255,0.04);
           backdrop-filter: blur(4px);
-          font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
         }
-        .dte-section-title {
+        h2.dte-section-title {
           font-family: Georgia, "Times New Roman", serif;
           font-size: 2rem;
           line-height: 1.05;
@@ -147,7 +150,7 @@ def _inject_css() -> None:
         .dte-section-copy {
           max-width: 48rem;
           color: rgba(21, 33, 28, 0.74);
-          font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
           margin-bottom: 1.2rem;
         }
         .dte-rule {
@@ -157,11 +160,11 @@ def _inject_css() -> None:
         .dte-note {
           font-size: 0.86rem;
           color: rgba(21, 33, 28, 0.68);
-          font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
         }
         .dte-flow {
           display: grid;
-          grid-template-columns: repeat(3, minmax(120px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
           gap: 1rem;
           align-items: center;
           margin: 1.2rem 0 0.5rem 0;
@@ -171,12 +174,13 @@ def _inject_css() -> None:
           border-top: 1px solid var(--dte-line);
           border-bottom: 1px solid var(--dte-line);
           background: rgba(255,255,255,0.45);
-          font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+          font-family: "Trebuchet MS", "Gill Sans", Arial, sans-serif;
         }
         .dte-arrow {
           text-align: center;
-          color: var(--dte-brass);
+          color: #b06a2b;
           font-size: 1.4rem;
+          min-width: 1.5rem;
         }
         @keyframes heroRise {
           from { opacity: 0; transform: translateY(24px); }
@@ -199,22 +203,25 @@ def _load_release_snapshot() -> dict[str, Any]:
     return load_demo_release_snapshot(config, config_path=DEFAULT_DEMO_CONFIG)
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner="Loading shared checkpoint...")
 def _load_release_runtime() -> UniversalDemoRuntime | None:
     config = _load_demo_page_config()
     return load_demo_model_runtime(config, config_path=DEFAULT_DEMO_CONFIG)
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner="Loading system runtime...")
 def _load_runtime(system_name: str):
     import yaml
 
     config_path = SYSTEM_CONFIGS[system_name]
-    with config_path.open("r", encoding="utf-8") as handle:
-        system_config = yaml.safe_load(handle) or {}
-    spec = get_system_spec(system_config)
-    simulator = get_simulator(system_name, system_config)
-    return spec, simulator
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            system_config = yaml.safe_load(handle) or {}
+        spec = get_system_spec(system_config)
+        simulator = get_simulator(system_name, system_config)
+        return spec, simulator
+    except Exception as exc:
+        return None, None
 
 
 def _read_text_if_exists(path_str: str | None) -> str | None:
@@ -283,8 +290,10 @@ def _trajectory_figure(
     baseline = comparison["baseline"]
     candidate = comparison["candidate"]
     times = np.asarray(candidate["times"])
+    n_rows = len(highlight_states)
+
     fig = make_subplots(
-        rows=len(highlight_states),
+        rows=n_rows,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.08,
@@ -297,6 +306,7 @@ def _trajectory_figure(
         candidate_p95 = np.asarray(candidate["p95"])[:, state_idx]
         baseline_mean = np.asarray(baseline["mean"])[:, state_idx]
 
+        # 90% confidence band
         fig.add_trace(
             go.Scatter(
                 x=times,
@@ -317,7 +327,7 @@ def _trajectory_figure(
                 line=dict(width=0),
                 fill="tonexty",
                 fillcolor="rgba(33, 75, 69, 0.12)",
-                name="Candidate band" if row_index == 1 else None,
+                name="90% forecast interval" if row_index == 1 else None,
                 showlegend=row_index == 1,
                 hoverinfo="skip",
             ),
@@ -332,6 +342,7 @@ def _trajectory_figure(
                 name="Baseline" if row_index == 1 else None,
                 showlegend=row_index == 1,
                 line=dict(color="#B06A2B", width=2, dash="dash"),
+                hovertemplate=f"{state_name} baseline: %{{y:.3f}}<br>t=%{{x:.2f}}<extra>Baseline</extra>",
             ),
             row=row_index,
             col=1,
@@ -344,6 +355,7 @@ def _trajectory_figure(
                 name="Candidate" if row_index == 1 else None,
                 showlegend=row_index == 1,
                 line=dict(color="#214B45", width=3),
+                hovertemplate=f"{state_name} candidate: %{{y:.3f}}<br>t=%{{x:.2f}}<extra>Candidate</extra>",
             ),
             row=row_index,
             col=1,
@@ -357,28 +369,31 @@ def _trajectory_figure(
                     mode="lines",
                     name="Recommended" if row_index == 1 else None,
                     showlegend=row_index == 1,
-                    line=dict(color="#15211C", width=2),
+                    line=dict(color="#15211C", width=2, dash="dot"),
+                    hovertemplate=f"{state_name} recommended: %{{y:.3f}}<br>t=%{{x:.2f}}<extra>Recommended</extra>",
                 ),
                 row=row_index,
                 col=1,
             )
 
     fig.update_layout(
-        height=max(360, 230 * len(highlight_states)),
+        height=max(360, 230 * n_rows),
         template="plotly_white",
         margin=dict(l=20, r=20, t=60, b=20),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(255,255,255,0.7)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        hovermode="x unified",
     )
-    fig.update_xaxes(title_text="Time")
+    fig.update_xaxes(title_text="Time (min)", row=n_rows, col=1)
+    fig.update_yaxes(title_text="Value")
     return fig
 
 
 def _render_release_overview(snapshot: dict[str, Any], runtime: UniversalDemoRuntime | None) -> None:
-    st.markdown("<div class='dte-section-title'>Release Overview</div>", unsafe_allow_html=True)
+    st.markdown("<h2 class='dte-section-title'>Release Overview</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='dte-section-copy'>This demo is wired to the blessed V1 shared checkpoint, the multi-family evaluation summary, and a customer adaptation pilot. The plant-facing scenarios below stay curated by default and only expose fine trim where it adds value.</div>",
+        "<div class='dte-section-copy'>This demo shows the V1 shared checkpoint evaluated across multiple process unit families, including a customer adaptation pilot on an ingested historian dataset.</div>",
         unsafe_allow_html=True,
     )
 
@@ -386,7 +401,7 @@ def _render_release_overview(snapshot: dict[str, Any], runtime: UniversalDemoRun
     top_metrics[0].metric("Release gate", str(snapshot.get("milestone_status", "unknown")).upper())
     top_metrics[1].metric("Best validation loss", _format_metric(snapshot.get("train_best_val_loss")))
     top_metrics[2].metric(
-        snapshot.get("eval_metric_name", "Eval metric"),
+        snapshot.get("eval_metric_name") or "Eval metric",
         _format_metric(snapshot.get("eval_metric_value")),
     )
     top_metrics[3].metric(
@@ -403,11 +418,11 @@ def _render_release_overview(snapshot: dict[str, Any], runtime: UniversalDemoRun
 
     if runtime is not None:
         st.success(
-            f"Loaded shared checkpoint from `{snapshot.get('model_path')}` and using universal-model rollouts for the unit demos."
+            f"Shared checkpoint loaded from `{snapshot.get('model_path')}` — using universal-model rollouts for unit demos.",
         )
     else:
         st.warning(
-            "Release checkpoint was not loaded. The app will fall back to simulator ensembles until the V1 model artifacts are available."
+            "Release checkpoint not loaded. Demos will fall back to simulator ensembles until the V1 model artifacts are available.",
         )
 
 
@@ -415,12 +430,26 @@ def _render_unit_demo(
     demo_cfg: dict[str, Any],
     runtime: UniversalDemoRuntime | None,
 ) -> None:
-    spec, simulator = _load_runtime(demo_cfg["system"])
+    system_name = demo_cfg["system"]
+    try:
+        spec, simulator = _load_runtime(system_name)
+    except Exception as exc:
+        st.error(f"Could not load system `{system_name}`: {exc}")
+        return
+
+    if spec is None or simulator is None:
+        st.error(
+            f"Could not load system `{system_name}`. "
+            "Check that the system config YAML exists in `configs/`."
+        )
+        return
+
     n_steps = int(demo_cfg.get("n_steps", 25))
     dt = float(demo_cfg.get("dt", 0.1))
     highlight_states = list(demo_cfg.get("highlight_states", spec.state_names[:2]))
     target_state = _target_state_vector(spec, demo_cfg)
     initial_state = _initial_state_vector(spec, demo_cfg)
+    demo_id = demo_cfg["id"]
 
     baseline_profile = demo_cfg.get("baseline_control_profile")
     baseline_controls = build_signal_sequence(
@@ -447,10 +476,10 @@ def _render_unit_demo(
         }
     ]
 
-    left_col, right_col = st.columns([0.92, 1.88], gap="large")
+    left_col, right_col = st.columns([1, 2], gap="large")
 
     with left_col:
-        st.markdown(f"<div class='dte-section-title'>{demo_cfg['title']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<h2 class='dte-section-title'>{demo_cfg['title']}</h2>", unsafe_allow_html=True)
         st.markdown(
             f"<div class='dte-section-copy'>{demo_cfg.get('description', '')}</div>",
             unsafe_allow_html=True,
@@ -458,74 +487,79 @@ def _render_unit_demo(
         if demo_cfg.get("operator_goal"):
             st.caption(f"Operator goal: {demo_cfg['operator_goal']}")
 
-        selected_disturbance_id = st.selectbox(
-            "Disturbance preset",
-            options=[item["id"] for item in disturbance_presets],
-            format_func=lambda value: next(
-                item["title"] for item in disturbance_presets if item["id"] == value
-            ),
-            key=f"{demo_cfg['id']}_disturbance_preset",
-        )
-        disturbance_cfg = next(
-            item for item in disturbance_presets if item["id"] == selected_disturbance_id
-        )
-        st.markdown(
-            f"<div class='dte-note'>{disturbance_cfg.get('description', '')}</div>",
-            unsafe_allow_html=True,
-        )
+        with st.form(key=f"{demo_id}_scenario_form", border=False):
+            selected_disturbance_id = st.selectbox(
+                "Disturbance preset",
+                options=[item["id"] for item in disturbance_presets],
+                format_func=lambda value: next(
+                    item["title"] for item in disturbance_presets if item["id"] == value
+                ),
+                key=f"{demo_id}_disturbance_preset",
+            )
+            disturbance_cfg = next(
+                item for item in disturbance_presets if item["id"] == selected_disturbance_id
+            )
+            st.markdown(
+                f"<div class='dte-note'>{disturbance_cfg.get('description', '')}</div>",
+                unsafe_allow_html=True,
+            )
 
-        selected_candidate_id = st.selectbox(
-            "Candidate operating move",
-            options=[item["id"] for item in candidate_profiles],
-            format_func=lambda value: next(
-                item["title"] for item in candidate_profiles if item["id"] == value
-            ),
-            key=f"{demo_cfg['id']}_candidate_preset",
-        )
-        candidate_cfg = next(
-            item for item in candidate_profiles if item["id"] == selected_candidate_id
-        )
-        st.markdown(
-            f"<div class='dte-note'>{candidate_cfg.get('description', '')}</div>",
-            unsafe_allow_html=True,
-        )
+            selected_candidate_id = st.selectbox(
+                "Candidate operating move",
+                options=[item["id"] for item in candidate_profiles],
+                format_func=lambda value: next(
+                    item["title"] for item in candidate_profiles if item["id"] == value
+                ),
+                key=f"{demo_id}_candidate_preset",
+            )
+            candidate_cfg = next(
+                item for item in candidate_profiles if item["id"] == selected_candidate_id
+            )
+            st.markdown(
+                f"<div class='dte-note'>{candidate_cfg.get('description', '')}</div>",
+                unsafe_allow_html=True,
+            )
 
-        control_adjustments = {name: 0.0 for name in spec.control_names}
-        disturbance_adjustments = {name: 0.0 for name in spec.disturbance_names}
-        with st.expander("Fine trim", expanded=False):
-            st.caption("Apply small bounded offsets on top of the preset trajectories.")
-            for control_name in spec.control_names:
-                low, high = spec.control_ranges[control_name]
-                delta_max = 0.15 * (high - low)
-                control_adjustments[control_name] = st.slider(
-                    f"{control_name} trim",
-                    min_value=float(-delta_max),
-                    max_value=float(delta_max),
-                    value=0.0,
-                    key=f"{demo_cfg['id']}_{control_name}_trim",
-                )
-            for disturbance_name in spec.disturbance_names:
-                low, high = spec.disturbance_ranges[disturbance_name]
-                delta_max = 0.15 * (high - low)
-                disturbance_adjustments[disturbance_name] = st.slider(
-                    f"{disturbance_name} trim",
-                    min_value=float(-delta_max),
-                    max_value=float(delta_max),
-                    value=0.0,
-                    key=f"{demo_cfg['id']}_{disturbance_name}_trim",
-                )
+            control_adjustments = {name: 0.0 for name in spec.control_names}
+            disturbance_adjustments = {name: 0.0 for name in spec.disturbance_names}
+            with st.expander("Fine trim", expanded=False):
+                st.caption("Apply small bounded offsets on top of the preset trajectories.")
+                for control_name in spec.control_names:
+                    low, high = spec.control_ranges[control_name]
+                    delta_max = 0.15 * (high - low)
+                    control_adjustments[control_name] = st.slider(
+                        f"{control_name} trim",
+                        min_value=float(-delta_max),
+                        max_value=float(delta_max),
+                        value=0.0,
+                        key=f"{demo_id}_{control_name}_trim",
+                    )
+                for disturbance_name in spec.disturbance_names:
+                    low, high = spec.disturbance_ranges[disturbance_name]
+                    delta_max = 0.15 * (high - low)
+                    disturbance_adjustments[disturbance_name] = st.slider(
+                        f"{disturbance_name} trim",
+                        min_value=float(-delta_max),
+                        max_value=float(delta_max),
+                        value=0.0,
+                        key=f"{demo_id}_{disturbance_name}_trim",
+                    )
 
-        st.markdown("<div class='dte-rule'></div>", unsafe_allow_html=True)
-        st.markdown("**Tracked target state**")
-        for state_name in highlight_states:
-            state_idx = spec.state_names.index(state_name)
-            st.caption(f"{state_name}: {_format_metric(float(target_state[state_idx]))}")
+            st.markdown("<div class='dte-rule'></div>", unsafe_allow_html=True)
+            st.markdown("**Tracked target state**")
+            for state_name in highlight_states:
+                state_idx = spec.state_names.index(state_name)
+                st.caption(f"{state_name}: {_format_metric(float(target_state[state_idx]))}")
 
-        optimize_clicked = st.button(
-            demo_cfg.get("optimize_button_label", "Recommend Control Sequence"),
-            key=f"{demo_cfg['id']}_optimize",
-            width="stretch",
-        )
+            run_scenario = st.form_submit_button(
+                demo_cfg.get("run_button_label", "Run Scenario"),
+                type="primary",
+                use_container_width=True,
+            )
+            optimize_clicked = st.form_submit_button(
+                demo_cfg.get("optimize_button_label", "Recommend Control Sequence"),
+                use_container_width=True,
+            )
 
     disturbances = build_signal_sequence(
         spec,
@@ -552,40 +586,56 @@ def _render_unit_demo(
         kind="control",
     )
 
-    comparison = compare_scenarios(
-        spec,
-        simulator,
-        initial_state=initial_state,
-        baseline_controls=baseline_controls,
-        candidate_controls=candidate_controls,
-        disturbances=disturbances,
-        dt=dt,
-        model=runtime,
-        params=None,
-        n_samples=20,
-        seed=11,
-    )
-
-    optimized_rollout = None
-    optimized_result = None
-    if optimize_clicked:
-        optimized_result = optimize_control_sequence(
+    try:
+        comparison = compare_scenarios(
             spec,
             simulator,
             initial_state=initial_state,
+            baseline_controls=baseline_controls,
+            candidate_controls=candidate_controls,
             disturbances=disturbances,
             dt=dt,
-            target_state=target_state,
-            tracked_state_names=list(highlight_states),
-            n_candidates=int(demo_cfg.get("optimization", {}).get("n_candidates", 64)),
-            seed=int(demo_cfg.get("optimization", {}).get("seed", 17)),
+            model=runtime,
+            params=None,
+            n_samples=20,
+            seed=11,
         )
-        optimized_rollout = {"mean": np.asarray(optimized_result["predicted_states"])}
+    except Exception as exc:
+        st.error(f"Scenario comparison failed: {exc}")
+        return
+
+    # Persist optimization result across reruns
+    opt_key = f"optimized_{demo_id}"
+    if optimize_clicked:
+        with st.spinner("Optimizing control sequence..."):
+            try:
+                optimized_result = optimize_control_sequence(
+                    spec,
+                    simulator,
+                    initial_state=initial_state,
+                    disturbances=disturbances,
+                    dt=dt,
+                    target_state=target_state,
+                    tracked_state_names=list(highlight_states),
+                    n_candidates=int(demo_cfg.get("optimization", {}).get("n_candidates", 64)),
+                    seed=int(demo_cfg.get("optimization", {}).get("seed", 17)),
+                )
+                st.session_state[opt_key] = optimized_result
+            except Exception as exc:
+                st.error(f"Optimization failed: {exc}")
+                st.session_state.pop(opt_key, None)
+
+    # Clear persisted optimization if scenario controls changed
+    if run_scenario:
+        st.session_state.pop(opt_key, None)
+
+    stored_optimized = st.session_state.get(opt_key)
+    optimized_rollout = {"mean": np.asarray(stored_optimized["predicted_states"])} if stored_optimized else None
 
     with right_col:
         st.plotly_chart(
             _trajectory_figure(spec, highlight_states, comparison, optimized_rollout),
-            width="stretch",
+            use_container_width=True,
         )
         metric_cols = st.columns(len(highlight_states) + 2)
         metric_cols[0].metric("Forecast source", comparison["candidate"]["source"].replace("_", " "))
@@ -596,43 +646,50 @@ def _render_unit_demo(
                 value=_format_metric(float(state_delta)),
             )
         candidate_constraints = comparison["candidate"]["constraint_summary"]
+        constraint_risk = (
+            candidate_constraints["above_upper_bound_rate"]
+            + candidate_constraints["below_lower_bound_rate"]
+        )
         metric_cols[-1].metric(
             label="Constraint risk",
-            value=_format_metric(
-                candidate_constraints["above_upper_bound_rate"]
-                + candidate_constraints["below_lower_bound_rate"]
-            ),
+            value=_format_metric(constraint_risk),
+            help="Fraction of time steps where state bounds are violated. Lower is better.",
         )
         if runtime is not None:
             st.markdown(
-                "<div class='dte-note'>Bands and candidate trajectories come from the blessed shared checkpoint. The recommendation line remains a lightweight search over the physical simulator so operators can compare the learned forecast against a simple actionable policy proposal.</div>",
+                "<div class='dte-note'>Uncertainty bands come from the shared checkpoint. "
+                "The recommendation line is a lightweight search over the physical simulator.</div>",
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                "<div class='dte-note'>Release artifacts were not available, so uncertainty bands come from a small simulator ensemble. This keeps the page usable while preserving the same scenario presets and target states.</div>",
+                "<div class='dte-note'>Release checkpoint unavailable — uncertainty bands come from a simulator ensemble.</div>",
                 unsafe_allow_html=True,
             )
-        if optimized_result is not None:
+        if stored_optimized is not None:
             st.markdown("<div class='dte-rule'></div>", unsafe_allow_html=True)
             st.markdown("**Recommended sequence**")
             summary_cols = st.columns(spec.control_dim + 1)
             for idx, control_name in enumerate(spec.control_names):
-                sequence = np.asarray(optimized_result["control_sequence"])[:, idx]
+                sequence = np.asarray(stored_optimized["control_sequence"])[:, idx]
                 summary_cols[idx].metric(
                     label=f"{control_name} end",
                     value=_format_metric(float(sequence[-1])),
                 )
             summary_cols[-1].metric(
                 label="Objective",
-                value=_format_metric(float(optimized_result["objective"])),
+                value=_format_metric(float(stored_optimized["objective"])),
+                help="Lower objective = closer to target state",
             )
 
 
 def _render_customer_story(snapshot: dict[str, Any]) -> None:
-    st.markdown("<div class='dte-section-title'>Customer Adaptation</div>", unsafe_allow_html=True)
+    st.markdown("<h2 class='dte-section-title'>Customer Adaptation</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='dte-section-copy'>This release includes a full onboarding and adaptation pass on an ingested CSTR-style historian export. The point of this view is not abstract architecture. It is proof that a shared checkpoint can be matched, adapted, and reported in a customer-facing workflow.</div>",
+        "<div class='dte-section-copy'>"
+        "This release includes a full onboarding and adaptation pass on an ingested historian export. "
+        "A shared checkpoint can be matched, adapted, and validated in a customer-facing workflow with minimal data."
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -661,19 +718,22 @@ def _render_customer_story(snapshot: dict[str, Any]) -> None:
 
 
 def _render_flowsheet_preview() -> None:
-    st.markdown("<div class='dte-section-title'>Flowsheet Preview</div>", unsafe_allow_html=True)
+    st.markdown("<h2 class='dte-section-title'>Flowsheet Preview</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='dte-section-copy'>V1 is unit-first. The flowsheet surface stays a preview here to show the graph direction without pretending that the plant section path is already the primary operator workflow.</div>",
+        "<div class='dte-section-copy'>"
+        "V1 is unit-first. The flowsheet surface shows the graph direction — "
+        "plant section modeling is the next frontier."
+        "</div>",
         unsafe_allow_html=True,
     )
     preview_specs = [
         (
-            "Exchanger -> Reactor -> Tank",
+            "Exchanger → Reactor → Tank",
             ["Heat exchanger", "CSTR", "Storage tank"],
             "A temperature-conditioned reactor train with a downstream buffer and purge.",
         ),
         (
-            "Reactor -> Separator -> Recycle",
+            "Reactor → Separator → Recycle",
             ["CSTR", "Separator", "Recycle loop"],
             "A recycle section where composition and thermal dynamics interact across the loop.",
         ),
@@ -681,12 +741,13 @@ def _render_flowsheet_preview() -> None:
     for title, nodes, description in preview_specs:
         st.markdown(f"**{title}**")
         st.markdown(f"<div class='dte-note'>{description}</div>", unsafe_allow_html=True)
-        flow_html = "<div class='dte-flow'>"
+        # Build flow grid with separate node/arrow divs so CSS grid handles layout
+        cells = []
         for index, node in enumerate(nodes):
-            flow_html += f"<div class='dte-node'><strong>{node}</strong></div>"
+            cells.append(f"<div class='dte-node'><strong>{node}</strong></div>")
             if index < len(nodes) - 1:
-                flow_html += "<div class='dte-arrow'>→</div>"
-        flow_html += "</div>"
+                cells.append("<div class='dte-arrow'>→</div>")
+        flow_html = "<div class='dte-flow'>" + "".join(cells) + "</div>"
         st.markdown(flow_html, unsafe_allow_html=True)
         st.markdown("<div class='dte-rule'></div>", unsafe_allow_html=True)
 
@@ -698,15 +759,24 @@ def main() -> None:
     snapshot = _load_release_snapshot()
     runtime = _load_release_runtime()
 
+    # Only animate hero on first load per session
+    hero_class = "dte-hero"
+    if not st.session_state.get("_hero_shown"):
+        hero_class += " dte-hero-first"
+        st.session_state["_hero_shown"] = True
+
+    n_systems = len(demo_page_cfg.get("demos", []))
+    system_count_chip = f"{n_systems} unit {'family' if n_systems == 1 else 'families'}"
+
     st.markdown(
         f"""
-        <section class="dte-hero">
+        <section class="{hero_class}">
           <div class="dte-kicker">V1 Foundation Stack</div>
           <h1 class="dte-title">{theme.get('product_name', 'Digital Twin Engine')}</h1>
           <div class="dte-summary">{theme.get('headline', '')}<br><br>{theme.get('summary', '')}</div>
           <div class="dte-chiprow">
             <div class="dte-chip">{snapshot.get('release_label', 'V1 milestone release')}</div>
-            <div class="dte-chip">3 unit families</div>
+            <div class="dte-chip">{system_count_chip}</div>
             <div class="dte-chip">Shared checkpoint</div>
             <div class="dte-chip">Customer adaptation proof</div>
           </div>
@@ -717,22 +787,33 @@ def main() -> None:
 
     _render_release_overview(snapshot, runtime)
 
-    st.markdown("<div class='dte-section-title'>Interactive Demos</div>", unsafe_allow_html=True)
+    st.markdown("<h2 class='dte-section-title'>Interactive Demos</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='dte-section-copy'>Each workspace starts from a fixed baseline policy, lets you select a disturbance regime and an alternate operating move, then shows how the shared foundation model expects the state trajectory and risk profile to change.</div>",
+        "<div class='dte-section-copy'>Each workspace starts from a fixed baseline policy. "
+        "Select a disturbance regime and an alternate operating move, then see how the model "
+        "forecasts the state trajectory and constraint risk profile.</div>",
         unsafe_allow_html=True,
     )
 
-    tab_labels = [demo["title"] for demo in demo_page_cfg.get("demos", [])]
-    tab_labels.extend(["Customer adaptation", "Flowsheet"])
-    tabs = st.tabs(tab_labels)
-    for tab, demo_cfg in zip(tabs[: len(demo_page_cfg.get("demos", []))], demo_page_cfg.get("demos", [])):
+    demos = demo_page_cfg.get("demos", [])
+    tab_labels = [demo["title"] for demo in demos]
+    extra_tabs = ["Customer Adaptation", "Flowsheet"]
+    all_labels = tab_labels + extra_tabs
+
+    if not all_labels:
+        st.info("No demos configured. Add entries to `configs/demo_app.yaml` to populate the tabs.")
+        return
+
+    tabs = st.tabs(all_labels)
+    for tab, demo_cfg in zip(tabs[: len(demos)], demos):
         with tab:
             _render_unit_demo(demo_cfg, runtime)
-    with tabs[-2]:
-        _render_customer_story(snapshot)
-    with tabs[-1]:
-        _render_flowsheet_preview()
+
+    if len(tabs) >= 2:
+        with tabs[-2]:
+            _render_customer_story(snapshot)
+        with tabs[-1]:
+            _render_flowsheet_preview()
 
 
 if __name__ == "__main__":

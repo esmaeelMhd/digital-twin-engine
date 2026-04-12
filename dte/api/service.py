@@ -43,7 +43,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Security, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 
 from dte.api.models import (
@@ -202,6 +204,33 @@ app = FastAPI(
     version="0.1.0",
     lifespan=_lifespan,
 )
+
+# ---------------------------------------------------------------------------
+# CORS — allow browser frontends to call this API
+# ---------------------------------------------------------------------------
+
+_cors_origins = os.environ.get("DTE_CORS_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _cors_origins],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Global exception handler — always returns ErrorResponse shape
+# ---------------------------------------------------------------------------
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    import traceback
+    detail = str(exc) if str(exc) else type(exc).__name__
+    return JSONResponse(
+        status_code=500,
+        content={"detail": detail, "code": "internal_error"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -526,11 +555,15 @@ def _ensure_disturbance_sequence(
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
 async def health():
-    """Return service health and loaded systems."""
+    """Return service health, loaded systems, and uptime."""
+    uptime_s = round(time.time() - _startup_time, 1) if _startup_time else None
+    models_ready = bool(_models or _universal_runtime)
     return HealthResponse(
-        status="ok",
+        status="ok" if models_ready else "degraded",
         loaded_systems=list(_specs.keys()),
         version="0.1.0",
+        uptime_seconds=uptime_s,
+        models_ready=models_ready,
     )
 
 
