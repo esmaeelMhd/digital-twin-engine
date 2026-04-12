@@ -73,8 +73,11 @@ def _inject_css() -> None:
           background:
             linear-gradient(135deg, rgba(33, 75, 69, 0.92), rgba(21, 33, 28, 0.96)),
             linear-gradient(135deg, rgba(176, 106, 43, 0.14), transparent 42%);
-          color: #f5f1e7;
+          color: #f5f1e7 !important;
           animation-fill-mode: forwards;
+        }
+        .dte-hero *, .dte-hero h1, .dte-hero h2, .dte-hero h3 {
+          color: #f5f1e7 !important;
         }
         .dte-hero-first {
           animation: heroRise 700ms ease-out forwards;

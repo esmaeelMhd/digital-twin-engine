@@ -52,6 +52,10 @@ def inject_theme() -> None:
           font-family: Georgia, "Times New Roman", serif;
           color: var(--dte-ink);
         }
+        /* Hero always stays light regardless of heading overrides */
+        .dte-hero, .dte-hero * {
+          color: #f5f1e7 !important;
+        }
         .dte-section-title {
           font-family: Georgia, "Times New Roman", serif;
           font-size: 1.75rem;
