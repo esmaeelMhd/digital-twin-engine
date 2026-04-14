@@ -62,6 +62,7 @@ The shared universal path also uses typed state groups declared in each system c
 
 ### Prerequisites
 - Python ≥ 3.10, < 3.15
+- Node.js `^20.19.0 || >=22.12.0` for the Vite frontend (`.nvmrc` is pinned to Node 24)
 - CUDA 12 (for GPU acceleration; CPU works too)
 
 ### Setup
@@ -218,6 +219,17 @@ uvicorn dte.api.service:app --host 0.0.0.0 --port 8000
 # Docker
 docker compose up api
 ```
+
+### 9. Launch the React Frontend
+
+```bash
+nvm use
+cd frontend
+npm install
+npm run dev
+```
+
+If `nvm` is not installed, upgrade Node manually to a supported release first. Node 18 is too old for the current Vite toolchain.
 
 Endpoints: `GET /health`, `POST /predict`, `POST /ensemble`, `POST /steady_state`.
 Optional API-key auth: set `DTE_API_KEY` in the environment.

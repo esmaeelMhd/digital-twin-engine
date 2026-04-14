@@ -5,6 +5,7 @@ This guide will walk you through the complete workflow from setup to dashboard d
 ## Prerequisites
 
 - Python 3.10-3.14
+- Node.js `^20.19.0 || >=22.12.0` for the Vite frontend
 - 8GB+ GPU (RTX 4070 or similar recommended)
 - ~10GB free disk space for data
 
@@ -166,12 +167,15 @@ uvicorn dte.api.service:app --host 0.0.0.0 --port 8000
 Then start the React/Vite frontend:
 
 ```bash
+nvm use
 cd frontend
 npm install
 npm run dev
 ```
 
 Opens in browser at `http://localhost:5173`
+
+If `nvm use` fails because `nvm` is not installed, upgrade Node manually first. `node v18.x` is not supported by the current frontend toolchain.
 
 ### 7. Launch Dashboard (Instant)
 
