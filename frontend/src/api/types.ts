@@ -160,6 +160,7 @@ export type DemoOptimizeControlRequest = {
   system: string;
   initial_state: number[];
   disturbances: number[][];
+  reference_controls?: number[][];
   target_state: number[];
   tracked_state_names: string[];
   dt: number;

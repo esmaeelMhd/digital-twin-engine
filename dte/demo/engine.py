@@ -792,6 +792,7 @@ def optimize_control_sequence(
     *,
     initial_state: np.ndarray,
     disturbances: np.ndarray,
+    reference_controls: np.ndarray | None = None,
     dt: float,
     target_state: np.ndarray,
     tracked_state_names: list[str] | None = None,
@@ -806,18 +807,13 @@ def optimize_control_sequence(
     tracked_state_names = tracked_state_names or list(spec.state_names)
     tracked_indices = [spec.state_names.index(name) for name in tracked_state_names]
     target_state = np.asarray(target_state, dtype=np.float32)
+    reference_controls = (
+        None
+        if reference_controls is None
+        else _clip_controls(spec, np.asarray(reference_controls, dtype=np.float32))
+    )
 
     rng = np.random.default_rng(seed)
-    best_cost = math.inf
-    best_controls = default_control_sequence(spec, n_steps)
-    best_states = simulate_open_loop(
-        spec,
-        simulator,
-        np.asarray(initial_state, dtype=np.float32),
-        best_controls,
-        disturbances,
-        dt,
-    )
     tracked_scale = np.maximum(
         np.maximum(
             np.abs(np.asarray(initial_state, dtype=np.float32)[tracked_indices]),
@@ -828,17 +824,9 @@ def optimize_control_sequence(
     tracked_guard = 20.0 * tracked_scale
     terminal_guard = 25.0 * tracked_scale
     huge_cost = float(1e12)
+    local_span = 0.15 * (upper - lower)
 
-    for _ in range(max(int(n_candidates), 1)):
-        start = rng.uniform(lower, upper).astype(np.float32)
-        end = rng.uniform(lower, upper).astype(np.float32)
-        controls = np.stack(
-            [
-                np.linspace(start[idx], end[idx], n_steps, dtype=np.float32)
-                for idx in range(spec.control_dim)
-            ],
-            axis=-1,
-        )
+    def _evaluate_controls(controls: np.ndarray) -> tuple[float, np.ndarray]:
         states = simulate_open_loop(
             spec,
             simulator,
@@ -850,11 +838,11 @@ def optimize_control_sequence(
         tracked_states = states[:, tracked_indices]
         terminal_state = states[-1, tracked_indices]
         if not np.all(np.isfinite(tracked_states)) or not np.all(np.isfinite(terminal_state)):
-            continue
+            return huge_cost, states
         if np.any(np.abs(tracked_states) > tracked_guard[None, :]):
-            continue
+            return huge_cost, states
         if np.any(np.abs(terminal_state) > terminal_guard):
-            continue
+            return huge_cost, states
         tracked_error = states[:, tracked_indices] - target_state[tracked_indices][None, :]
         terminal_error = states[-1, tracked_indices] - target_state[tracked_indices]
         smoothness = np.diff(controls, axis=0) if n_steps > 1 else np.zeros_like(controls)
@@ -866,7 +854,43 @@ def optimize_control_sequence(
             + 0.05 * float(np.mean(smoothness ** 2))
         )
         if not np.isfinite(cost):
-            cost = huge_cost
+            return huge_cost, states
+        return cost, states
+
+    best_controls = (
+        reference_controls.copy()
+        if reference_controls is not None
+        else default_control_sequence(spec, n_steps)
+    )
+    best_cost, best_states = _evaluate_controls(best_controls)
+    if not np.isfinite(best_cost):
+        best_cost = huge_cost
+
+    for _ in range(max(int(n_candidates), 1)):
+        if reference_controls is not None and rng.random() < 0.7:
+            reference_start = reference_controls[0]
+            reference_end = reference_controls[-1]
+            start = np.clip(
+                reference_start + rng.normal(loc=0.0, scale=local_span, size=spec.control_dim),
+                lower,
+                upper,
+            ).astype(np.float32)
+            end = np.clip(
+                reference_end + rng.normal(loc=0.0, scale=local_span, size=spec.control_dim),
+                lower,
+                upper,
+            ).astype(np.float32)
+        else:
+            start = rng.uniform(lower, upper).astype(np.float32)
+            end = rng.uniform(lower, upper).astype(np.float32)
+        controls = np.stack(
+            [
+                np.linspace(start[idx], end[idx], n_steps, dtype=np.float32)
+                for idx in range(spec.control_dim)
+            ],
+            axis=-1,
+        )
+        cost, states = _evaluate_controls(controls)
         if cost < best_cost:
             best_cost = cost
             best_controls = controls

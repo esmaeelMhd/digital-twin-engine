@@ -206,6 +206,7 @@ export function buildScenarioPayloads(demo: DemoDefinition, draft: ScenarioDraft
       system: demo.system,
       initial_state: initialState,
       disturbances,
+      reference_controls: candidateControls,
       target_state: targetState,
       tracked_state_names: demo.highlight_states,
       dt: demo.dt,

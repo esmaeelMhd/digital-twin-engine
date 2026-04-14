@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 
 import { compareScenarios, optimizeControl } from '../../api/client';
-import type { DemoDefinition, NumericDict } from '../../api/types';
+import type { DemoCompareScenariosRequest, DemoDefinition, NumericDict } from '../../api/types';
 import {
   buildScenarioPayloads,
   cloneDraft,
@@ -16,6 +16,7 @@ export function useDemoScenario(demo: DemoDefinition) {
   const [optimizedResult, setOptimizedResult] = useState<Awaited<
     ReturnType<typeof optimizeControl>
   > | null>(null);
+  const appliedPayloads = buildScenarioPayloads(demo, appliedDraft);
 
   const compareMutation = useMutation({
     mutationFn: compareScenarios,
@@ -36,8 +37,7 @@ export function useDemoScenario(demo: DemoDefinition) {
   }, [demo]);
 
   useEffect(() => {
-    const payloads = buildScenarioPayloads(demo, appliedDraft);
-    compareMutation.mutate(payloads.compareRequest);
+    compareMutation.mutate(appliedPayloads.compareRequest);
     // compareMutation is stable enough for this effect in practice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demo, appliedDraft]);
@@ -88,6 +88,7 @@ export function useDemoScenario(demo: DemoDefinition) {
   return {
     draft,
     comparison: compareMutation.data,
+    comparisonRequest: appliedPayloads.compareRequest as DemoCompareScenariosRequest,
     comparisonError: compareMutation.error,
     comparisonPending: compareMutation.isPending,
     optimizedResult,

@@ -137,6 +137,34 @@
   font-size: 1.5rem;
 }
 
+.chartStack {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.chartSection {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.chartSectionHeader {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.chartSectionTitle {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+}
+
+.chartSectionBody {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
 @media (max-width: 1080px) {
   .workspace {
     grid-template-columns: 1fr;

@@ -59,7 +59,7 @@ def test_demo_page_exposes_browser_bootstrap_payload():
         runtime_loaded=True,
     )
 
-    assert page["release"]["release_label"] == "V1 milestone release"
+    assert page["release"]["release_label"] == "universal_v1 release candidate"
     assert page["release"]["runtime_loaded"] is True
     assert len(page["demos"]) == 3
     first_demo = page["demos"][0]
@@ -163,6 +163,7 @@ def test_compare_and_optimize_control_sequences():
         simulator,
         initial_state=np.asarray(spec.default_initial_state, dtype=np.float32),
         disturbances=disturbances,
+        reference_controls=candidate_controls,
         dt=0.1,
         target_state=target_state,
         tracked_state_names=["T_hot", "T_cold"],
@@ -175,6 +176,36 @@ def test_compare_and_optimize_control_sequences():
     assert "final_state_delta_norm" in comparison["summary"]
     assert optimized["control_sequence"].shape == (12, spec.control_dim)
     assert optimized["predicted_states"].shape == (12, spec.state_dim)
+    assert np.isfinite(optimized["objective"])
+
+
+def test_optimizer_preserves_reference_sequence_shape_and_respects_bounds():
+    spec, simulator, _ = _load_system("two_tank")
+    disturbances = default_disturbance_sequence(spec, 16)
+    reference_controls = np.tile(
+        np.asarray([0.9, 0.75], dtype=np.float32),
+        (16, 1),
+    )
+    target_state = np.asarray([1.25, 1.05], dtype=np.float32)
+
+    optimized = optimize_control_sequence(
+        spec,
+        simulator,
+        initial_state=np.asarray(spec.default_initial_state, dtype=np.float32),
+        disturbances=disturbances,
+        reference_controls=reference_controls,
+        dt=0.1,
+        target_state=target_state,
+        tracked_state_names=["h1", "h2"],
+        n_candidates=10,
+        seed=9,
+    )
+
+    lower = np.asarray([spec.control_ranges[name][0] for name in spec.control_names], dtype=np.float32)
+    upper = np.asarray([spec.control_ranges[name][1] for name in spec.control_names], dtype=np.float32)
+    assert optimized["control_sequence"].shape == reference_controls.shape
+    assert np.all(optimized["control_sequence"] >= lower[None, :] - 1e-6)
+    assert np.all(optimized["control_sequence"] <= upper[None, :] + 1e-6)
 
 
 def test_cstr_optimizer_rejects_unstable_candidates_without_runtime_warnings():

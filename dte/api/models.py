@@ -343,6 +343,7 @@ class DemoOptimizeControlRequest(BaseModel):
     system: str
     initial_state: List[float]
     disturbances: List[List[float]]
+    reference_controls: Optional[List[List[float]]] = None
     target_state: List[float]
     tracked_state_names: Optional[List[str]] = None
     dt: float = Field(0.1, gt=0)

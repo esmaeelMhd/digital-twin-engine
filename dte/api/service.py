@@ -693,11 +693,23 @@ async def demo_optimize_control(req: DemoOptimizeControlRequest):
                 f"disturbances must have shape [T, {spec.disturbance_dim}] for '{req.system}'."
             ),
         )
+    reference_controls = None
+    if req.reference_controls is not None:
+        reference_controls = _validate_control_sequence(spec, req.reference_controls)
+        if reference_controls.shape[0] != disturbances.shape[0]:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"reference_controls must have shape [T, {spec.control_dim}] with the same "
+                    f"T as disturbances for '{req.system}'."
+                ),
+            )
     result = optimize_control_sequence(
         spec,
         simulator,
         initial_state=_validate_state_vector(spec, req.initial_state),
         disturbances=disturbances,
+        reference_controls=reference_controls,
         dt=float(req.dt),
         target_state=_validate_state_vector(spec, req.target_state),
         tracked_state_names=req.tracked_state_names,

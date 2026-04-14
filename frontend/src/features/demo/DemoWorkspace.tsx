@@ -20,6 +20,7 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
   const {
     draft,
     comparison,
+    comparisonRequest,
     comparisonError,
     comparisonPending,
     optimizedResult,
@@ -190,6 +191,7 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
               <TrajectoryChart
                 demo={demo}
                 comparison={comparison}
+                comparisonRequest={comparisonRequest}
                 optimizedResult={optimizedResult}
               />
             </Suspense>
