@@ -1,3 +1,5 @@
+import clsx from 'clsx';
+import { Play, Target } from 'lucide-react';
 import { lazy, Suspense } from 'react';
 import * as Accordion from '@radix-ui/react-accordion';
 
@@ -50,7 +52,7 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
 
   return (
     <div className={styles.workspace}>
-      <aside className={`${styles.controlPanel} glass-panel`}>
+      <aside className={clsx(styles.controlPanel, 'glass-panel')}>
         <div>
           <h3 className={styles.panelTitle}>{demo.title}</h3>
           <p className={styles.panelBody}>{demo.description}</p>
@@ -171,16 +173,18 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
         </div>
 
         <div className={styles.buttonRow}>
-          <button className="button-primary" type="button" onClick={runScenario}>
+          <button className="button-primary" type="button" onClick={() => void runScenario()}>
+            <Play size={16} aria-hidden="true" />
             {comparisonPending ? 'Running…' : demo.run_button_label}
           </button>
-          <button className="button-secondary" type="button" onClick={optimizeScenario}>
+          <button className="button-secondary" type="button" onClick={() => void optimizeScenario()}>
+            <Target size={16} aria-hidden="true" />
             {optimizationPending ? 'Optimising…' : demo.optimize_button_label}
           </button>
         </div>
       </aside>
 
-      <section className={`${styles.visualPanel} glass-panel`}>
+      <section className={clsx(styles.visualPanel, 'glass-panel')}>
         {comparisonError instanceof Error ? (
           <div className="status-note status-note--warning">{comparisonError.message}</div>
         ) : null}

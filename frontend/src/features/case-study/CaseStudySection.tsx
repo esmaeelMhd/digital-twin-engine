@@ -1,3 +1,10 @@
+import {
+  Activity,
+  BadgeCheck,
+  FlaskConical,
+  Target,
+  TrendingUp,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 import type { DemoReleaseSnapshot } from '../../api/types';
@@ -22,20 +29,31 @@ export function CaseStudySection({ release }: CaseStudySectionProps) {
       </div>
 
       <div className="metric-grid">
-        <MetricCard label="Status" value={titleCase(release.customer_status)} />
+        <MetricCard
+          label="Status"
+          value={titleCase(release.customer_status)}
+          icon={<BadgeCheck size={16} aria-hidden="true" />}
+        />
         <MetricCard
           label="Best Template"
           value={titleCase(release.customer_best_unit_template)}
+          icon={<FlaskConical size={16} aria-hidden="true" />}
         />
         <MetricCard
           label="Best Validation Loss"
           value={formatMetric(release.customer_best_val_loss)}
+          icon={<Target size={16} aria-hidden="true" />}
         />
         <MetricCard
           label="Forecast RMSE"
           value={formatMetric(release.customer_forecast_rmse)}
+          icon={<TrendingUp size={16} aria-hidden="true" />}
         />
-        <MetricCard label="Rollout RMSE" value={formatMetric(release.customer_rollout_rmse)} />
+        <MetricCard
+          label="Rollout RMSE"
+          value={formatMetric(release.customer_rollout_rmse)}
+          icon={<Activity size={16} aria-hidden="true" />}
+        />
       </div>
 
       {release.customer_report_markdown ? (

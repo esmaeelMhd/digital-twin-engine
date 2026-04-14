@@ -73,8 +73,19 @@
   backdrop-filter: blur(18px);
 }
 
+.statHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.statIcon {
+  color: var(--moss);
+}
+
 .statValue {
-  margin: 0 0 0.35rem;
+  margin: 0.6rem 0 0;
   color: var(--ink);
   font-family: var(--font-serif);
   font-size: clamp(1.8rem, 3vw, 2.4rem);
@@ -175,6 +186,10 @@
   margin: 0 0 1.5rem;
   color: var(--text-muted);
   line-height: 1.7;
+}
+
+.footerButton {
+  gap: 0.55rem;
 }
 
 @media (max-width: 960px) {

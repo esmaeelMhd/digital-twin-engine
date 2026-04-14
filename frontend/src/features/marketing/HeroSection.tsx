@@ -1,4 +1,13 @@
 import { useEffect, useRef } from 'react';
+import {
+  Activity,
+  Cpu,
+  Factory,
+  FlaskConical,
+  Gauge,
+  Orbit,
+  ShieldCheck,
+} from 'lucide-react';
 
 import type { DemoPageResponse } from '../../api/types';
 
@@ -9,13 +18,18 @@ type HeroSectionProps = {
 };
 
 const stats = [
-  { value: '10+', label: 'Industries' },
-  { value: '3', label: 'Proven Systems' },
-  { value: '< 5 min', label: 'Adaptation Time' },
-  { value: '24/7', label: 'Real-Time API' },
+  { value: '10+', label: 'Industries', icon: Factory },
+  { value: '3', label: 'Proven Systems', icon: FlaskConical },
+  { value: '< 5 min', label: 'Adaptation Time', icon: Gauge },
+  { value: '24/7', label: 'Real-Time API', icon: ShieldCheck },
 ];
 
-const chips = ['Neural SDE', 'Few-Shot Transfer', 'Real-Time API', 'Uncertainty Quantified'];
+const chips = [
+  { label: 'Neural SDE', icon: Orbit },
+  { label: 'Few-Shot Transfer', icon: Cpu },
+  { label: 'Live Monitoring', icon: Activity },
+  { label: 'Uncertainty Quantified', icon: ShieldCheck },
+];
 
 export function HeroSection({ page }: HeroSectionProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -122,8 +136,9 @@ export function HeroSection({ page }: HeroSectionProps) {
           </p>
           <div className={styles.heroChips}>
             {chips.map((chip) => (
-              <span key={chip} className="pill">
-                {chip}
+              <span key={chip.label} className="pill">
+                <chip.icon size={14} aria-hidden="true" />
+                {chip.label}
               </span>
             ))}
           </div>
@@ -134,8 +149,11 @@ export function HeroSection({ page }: HeroSectionProps) {
         <div className={styles.statsGrid}>
           {stats.map((item) => (
             <article key={item.label} className={styles.statCard}>
+              <div className={styles.statHead}>
+                <span className={styles.statLabel}>{item.label}</span>
+                <item.icon className={styles.statIcon} size={18} aria-hidden="true" />
+              </div>
               <p className={styles.statValue}>{item.value}</p>
-              <p className={styles.statLabel}>{item.label}</p>
             </article>
           ))}
         </div>

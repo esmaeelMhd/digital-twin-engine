@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
 
 import { compareScenarios, optimizeControl } from '../../api/client';
-import type { DemoCompareScenariosRequest, DemoDefinition, NumericDict } from '../../api/types';
+import type { DemoCompareScenariosRequest, DemoDefinition } from '../../api/types';
 import {
   buildScenarioPayloads,
   cloneDraft,
@@ -34,13 +35,10 @@ export function useDemoScenario(demo: DemoDefinition) {
     setDraft(initialDraft);
     setAppliedDraft(initialDraft);
     setOptimizedResult(null);
-  }, [demo]);
-
-  useEffect(() => {
-    compareMutation.mutate(appliedPayloads.compareRequest);
+    compareMutation.mutate(buildScenarioPayloads(demo, initialDraft).compareRequest);
     // compareMutation is stable enough for this effect in practice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demo, appliedDraft]);
+  }, [demo]);
 
   const setSelectedDisturbanceId = (selectedDisturbanceId: string) => {
     setDraft((current) => ({ ...current, selectedDisturbanceId }));
@@ -70,14 +68,27 @@ export function useDemoScenario(demo: DemoDefinition) {
     }));
   };
 
-  const runScenario = () => {
+  const runScenario = async () => {
     setOptimizedResult(null);
-    setAppliedDraft(cloneDraft(draft));
+    const nextDraft = cloneDraft(draft);
+    const payloads = buildScenarioPayloads(demo, nextDraft);
+    setAppliedDraft(nextDraft);
+    await toast.promise(compareMutation.mutateAsync(payloads.compareRequest), {
+      loading: `Running ${demo.title} scenario…`,
+      success: 'Forecast updated',
+      error: (error) =>
+        error instanceof Error ? error.message : 'Scenario comparison failed.',
+    });
   };
 
-  const optimizeScenario = () => {
+  const optimizeScenario = async () => {
     const payloads = buildScenarioPayloads(demo, draft);
-    optimizeMutation.mutate(payloads.optimizeRequest);
+    await toast.promise(optimizeMutation.mutateAsync(payloads.optimizeRequest), {
+      loading: `Searching for a stabilizing ${demo.title} sequence…`,
+      success: 'Recommended control sequence ready',
+      error: (error) =>
+        error instanceof Error ? error.message : 'Optimization failed.',
+    });
   };
 
   const controlAdjustmentRange = (ranges: Record<string, [number, number]>, name: string) => {

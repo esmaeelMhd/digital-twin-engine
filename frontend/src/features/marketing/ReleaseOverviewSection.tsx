@@ -1,3 +1,10 @@
+import {
+  BadgeCheck,
+  ChartSpline,
+  FlaskConical,
+  TrendingUp,
+} from 'lucide-react';
+
 import { MetricCard } from '../../components/MetricCard';
 import { Section } from '../../components/Section';
 import type { DemoReleaseSnapshot } from '../../api/types';
@@ -16,15 +23,25 @@ export function ReleaseOverviewSection({ release }: ReleaseOverviewSectionProps)
       subtitle="The shared checkpoint has been evaluated across multiple process families and a customer adaptation pilot."
     >
       <div className={styles.releaseGrid}>
-        <MetricCard label="Release Gate" value={titleCase(release.milestone_status)} />
-        <MetricCard label="Best Validation Loss" value={formatMetric(release.train_best_val_loss)} />
+        <MetricCard
+          label="Release Gate"
+          value={titleCase(release.milestone_status)}
+          icon={<BadgeCheck size={16} aria-hidden="true" />}
+        />
+        <MetricCard
+          label="Best Validation Loss"
+          value={formatMetric(release.train_best_val_loss)}
+          icon={<TrendingUp size={16} aria-hidden="true" />}
+        />
         <MetricCard
           label={release.eval_metric_name ?? 'Eval Metric'}
           value={formatMetric(release.eval_metric_value)}
+          icon={<ChartSpline size={16} aria-hidden="true" />}
         />
         <MetricCard
           label="Customer Adaptation"
           value={formatMetric(release.customer_best_val_loss)}
+          icon={<FlaskConical size={16} aria-hidden="true" />}
         />
       </div>
 
