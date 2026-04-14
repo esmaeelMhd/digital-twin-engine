@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Digital Twin Engine – compose stack
 #
 # Services:
@@ -33,9 +31,10 @@ services:
       - "8000:8000"
     environment:
       # Override these via a .env file or environment variables on the host
-      - DTE_SYSTEM_CONFIG=${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml}
+      - DTE_SYSTEM_CONFIG=${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml,configs/heat_exchanger_default.yaml,configs/two_tank_default.yaml}
       - DTE_MODEL_PATH=${DTE_MODEL_PATH:-outputs/best_model.eqx}
       - DTE_TRAINING_CONFIG=${DTE_TRAINING_CONFIG:-configs/training_default.yaml}
+      - DTE_DEMO_CONFIG=${DTE_DEMO_CONFIG:-configs/demo_app.yaml}
       # Uncomment to enable API key authentication:
       # - DTE_API_KEY=${DTE_API_KEY:-changeme}
       - JAX_PLATFORMS=cpu
@@ -90,7 +89,8 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - DTE_SYSTEM_CONFIG=${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml}
+      - DTE_SYSTEM_CONFIG=${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml,configs/heat_exchanger_default.yaml,configs/two_tank_default.yaml}
+      - DTE_DEMO_CONFIG=${DTE_DEMO_CONFIG:-configs/demo_app.yaml}
       - JAX_PLATFORMS=cpu
       # Basic auth for Streamlit (optional – set STREAMLIT_AUTH_PASSWORD)
       - STREAMLIT_AUTH_PASSWORD=${STREAMLIT_AUTH_PASSWORD:-}
