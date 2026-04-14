@@ -4,6 +4,7 @@ version: "3.9"
 #
 # Services:
 #   api        – FastAPI inference service (CPU)
+#   frontend   – Browser marketing/demo frontend
 #   dashboard  – Streamlit monitoring dashboard
 #
 # Optional GPU override: add the `deploy` block to the api service
@@ -11,6 +12,7 @@ version: "3.9"
 #
 # Usage:
 #   docker compose up                       # start API + dashboard
+#   docker compose up api frontend          # start API + browser demo
 #   docker compose up api                   # start only the API
 #   docker compose --profile tools up       # also start data-gen / training
 #
@@ -52,6 +54,28 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.dte-api.rule=Host(`api.localhost`)"
+
+  # ------------------------------------------------------------------
+  # Browser frontend
+  # ------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      target: frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        VITE_DTE_API_KEY: ${VITE_DTE_API_KEY:-}
+    image: dte-frontend:latest
+    container_name: dte-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dte-frontend.rule=Host(`demo.localhost`)"
 
   # ------------------------------------------------------------------
   # Streamlit dashboard

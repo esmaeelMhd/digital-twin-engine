@@ -155,7 +155,25 @@ python scripts/run_mpc.py \
 
 **Expected:** MPC should achieve 20-40% improvement over PID
 
-### 6. Launch Dashboard (Instant)
+### 6. Launch Browser Demo Frontend
+
+Start the FastAPI service first:
+
+```bash
+uvicorn dte.api.service:app --host 0.0.0.0 --port 8000
+```
+
+Then start the React/Vite frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Opens in browser at `http://localhost:5173`
+
+### 7. Launch Dashboard (Instant)
 
 Start the interactive Streamlit demo:
 

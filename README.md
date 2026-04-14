@@ -230,7 +230,18 @@ streamlit run app/dashboard.py
 
 Optional password protection: set `STREAMLIT_AUTH_PASSWORD` in the environment.
 
-### 10. Autoresearch Loop
+### 10. Launch the Browser Demo Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The browser frontend expects the API on `http://localhost:8000` by default.
+Override that with `frontend/.env` if needed.
+
+### 11. Autoresearch Loop
 
 ```bash
 python scripts/autoresearch.py \
@@ -297,7 +308,8 @@ digital-twin-engine/
 │   ├── dashboard.py          # Streamlit dashboard (with optional auth)
 │   └── agent_dashboard.py
 ├── Dockerfile                # Multi-stage: api + train targets
-├── docker-compose.yml        # api + dashboard + optional tools profile
+├── docker-compose.yml        # api + frontend + dashboard + optional tools profile
+├── frontend/                # React/Vite browser demo frontend
 ├── tests/
 └── notebooks/
 ```
@@ -368,7 +380,7 @@ docker run -p 8000:8000 \
   -v $(pwd)/outputs:/app/outputs \
   dte-api
 
-# Full stack (API + dashboard)
+# Full stack (API + frontend + dashboard)
 docker compose up
 
 # With training tools

@@ -54,6 +54,7 @@ from dte.api.models import (
     DemoCompareScenariosResponse,
     DemoOptimizeControlRequest,
     DemoOptimizeControlResponse,
+    DemoPageResponse,
     DemoRolloutRequest,
     DemoRolloutResponse,
     DemoSimulateRequest,
@@ -71,6 +72,7 @@ from dte.demo.engine import (
     UniversalDemoRuntime,
     compare_scenarios,
     constraint_summary,
+    demo_page_from_config,
     default_disturbance_sequence,
     demo_catalog_from_config,
     load_demo_config,
@@ -582,6 +584,26 @@ async def demo_catalog():
     return DemoCatalogResponse.model_validate(catalog)
 
 
+@app.get(
+    "/demo/page",
+    response_model=DemoPageResponse,
+    tags=["demo"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def demo_page():
+    """Return the full browser bootstrap payload for the marketing demo frontend."""
+
+    demo_config_path = os.environ.get("DTE_DEMO_CONFIG", "configs/demo_app.yaml")
+    config = load_demo_config(demo_config_path)
+    payload = demo_page_from_config(
+        config,
+        _system_configs,
+        config_path=demo_config_path,
+        runtime_loaded=_universal_runtime is not None,
+    )
+    return DemoPageResponse.model_validate(payload)
+
+
 @app.post(
     "/demo/simulate",
     response_model=DemoSimulateResponse,
@@ -734,6 +756,9 @@ async def demo_compare_scenarios(req: DemoCompareScenariosRequest):
     candidate = result["candidate"]
     return DemoCompareScenariosResponse(
         system=req.system,
+        times=np.asarray(candidate["times"]).tolist(),
+        baseline_source=str(baseline["source"]),
+        candidate_source=str(candidate["source"]),
         state_names=spec.state_names,
         baseline_mean=np.asarray(baseline["mean"]).tolist(),
         candidate_mean=np.asarray(candidate["mean"]).tolist(),

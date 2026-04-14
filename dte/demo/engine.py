@@ -78,6 +78,12 @@ def _load_json_if_exists(path: Path | None) -> dict[str, Any] | None:
         return None
 
 
+def _load_text_if_exists(path: Path | None) -> str | None:
+    if path is None or not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
 def _safe_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -149,6 +155,7 @@ def load_demo_release_snapshot(
     eval_summary = _load_json_if_exists(eval_summary_path)
     milestone_summary = _load_json_if_exists(milestone_summary_path)
     customer_summary = _load_json_if_exists(customer_summary_path)
+    customer_report_markdown = _load_text_if_exists(customer_report_path)
 
     per_system_total_loss: dict[str, float] = {}
     for system_name, metrics in (eval_summary or {}).get("per_system_val_losses", {}).items():
@@ -179,6 +186,7 @@ def load_demo_release_snapshot(
         "customer_rollout_rmse": _safe_float((customer_summary or {}).get("rollout_rmse")),
         "customer_report_path": str(customer_report_path) if customer_report_path is not None else None,
         "customer_report_exists": bool(customer_report_path and customer_report_path.exists()),
+        "customer_report_markdown": customer_report_markdown,
     }
 
 
@@ -907,11 +915,160 @@ def flowsheet_preview_catalog() -> list[dict[str, Any]]:
     return previews
 
 
-def demo_catalog_from_config(
+def _serialize_profile(profile: dict[str, Any] | None) -> dict[str, Any] | None:
+    if profile is None:
+        return None
+    return {
+        key: value
+        for key, value in profile.items()
+        if value is not None
+    }
+
+
+def _serialize_preset(preset: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(preset["id"]),
+        "title": str(preset.get("title", preset["id"])),
+        "description": str(preset.get("description", "")),
+        "profile": _serialize_profile(preset.get("profile")),
+    }
+
+
+def _serialize_channel(channel: Any) -> dict[str, Any]:
+    lower = getattr(channel, "lower_bound", None)
+    upper = getattr(channel, "upper_bound", None)
+    return {
+        "name": str(getattr(channel, "name", "")),
+        "lower_bound": None if lower is None else float(lower),
+        "upper_bound": None if upper is None else float(upper),
+        "unit": getattr(channel, "unit", None),
+        "description": getattr(channel, "description", None),
+        "role": getattr(channel, "role", None),
+    }
+
+
+def _named_state_dict(
+    names: list[str],
+    base_vector: list[float],
+    overrides: dict[str, Any] | None,
+) -> dict[str, float]:
+    vector = _apply_named_updates(names, np.asarray(base_vector, dtype=np.float32), overrides)
+    return {
+        name: float(vector[idx])
+        for idx, name in enumerate(names)
+    }
+
+
+def serialize_system_spec(spec: ProcessUnitSpec) -> dict[str, Any]:
+    """Return frontend-friendly metadata for one registered system."""
+
+    return {
+        "name": spec.name,
+        "state_dim": int(spec.state_dim),
+        "control_dim": int(spec.control_dim),
+        "disturbance_dim": int(spec.disturbance_dim),
+        "param_dim": int(spec.param_dim),
+        "state_names": list(spec.state_names),
+        "control_names": list(spec.control_names),
+        "disturbance_names": list(spec.disturbance_names),
+        "default_initial_state": [float(value) for value in spec.default_initial_state],
+        "default_nominal_disturbance": [
+            float(value) for value in spec.default_nominal_disturbance
+        ],
+        "control_ranges": {
+            name: [float(bounds[0]), float(bounds[1])]
+            for name, bounds in spec.control_ranges.items()
+        },
+        "disturbance_ranges": {
+            name: [float(bounds[0]), float(bounds[1])]
+            for name, bounds in spec.disturbance_ranges.items()
+        },
+        "state_channels": [
+            _serialize_channel(channel)
+            for channel in getattr(spec, "state_channels", [])
+        ],
+        "control_channels": [
+            _serialize_channel(channel)
+            for channel in getattr(spec, "control_channels", [])
+        ],
+        "disturbance_channels": [
+            _serialize_channel(channel)
+            for channel in getattr(spec, "disturbance_channels", [])
+        ],
+    }
+
+
+def serialize_demo_definition(
+    demo: dict[str, Any],
+    spec: ProcessUnitSpec,
+) -> dict[str, Any]:
+    """Return the full browser-facing definition for one demo workspace."""
+
+    baseline_profile = demo.get("baseline_control_profile")
+    disturbance_presets = demo.get("disturbance_presets") or [
+        {
+            "id": "nominal",
+            "title": "Nominal operation",
+            "description": "Default disturbance path from the system specification.",
+            "profile": None,
+        }
+    ]
+    candidate_profiles = demo.get("candidate_profiles") or [
+        {
+            "id": "baseline",
+            "title": "Baseline policy",
+            "description": "No alternate candidate profile configured.",
+            "profile": baseline_profile,
+        }
+    ]
+
+    return {
+        "id": str(demo["id"]),
+        "title": str(demo["title"]),
+        "system": str(demo["system"]),
+        "kind": str(demo.get("kind", "unit_demo")),
+        "description": str(demo.get("description", "")),
+        "operator_goal": demo.get("operator_goal"),
+        "dt": float(demo.get("dt", 0.1)),
+        "n_steps": int(demo.get("n_steps", 25)),
+        "highlight_states": list(demo.get("highlight_states", spec.state_names[:2])),
+        "target_state": _named_state_dict(
+            list(spec.state_names),
+            spec.default_initial_state,
+            demo.get("target_state"),
+        ),
+        "initial_state": _named_state_dict(
+            list(spec.state_names),
+            spec.default_initial_state,
+            demo.get("initial_state"),
+        ),
+        "baseline_control_profile": _serialize_profile(baseline_profile),
+        "disturbance_presets": [
+            _serialize_preset(preset) for preset in disturbance_presets
+        ],
+        "candidate_profiles": [
+            _serialize_preset(profile) for profile in candidate_profiles
+        ],
+        "optimization": {
+            "n_candidates": int(demo.get("optimization", {}).get("n_candidates", 48)),
+            "seed": int(demo.get("optimization", {}).get("seed", 0)),
+        },
+        "run_button_label": str(demo.get("run_button_label", "Run Scenario")),
+        "optimize_button_label": str(
+            demo.get("optimize_button_label", "Recommend Control Sequence")
+        ),
+        "system_spec": serialize_system_spec(spec),
+    }
+
+
+def demo_page_from_config(
     config: dict[str, Any],
     system_configs: dict[str, dict[str, Any]],
+    *,
+    config_path: str | Path | None = None,
+    runtime_loaded: bool = False,
 ) -> dict[str, Any]:
-    """Build a JSON-friendly demo catalog from config and loaded specs."""
+    """Build the full browser bootstrap payload from demo config and specs."""
 
     demos = []
     for demo in config.get("demos", []):
@@ -920,25 +1077,50 @@ def demo_catalog_from_config(
         if system_config is None:
             continue
         spec = get_system_spec(system_config)
-        demos.append(
-            {
-                "id": demo["id"],
-                "title": demo["title"],
-                "system": system_name,
-                "kind": demo.get("kind", "unit_demo"),
-                "description": demo.get("description", ""),
-                "controls": list(spec.control_names),
-                "disturbances": list(spec.disturbance_names),
-                "states": list(spec.state_names),
-                "dt": float(demo.get("dt", 0.1)),
-                "n_steps": int(demo.get("n_steps", 25)),
-                "highlight_states": list(demo.get("highlight_states", spec.state_names[:2])),
-            }
-        )
+        demos.append(serialize_demo_definition(demo, spec))
+
+    release = load_demo_release_snapshot(config, config_path=config_path)
+    release["runtime_loaded"] = bool(runtime_loaded)
     return {
         "product_name": config.get("theme", {}).get("product_name", "Digital Twin Engine"),
-        "headline": config.get("theme", {}).get("headline", "Industrial dynamics you can steer."),
+        "headline": config.get("theme", {}).get(
+            "headline",
+            "Industrial dynamics you can steer.",
+        ),
         "summary": config.get("theme", {}).get("summary", ""),
+        "release": release,
         "demos": demos,
         "flowsheets": flowsheet_preview_catalog(),
+    }
+
+
+def demo_catalog_from_config(
+    config: dict[str, Any],
+    system_configs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a JSON-friendly demo catalog from config and loaded specs."""
+
+    page = demo_page_from_config(config, system_configs)
+    demos = [
+        {
+            "id": demo["id"],
+            "title": demo["title"],
+            "system": demo["system"],
+            "kind": demo["kind"],
+            "description": demo["description"],
+            "controls": list(demo["system_spec"]["control_names"]),
+            "disturbances": list(demo["system_spec"]["disturbance_names"]),
+            "states": list(demo["system_spec"]["state_names"]),
+            "dt": float(demo["dt"]),
+            "n_steps": int(demo["n_steps"]),
+            "highlight_states": list(demo["highlight_states"]),
+        }
+        for demo in page["demos"]
+    ]
+    return {
+        "product_name": page["product_name"],
+        "headline": page["headline"],
+        "summary": page["summary"],
+        "demos": demos,
+        "flowsheets": page["flowsheets"],
     }

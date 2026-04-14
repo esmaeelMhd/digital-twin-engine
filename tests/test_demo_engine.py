@@ -14,6 +14,7 @@ from dte.demo.engine import (
     default_control_sequence,
     default_disturbance_sequence,
     demo_catalog_from_config,
+    demo_page_from_config,
     load_demo_config,
     optimize_control_sequence,
     simulate_open_loop,
@@ -42,6 +43,31 @@ def test_demo_catalog_exposes_three_unit_demos():
     assert len(catalog["demos"]) == 3
     assert {item["system"] for item in catalog["demos"]} == {"cstr", "heat_exchanger", "two_tank"}
     assert len(catalog["flowsheets"]) == 2
+
+
+def test_demo_page_exposes_browser_bootstrap_payload():
+    config = load_demo_config("configs/demo_app.yaml")
+    system_configs = {}
+    for system_name in ("cstr", "heat_exchanger", "two_tank"):
+        with open(f"configs/{system_name}_default.yaml", "r", encoding="utf-8") as handle:
+            system_configs[system_name] = yaml.safe_load(handle)
+
+    page = demo_page_from_config(
+        config,
+        system_configs,
+        config_path="configs/demo_app.yaml",
+        runtime_loaded=True,
+    )
+
+    assert page["release"]["release_label"] == "V1 milestone release"
+    assert page["release"]["runtime_loaded"] is True
+    assert len(page["demos"]) == 3
+    first_demo = page["demos"][0]
+    assert first_demo["baseline_control_profile"]["type"] == "constant"
+    assert first_demo["disturbance_presets"]
+    assert first_demo["candidate_profiles"]
+    assert first_demo["system_spec"]["name"] == first_demo["system"]
+    assert first_demo["system_spec"]["control_channels"]
 
 
 def test_simulate_open_loop_and_constraints_return_expected_shapes():

@@ -1,0 +1,26 @@
+:root {
+  --ink: #0f1a14;
+  --moss: #1a4a3e;
+  --moss-light: #2f7a69;
+  --brass: #c67a30;
+  --brass-light: #d69849;
+  --cream: #faf7f0;
+  --sand: #eee8db;
+  --paper: rgba(255, 255, 255, 0.72);
+  --paper-strong: rgba(255, 255, 255, 0.88);
+  --line: rgba(15, 26, 20, 0.1);
+  --line-strong: rgba(15, 26, 20, 0.16);
+  --text: #1a2b22;
+  --text-muted: rgba(26, 43, 34, 0.64);
+  --hero-bg: linear-gradient(135deg, #0f1a14 0%, #1a4a3e 48%, #0f1a14 100%);
+  --page-bg: linear-gradient(180deg, #f9f5ec 0%, #faf7f0 42%, #f3ecdf 100%);
+  --shadow-soft: 0 8px 24px rgba(15, 26, 20, 0.08);
+  --shadow-card: 0 18px 48px rgba(15, 26, 20, 0.12);
+  --radius-s: 12px;
+  --radius-m: 18px;
+  --radius-l: 28px;
+  --radius-xl: 40px;
+  --container: min(1180px, calc(100vw - 2rem));
+  --font-sans: "Inter", "Segoe UI", sans-serif;
+  --font-serif: "Playfair Display", Georgia, serif;
+}

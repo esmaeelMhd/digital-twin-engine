@@ -134,6 +134,115 @@ class SteadyStateResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class DemoProfile(BaseModel):
+    """Serializable control or disturbance profile from demo config."""
+
+    type: str = Field("constant")
+    channels: Optional[Dict[str, float]] = None
+    values: Optional[Dict[str, float]] = None
+    start: Optional[Dict[str, float]] = None
+    end: Optional[Dict[str, float]] = None
+    base: Optional[Dict[str, float]] = None
+    pulse: Optional[Dict[str, float]] = None
+    start_step: Optional[int] = None
+    duration: Optional[int] = None
+
+
+class DemoPreset(BaseModel):
+    """Named preset shown in the interactive demo controls."""
+
+    id: str
+    title: str
+    description: str = ""
+    profile: Optional[DemoProfile] = None
+
+
+class DemoOptimizationConfig(BaseModel):
+    """Optimization defaults for one demo workspace."""
+
+    n_candidates: int = Field(48, ge=1)
+    seed: int = 0
+
+
+class DemoChannelSpec(BaseModel):
+    """Frontend-friendly channel metadata."""
+
+    name: str
+    lower_bound: Optional[float] = None
+    upper_bound: Optional[float] = None
+    unit: Optional[str] = None
+    description: Optional[str] = None
+    role: Optional[str] = None
+
+
+class DemoSystemSpec(BaseModel):
+    """Subset of system metadata required by the browser demo."""
+
+    name: str
+    state_dim: int
+    control_dim: int
+    disturbance_dim: int
+    param_dim: int
+    state_names: List[str]
+    control_names: List[str]
+    disturbance_names: List[str]
+    default_initial_state: List[float]
+    default_nominal_disturbance: List[float]
+    control_ranges: Dict[str, List[float]]
+    disturbance_ranges: Dict[str, List[float]]
+    state_channels: List[DemoChannelSpec]
+    control_channels: List[DemoChannelSpec]
+    disturbance_channels: List[DemoChannelSpec]
+
+
+class DemoDefinition(BaseModel):
+    """Full interactive demo definition for the browser frontend."""
+
+    id: str
+    title: str
+    system: str
+    kind: str
+    description: str
+    operator_goal: Optional[str] = None
+    dt: float
+    n_steps: int
+    highlight_states: List[str]
+    target_state: Dict[str, float]
+    initial_state: Dict[str, float]
+    baseline_control_profile: Optional[DemoProfile] = None
+    disturbance_presets: List[DemoPreset]
+    candidate_profiles: List[DemoPreset]
+    optimization: DemoOptimizationConfig = Field(default_factory=DemoOptimizationConfig)
+    run_button_label: str = "Run Scenario"
+    optimize_button_label: str = "Recommend Control Sequence"
+    system_spec: DemoSystemSpec
+
+
+class DemoReleaseSnapshot(BaseModel):
+    """Release summary and case-study metadata for the demo site."""
+
+    release_label: str
+    model_available: bool
+    config_available: bool
+    runtime_samples: int
+    model_path: Optional[str] = None
+    config_path: Optional[str] = None
+    runtime_loaded: bool = False
+    train_best_val_loss: Optional[float] = None
+    eval_metric_name: Optional[str] = None
+    eval_metric_value: Optional[float] = None
+    per_system_total_loss: Dict[str, float]
+    milestone_status: Optional[str] = None
+    customer_status: Optional[str] = None
+    customer_best_unit_template: Optional[str] = None
+    customer_best_val_loss: Optional[float] = None
+    customer_forecast_rmse: Optional[float] = None
+    customer_rollout_rmse: Optional[float] = None
+    customer_report_path: Optional[str] = None
+    customer_report_exists: bool = False
+    customer_report_markdown: Optional[str] = None
+
+
 class DemoCatalogItem(BaseModel):
     """One available interactive demo."""
 
@@ -167,6 +276,17 @@ class DemoCatalogResponse(BaseModel):
     headline: str
     summary: str
     demos: List[DemoCatalogItem]
+    flowsheets: List[DemoFlowsheetItem]
+
+
+class DemoPageResponse(BaseModel):
+    """Bootstrap payload for the browser-based demo frontend."""
+
+    product_name: str
+    headline: str
+    summary: str
+    release: DemoReleaseSnapshot
+    demos: List[DemoDefinition]
     flowsheets: List[DemoFlowsheetItem]
 
 
@@ -260,6 +380,9 @@ class DemoCompareScenariosResponse(BaseModel):
     """Comparison payload used by the demo UI."""
 
     system: str
+    times: List[float]
+    baseline_source: str
+    candidate_source: str
     state_names: List[str]
     baseline_mean: List[List[float]]
     candidate_mean: List[List[float]]

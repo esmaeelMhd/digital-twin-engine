@@ -1,0 +1,144 @@
+.tabsRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.tabList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabTrigger {
+  padding: 0.85rem 1rem;
+  border: 0;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: transparent;
+  font-weight: 700;
+}
+
+.tabTrigger[data-state="active"] {
+  color: #fff;
+  background: var(--moss);
+  box-shadow: var(--shadow-soft);
+}
+
+.tabContent {
+  outline: none;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  gap: 1.25rem;
+}
+
+.controlPanel,
+.visualPanel {
+  padding: 1.35rem;
+}
+
+.panelTitle {
+  margin: 0 0 0.5rem;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 1.9rem;
+}
+
+.panelBody,
+.goalText,
+.targetValue {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.goalText {
+  margin-top: 0.8rem;
+}
+
+.fieldStack {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.accordion {
+  margin-top: 1.5rem;
+}
+
+.accordionItem {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.accordionTrigger {
+  width: 100%;
+  padding: 0.95rem 1rem;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+  font-weight: 700;
+}
+
+.accordionContent {
+  padding: 0 1rem 1rem;
+}
+
+.sliderGroup {
+  display: grid;
+  gap: 1rem;
+}
+
+.sliderField {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.sliderHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  color: var(--ink);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.targetBlock {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.buttonRow {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 1.5rem;
+}
+
+.optimizedBlock {
+  margin-top: 1.4rem;
+}
+
+.optimizedTitle {
+  margin: 0 0 1rem;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 1.5rem;
+}
+
+@media (max-width: 1080px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+}

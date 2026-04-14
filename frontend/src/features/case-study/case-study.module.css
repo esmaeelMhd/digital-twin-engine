@@ -1,0 +1,48 @@
+.caseStudy {
+  display: grid;
+  gap: 1.4rem;
+}
+
+.header {
+  max-width: 50rem;
+}
+
+.title {
+  margin: 0 0 0.7rem;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: clamp(2rem, 4vw, 2.8rem);
+}
+
+.body {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.report {
+  padding: 1.4rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--shadow-soft);
+}
+
+.reportTitle {
+  margin: 0 0 1rem;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 1.5rem;
+}
+
+.markdown {
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.markdown :global(h1),
+.markdown :global(h2),
+.markdown :global(h3) {
+  color: var(--ink);
+  font-family: var(--font-serif);
+}

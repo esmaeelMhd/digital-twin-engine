@@ -88,6 +88,13 @@ def test_demo_catalog_and_routes_work_without_loaded_models(monkeypatch):
     _clear_service_state()
 
     with TestClient(service.app) as client:
+        page = client.get("/demo/page")
+        assert page.status_code == 200
+        page_json = page.json()
+        assert page_json["release"]["runtime_loaded"] is False
+        assert len(page_json["demos"]) == 3
+        assert page_json["demos"][0]["system_spec"]["control_names"]
+
         catalog = client.get("/demo/catalog")
         assert catalog.status_code == 200
         catalog_json = catalog.json()
@@ -150,6 +157,8 @@ def test_demo_catalog_and_routes_work_without_loaded_models(monkeypatch):
         assert compare_response.status_code == 200
         compare_json = compare_response.json()
         assert "summary" in compare_json
+        assert len(compare_json["times"]) == 10
+        assert compare_json["candidate_source"] == "simulator_ensemble"
         assert len(compare_json["baseline_mean"]) == 10
 
 
