@@ -21,26 +21,26 @@ export function CaseStudySection({ release }: CaseStudySectionProps) {
   return (
     <div className={styles.caseStudy}>
       <div className={styles.header}>
-        <h3 className={styles.title}>Case Study: Rapid Plant Adaptation</h3>
+        <h3 className={styles.title}>Pilot Proof: Customer Adaptation</h3>
         <p className={styles.body}>
-          A historian export was matched against the shared checkpoint, adapted, and validated in
-          a single working session.
+          A customer historian export was matched to the closest unit template, adapted against
+          real operating history, and validated before any broader deployment work.
         </p>
       </div>
 
       <div className="metric-grid">
         <MetricCard
-          label="Status"
+          label="Pilot Status"
           value={titleCase(release.customer_status)}
           icon={<BadgeCheck size={16} aria-hidden="true" />}
         />
         <MetricCard
-          label="Best Template"
+          label="Closest Template"
           value={titleCase(release.customer_best_unit_template)}
           icon={<FlaskConical size={16} aria-hidden="true" />}
         />
         <MetricCard
-          label="Best Validation Loss"
+          label="Adapted Validation Loss"
           value={formatMetric(release.customer_best_val_loss)}
           icon={<Target size={16} aria-hidden="true" />}
         />
@@ -58,14 +58,14 @@ export function CaseStudySection({ release }: CaseStudySectionProps) {
 
       {release.customer_report_markdown ? (
         <article className={styles.report}>
-          <h4 className={styles.reportTitle}>Validation report</h4>
+          <h4 className={styles.reportTitle}>Pilot validation report</h4>
           <div className={styles.markdown}>
             <ReactMarkdown>{release.customer_report_markdown}</ReactMarkdown>
           </div>
         </article>
       ) : (
         <div className="status-note status-note--warning">
-          Customer validation report was not found in the configured release workspace.
+          Customer validation report is not available in the configured release workspace.
         </div>
       )}
     </div>

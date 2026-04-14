@@ -1,7 +1,7 @@
 theme:
   product_name: Digital Twin Engine
-  headline: Physics-aware foundation models for industrial process dynamics.
-  summary: A V1 presentation surface for shared unit modeling, uncertainty-aware forecasting, customer adaptation, and control-oriented scenario comparison.
+  headline: Evaluate operating plans before the plant pays for them.
+  summary: Digital Twin Engine adapts a physics-aware runtime to one critical unit, compares baseline and alternative operating plans under the same disturbance, and recommends stabilization moves with uncertainty and constraint risk.
 
 runtime:
   release_label: universal_v1 release candidate
@@ -19,8 +19,8 @@ demos:
     title: CSTR
     system: cstr
     kind: unit_demo
-    description: Reactor temperature, conversion, and coolant action under changing feed conditions.
-    operator_goal: Keep product concentration high while preventing avoidable thermal drift.
+    description: Compare reactor recovery plans under changing feed conditions before the unit drifts away from temperature and conversion targets.
+    operator_goal: Protect conversion and temperature while choosing a recovery move the plant can actually run.
     dt: 0.1
     n_steps: 25
     highlight_states: [Cb, T, Tc]
@@ -85,14 +85,15 @@ demos:
     optimization:
       n_candidates: 72
       seed: 17
-    optimize_button_label: Recommend stabilizing sequence
+    run_button_label: Compare operating plan
+    optimize_button_label: Recommend stabilization plan
 
   - id: heat_exchanger_live
     title: Heat Exchanger
     system: heat_exchanger
     kind: unit_demo
-    description: Counter-current outlet temperatures and duty response under coordinated hot- and cold-side flow changes.
-    operator_goal: Recover outlet temperature targets without overdriving either side of the exchanger.
+    description: Compare outlet-temperature recovery plans under load changes across a counter-current exchanger.
+    operator_goal: Recover temperature targets without paying for an unnecessarily aggressive flow move.
     dt: 0.1
     n_steps: 25
     highlight_states: [T_hot, T_cold]
@@ -149,14 +150,15 @@ demos:
     optimization:
       n_candidates: 80
       seed: 23
-    optimize_button_label: Recommend outlet recovery sequence
+    run_button_label: Compare operating plan
+    optimize_button_label: Recommend recovery plan
 
   - id: two_tank_live
     title: Two-Tank System
     system: two_tank
     kind: unit_demo
-    description: Inventory balancing, overflow margin, and valve action in a coupled hydraulic section.
-    operator_goal: Maintain safe inventory in both vessels while absorbing feed changes and downstream draw.
+    description: Compare inventory-protection plans in a coupled hydraulic section before downstream demand causes a level event.
+    operator_goal: Protect safe inventory in both vessels while deciding how much inlet or valve action is justified.
     dt: 0.1
     n_steps: 25
     highlight_states: [h1, h2]
@@ -221,4 +223,5 @@ demos:
     optimization:
       n_candidates: 72
       seed: 29
-    optimize_button_label: Recommend inventory recovery sequence
+    run_button_label: Compare operating plan
+    optimize_button_label: Recommend recovery plan

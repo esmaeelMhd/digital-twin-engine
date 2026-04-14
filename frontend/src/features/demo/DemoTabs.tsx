@@ -19,8 +19,8 @@ export function DemoTabs({ demos, flowsheets, release }: DemoTabsProps) {
 
   return (
     <Section
-      title="Try It Live"
-      subtitle="Each workspace starts from a fixed baseline policy. Select a disturbance regime and an alternate operating move, then compare the resulting forecast and risk profile."
+      title="Evaluate One Operating Decision Live"
+      subtitle="Each workspace starts from the current operating plan, compares an alternative plan against the same disturbance, and recommends a stabilization plan if neither policy is strong enough."
     >
       <Tabs.Root defaultValue={defaultValue} className={styles.tabsRoot}>
         <Tabs.List className={styles.tabList}>
@@ -30,10 +30,10 @@ export function DemoTabs({ demos, flowsheets, release }: DemoTabsProps) {
             </Tabs.Trigger>
           ))}
           <Tabs.Trigger value="case-study" className={styles.tabTrigger}>
-            Case Study
+            Pilot Proof
           </Tabs.Trigger>
           <Tabs.Trigger value="roadmap" className={styles.tabTrigger}>
-            Roadmap
+            Scale-Up Path
           </Tabs.Trigger>
         </Tabs.List>
 

@@ -10,10 +10,11 @@ export function RoadmapSection({ flowsheets }: RoadmapSectionProps) {
   return (
     <div className={styles.roadmap}>
       <div className={styles.header}>
-        <h3 className={styles.title}>What&apos;s Next: Multi-Unit Modelling</h3>
+        <h3 className={styles.title}>Scale-Up Path: From One Unit To A Plant Section</h3>
         <p className={styles.body}>
-          V1 is intentionally unit-first. The next surface is plant-section modelling across linked
-          unit operations and flowsheet-level interactions.
+          The commercial path is intentionally sequential: prove one painful unit first, then
+          connect neighboring operations into section-level decision support without changing the
+          runtime architecture underneath.
         </p>
       </div>
 

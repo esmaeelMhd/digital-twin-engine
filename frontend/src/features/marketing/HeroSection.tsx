@@ -1,11 +1,12 @@
+import clsx from 'clsx';
 import { useEffect, useRef } from 'react';
 import {
   Activity,
+  ArrowRight,
+  BadgeCheck,
   Cpu,
-  Factory,
   FlaskConical,
   Gauge,
-  Orbit,
   ShieldCheck,
 } from 'lucide-react';
 
@@ -17,22 +18,33 @@ type HeroSectionProps = {
   page: DemoPageResponse;
 };
 
-const stats = [
-  { value: '10+', label: 'Industries', icon: Factory },
-  { value: '3', label: 'Proven Systems', icon: FlaskConical },
-  { value: '< 5 min', label: 'Adaptation Time', icon: Gauge },
-  { value: '24/7', label: 'Real-Time API', icon: ShieldCheck },
-];
-
 const chips = [
-  { label: 'Neural SDE', icon: Orbit },
-  { label: 'Few-Shot Transfer', icon: Cpu },
-  { label: 'Live Monitoring', icon: Activity },
-  { label: 'Uncertainty Quantified', icon: ShieldCheck },
+  { label: 'Plant adaptation', icon: Cpu },
+  { label: 'Scenario compare', icon: Activity },
+  { label: 'Constraint risk', icon: ShieldCheck },
+  { label: 'Stabilization plans', icon: Gauge },
 ];
 
 export function HeroSection({ page }: HeroSectionProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stats = [
+    { value: String(page.demos.length), label: 'Live unit workflows', icon: FlaskConical },
+    {
+      value: String(page.release.runtime_samples),
+      label: 'Samples per decision run',
+      icon: ShieldCheck,
+    },
+    {
+      value: page.release.runtime_loaded ? 'Loaded' : 'Fallback',
+      label: 'Shared runtime',
+      icon: Cpu,
+    },
+    {
+      value: '1 unit',
+      label: 'Recommended first scope',
+      icon: BadgeCheck,
+    },
+  ];
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -123,17 +135,21 @@ export function HeroSection({ page }: HeroSectionProps) {
       <section className={styles.hero}>
         <canvas ref={canvasRef} className={styles.heroCanvas} />
         <div className={styles.heroInner}>
-          <span className="pill">Physics-Informed AI for Industry</span>
-          <h1 className={styles.heroTitle}>
-            Your Plant
-            <br />
-            Deserves
-            <br />a <em>Brain</em>
-          </h1>
+          <span className="pill">Industrial decision support for one critical unit</span>
+          <h1 className={styles.heroTitle}>{page.product_name}</h1>
+          <p className={styles.heroLead}>{page.headline}</p>
           <p className={styles.heroBody}>
-            {page.product_name} turns historian data into uncertainty-aware forecasts and
-            control recommendations without abandoning the physics of the process.
+            {page.summary}
           </p>
+          <div className={styles.heroActions}>
+            <a className={clsx('button-primary', styles.heroButton)} href="#demo">
+              See the live pilot
+              <ArrowRight size={16} aria-hidden="true" />
+            </a>
+            <a className={clsx('button-secondary', styles.heroButton)} href="#proof">
+              Review the proof
+            </a>
+          </div>
           <div className={styles.heroChips}>
             {chips.map((chip) => (
               <span key={chip.label} className="pill">

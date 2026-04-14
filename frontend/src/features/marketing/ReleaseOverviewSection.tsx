@@ -19,27 +19,27 @@ type ReleaseOverviewSectionProps = {
 export function ReleaseOverviewSection({ release }: ReleaseOverviewSectionProps) {
   return (
     <Section
-      title="Proven Performance"
-      subtitle="The shared checkpoint has been evaluated across multiple process families and a customer adaptation pilot."
+      title="Proof The Runtime Travels"
+      subtitle="The shared checkpoint has already been evaluated across multiple unit families and a customer adaptation pilot, so the story is more than a concept demo."
     >
       <div className={styles.releaseGrid}>
         <MetricCard
-          label="Release Gate"
+          label="Milestone Gate"
           value={titleCase(release.milestone_status)}
           icon={<BadgeCheck size={16} aria-hidden="true" />}
         />
         <MetricCard
-          label="Best Validation Loss"
+          label="Foundation Validation"
           value={formatMetric(release.train_best_val_loss)}
           icon={<TrendingUp size={16} aria-hidden="true" />}
         />
         <MetricCard
-          label={release.eval_metric_name ?? 'Eval Metric'}
+          label={release.eval_metric_name ?? 'Cross-System Eval'}
           value={formatMetric(release.eval_metric_value)}
           icon={<ChartSpline size={16} aria-hidden="true" />}
         />
         <MetricCard
-          label="Customer Adaptation"
+          label="Customer Pilot Adaptation"
           value={formatMetric(release.customer_best_val_loss)}
           icon={<FlaskConical size={16} aria-hidden="true" />}
         />
@@ -56,11 +56,13 @@ export function ReleaseOverviewSection({ release }: ReleaseOverviewSectionProps)
       <div className={styles.releaseStatus}>
         {release.runtime_loaded ? (
           <div className="status-note">
-            Shared runtime is loaded and the interactive demos are using universal-model rollouts.
+            The shared runtime is loaded, and the live comparison below is using universal-model
+            rollouts rather than a mocked frontend-only surface.
           </div>
         ) : (
           <div className="status-note status-note--warning">
-            Shared runtime is not loaded. The API will fall back to simulator ensembles where needed.
+            Shared runtime is not loaded. The API will fall back to simulator ensembles where
+            needed.
           </div>
         )}
       </div>

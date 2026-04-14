@@ -49,6 +49,12 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
     ? (comparison.candidate_constraints.above_upper_bound_rate ?? 0) +
       (comparison.candidate_constraints.below_lower_bound_rate ?? 0)
     : null;
+  const forecastRuntime =
+    comparison?.candidate_source === 'universal_model'
+      ? 'Shared Runtime'
+      : comparison
+        ? titleCase(comparison.candidate_source)
+        : null;
 
   return (
     <div className={styles.workspace}>
@@ -57,14 +63,18 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
           <h3 className={styles.panelTitle}>{demo.title}</h3>
           <p className={styles.panelBody}>{demo.description}</p>
           {demo.operator_goal ? (
-            <p className={styles.goalText}>Operator goal: {demo.operator_goal}</p>
+            <p className={styles.goalText}>Decision focus: {demo.operator_goal}</p>
           ) : null}
+          <p className="field-help">
+            Baseline stays fixed as the current operating plan. The alternative plan and the
+            recommendation are both scored against the same disturbance.
+          </p>
         </div>
 
         <div className={styles.fieldStack}>
           <div>
             <label className="field-label" htmlFor={`${demo.id}-disturbance`}>
-              Disturbance preset
+              Operating condition
             </label>
             <select
               id={`${demo.id}-disturbance`}
@@ -85,7 +95,7 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
 
           <div>
             <label className="field-label" htmlFor={`${demo.id}-candidate`}>
-              Candidate operating move
+              Alternative operating plan
             </label>
             <select
               id={`${demo.id}-candidate`}
@@ -106,12 +116,12 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
         <Accordion.Root type="single" collapsible className={styles.accordion}>
           <Accordion.Item value="fine-trim" className={styles.accordionItem}>
             <Accordion.Trigger className={styles.accordionTrigger}>
-              Fine trim
+              Plan adjustments
             </Accordion.Trigger>
             <Accordion.Content className={styles.accordionContent}>
               <p className="field-help">
-                Apply bounded offsets on top of the preset trajectories before sending the scenario
-                to the API.
+                Apply bounded trims on top of the selected operating condition and operating plan
+                before sending the comparison to the API.
               </p>
               <div className={styles.sliderGroup}>
                 {demo.system_spec.control_names.map((controlName) => {
@@ -164,7 +174,7 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
         </Accordion.Root>
 
         <div className={styles.targetBlock}>
-          <span className="field-label">Tracked target state</span>
+          <span className="field-label">Success targets</span>
           {demo.highlight_states.map((stateName) => (
             <p key={stateName} className={styles.targetValue}>
               {stateName}: {formatMetric(demo.target_state[stateName])}
@@ -202,13 +212,13 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
 
             <div className="metric-grid">
               <MetricCard
-                label="Forecast Source"
-                value={titleCase(comparison.candidate_source)}
+                label="Forecast Runtime"
+                value={forecastRuntime}
               />
               {demo.highlight_states.map((stateName) => (
                 <MetricCard
                   key={stateName}
-                  label={`${stateName} Final Delta`}
+                  label={`${stateName} vs Baseline`}
                   value={formatMetric(comparison.summary.candidate_advantage[stateName])}
                 />
               ))}
@@ -221,35 +231,37 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
 
             <div className="helper-note">
               {comparison.candidate_source === 'universal_model'
-                ? 'Uncertainty bands are coming from the shared checkpoint, while control recommendation still uses a lightweight search over the physical simulator.'
-                : 'Release checkpoint is not available for this run, so the uncertainty bands are approximated from simulator ensembles.'}
+                ? 'The shared runtime is generating the forecast bands for the baseline and alternative plans. The recommendation then searches for a nearby stabilization schedule you could review with operations.'
+                : 'This run is using simulator ensembles because the shared runtime is unavailable. The comparison flow stays the same, but the uncertainty bands are coming from the physical simulator.'}
             </div>
 
             {optimizedResult ? (
               <div className={styles.optimizedBlock}>
-                <h4 className={styles.optimizedTitle}>Recommended sequence</h4>
+                <h4 className={styles.optimizedTitle}>Recommended stabilization plan</h4>
                 <div className="metric-grid">
                   {demo.system_spec.control_names.map((controlName, index) => {
                     const sequence = optimizedResult.control_sequence.map((row) => row[index]);
                     return (
                       <MetricCard
                         key={controlName}
-                        label={`${controlName} End`}
+                        label={`${controlName} Final Setting`}
                         value={formatMetric(sequence[sequence.length - 1])}
                       />
                     );
                   })}
                   <MetricCard
-                    label="Objective"
+                    label="Residual Target Gap"
                     value={formatMetric(optimizedResult.objective)}
-                    help="Lower objective means the predicted trajectory ends closer to the target state."
+                    help="Lower means the recommended plan finishes closer to the selected success targets."
                   />
                 </div>
               </div>
             ) : null}
           </>
         ) : (
-          <div className="status-note">Waiting for the first scenario result.</div>
+          <div className="status-note">
+            Run the first plan comparison to populate the forecast and control views.
+          </div>
         )}
 
         {optimizationError instanceof Error ? (

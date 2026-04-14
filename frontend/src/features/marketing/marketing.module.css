@@ -32,9 +32,13 @@
   line-height: 0.9;
 }
 
-.heroTitle em {
+.heroLead {
+  max-width: 16ch;
+  margin: 0;
   color: var(--brass-light);
-  font-style: italic;
+  font-size: clamp(1.6rem, 3vw, 2.35rem);
+  line-height: 1.05;
+  font-weight: 600;
 }
 
 .heroBody {
@@ -43,6 +47,16 @@
   color: rgba(250, 247, 240, 0.74);
   font-size: clamp(1rem, 1.7vw, 1.16rem);
   line-height: 1.7;
+}
+
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+}
+
+.heroButton {
+  gap: 0.55rem;
 }
 
 .heroChips {
@@ -119,8 +133,14 @@
 .industryIcon,
 .capabilityIcon {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.8rem;
+  height: 2.8rem;
   margin-bottom: 0.9rem;
-  font-size: 1.8rem;
+  border-radius: 999px;
+  color: var(--moss);
+  background: rgba(26, 74, 62, 0.08);
 }
 
 .cardTitle {
@@ -200,6 +220,10 @@
 }
 
 @media (max-width: 720px) {
+  .heroInner {
+    padding-top: 5rem;
+  }
+
   .statsShell {
     margin-top: -2rem;
   }

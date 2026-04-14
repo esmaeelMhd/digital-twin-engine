@@ -15,8 +15,8 @@ export function HomePage() {
       <main className="page-status">
         <div className="page-status__card">
           <p className="eyebrow">Loading</p>
-          <h1>Bootstrapping the demo workspace.</h1>
-          <p>Fetching the live demo configuration and release metadata from the API.</p>
+          <h1>Preparing the pilot workspace.</h1>
+          <p>Fetching the live demo configuration and proof points from the API.</p>
         </div>
       </main>
     );
@@ -27,7 +27,7 @@ export function HomePage() {
       <main className="page-status">
         <div className="page-status__card">
           <p className="eyebrow">Frontend Error</p>
-          <h1>Could not load the demo site.</h1>
+          <h1>Could not load the pilot surface.</h1>
           <p>{pageQuery.error instanceof Error ? pageQuery.error.message : 'Unknown error'}</p>
         </div>
       </main>
@@ -40,10 +40,14 @@ export function HomePage() {
     <main className="page-shell">
       <HeroSection page={page} />
       <IndustriesSection />
-      <HowItWorksSection />
       <CapabilitiesSection />
-      <DemoTabs demos={page.demos} flowsheets={page.flowsheets} release={page.release} />
-      <ReleaseOverviewSection release={page.release} />
+      <div id="proof">
+        <ReleaseOverviewSection release={page.release} />
+      </div>
+      <HowItWorksSection />
+      <div id="demo">
+        <DemoTabs demos={page.demos} flowsheets={page.flowsheets} release={page.release} />
+      </div>
       <FooterCta />
     </main>
   );
