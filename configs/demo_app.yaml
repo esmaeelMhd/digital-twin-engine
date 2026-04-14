@@ -4,11 +4,11 @@ theme:
   summary: A V1 presentation surface for shared unit modeling, uncertainty-aware forecasting, customer adaptation, and control-oriented scenario comparison.
 
 runtime:
-  release_label: V1 milestone release
-  model_path: /tmp/dte_v1_milestone_release/outputs/universal_fast_baseline/best_model.eqx
-  config_path: /tmp/dte_v1_milestone_release/outputs/universal_fast_baseline/config.yaml
-  train_summary_path: /tmp/dte_v1_milestone_release/outputs/universal_fast_baseline/summary.json
-  eval_summary_path: /tmp/dte_v1_milestone_release/outputs/universal_fast_baseline/eval/summary.json
+  release_label: universal_v1 release candidate
+  model_path: outputs/universal_v1/best_model.eqx
+  config_path: outputs/universal_v1/config.yaml
+  train_summary_path: outputs/universal_v1/summary.json
+  eval_summary_path: outputs/universal_v1/eval/summary.json
   milestone_summary_path: /tmp/dte_v1_milestone_release/summary.json
   customer_pilot_summary_path: /tmp/dte_v1_milestone_release/outputs/real_data_pilot/summary.json
   customer_report_path: /tmp/dte_v1_milestone_release/outputs/real_data_pilot/outputs/customer_adaptation/validation_report.md
