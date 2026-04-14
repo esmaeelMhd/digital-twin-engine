@@ -1,0 +1,242 @@
+.page {
+  min-height: 100vh;
+}
+
+.hero {
+  position: relative;
+  padding: 5rem 1rem 3rem;
+  background:
+    radial-gradient(circle at top left, rgba(198, 122, 48, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(26, 74, 62, 0.22), transparent 24%),
+    linear-gradient(180deg, #f4efe6 0%, rgba(255, 255, 255, 0.65) 100%);
+  border-bottom: 1px solid var(--line);
+}
+
+.heroInner,
+.pageInner {
+  width: var(--container);
+  margin: 0 auto;
+}
+
+.heroInner {
+  display: grid;
+  gap: 1rem;
+}
+
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: fit-content;
+  color: var(--moss);
+  font-weight: 600;
+}
+
+.heroTitle {
+  max-width: 13ch;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: clamp(2.8rem, 7vw, 5.2rem);
+  line-height: 0.92;
+}
+
+.heroBody {
+  max-width: 48rem;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
+.pageInner {
+  display: grid;
+  gap: 1.5rem;
+  padding: 2rem 1rem 4rem;
+}
+
+.stepCard {
+  padding: 1.5rem;
+}
+
+.stepHeader {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 1.25rem;
+}
+
+.stepTitle {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+}
+
+.stepBody {
+  max-width: 52rem;
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.templateGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.templateCard {
+  display: grid;
+  gap: 0.55rem;
+  padding: 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-muted);
+  text-align: left;
+  box-shadow: var(--shadow-soft);
+}
+
+.templateCard[data-selected='true'] {
+  border-color: rgba(26, 74, 62, 0.24);
+  background: rgba(26, 74, 62, 0.08);
+  color: var(--ink);
+}
+
+.templateIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  color: var(--moss);
+  background: rgba(26, 74, 62, 0.08);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.selectionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.checkboxGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.checkPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.66);
+  color: var(--ink);
+}
+
+.uploadRow,
+.actionRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.uploadButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 48px;
+  padding: 0.85rem 1.2rem;
+  border: 1px dashed rgba(26, 74, 62, 0.22);
+  border-radius: 999px;
+  color: var(--moss);
+  background: rgba(26, 74, 62, 0.06);
+  font-weight: 700;
+}
+
+.mappingGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.mappingTitle {
+  margin: 0 0 0.75rem;
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.mappingField {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.jobNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  color: var(--text-muted);
+}
+
+.reportCard {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding: 1.35rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--shadow-soft);
+}
+
+.reportHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.reportTitle {
+  margin: 0 0 0.35rem;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+}
+
+.reportBody {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.markdown {
+  color: var(--text);
+  line-height: 1.75;
+}
+
+.markdown :global(h1),
+.markdown :global(h2),
+.markdown :global(h3) {
+  color: var(--ink);
+  font-family: var(--font-serif);
+}
+
+@media (max-width: 960px) {
+  .mappingGrid {
+    grid-template-columns: 1fr;
+  }
+}

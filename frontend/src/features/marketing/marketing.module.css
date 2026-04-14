@@ -212,6 +212,12 @@
   gap: 0.55rem;
 }
 
+.footerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+}
+
 @media (max-width: 960px) {
   .statsGrid,
   .stepsGrid {

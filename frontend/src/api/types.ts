@@ -177,3 +177,104 @@ export type DemoOptimizeControlResponse = {
   state_names: string[];
   constraint_summary: NumericDict;
 };
+
+export type OnboardingTemplate = {
+  id: string;
+  title: string;
+  description: string;
+  system_spec: DemoSystemSpec;
+  suggested_objectives: string[];
+  suggested_controls: string[];
+};
+
+export type OnboardingTemplateListResponse = {
+  templates: OnboardingTemplate[];
+};
+
+export type OnboardingUploadResponse = {
+  upload_id: string;
+  filename: string;
+  detected_format: string;
+  columns: string[];
+  row_count: number;
+  size_bytes: number;
+};
+
+export type OnboardingPreviewRequest = {
+  upload_id: string;
+  template_id: string;
+  customer_name: string;
+  timestamp_column?: string | null;
+  dt: number;
+  trajectory_duration: number;
+  trajectory_stride: number;
+  max_gap_fill?: number;
+  outlier_sigma?: number;
+  drop_large_gaps?: boolean;
+  state_column_map: Record<string, string>;
+  control_column_map: Record<string, string>;
+  disturbance_column_map: Record<string, string>;
+  objective_state_names: string[];
+  control_variable_names: string[];
+};
+
+export type OnboardingPreviewResponse = {
+  preview_id?: string | null;
+  upload_id: string;
+  template_id: string;
+  valid: boolean;
+  blocking_errors: string[];
+  warnings: string[];
+  ingestion_summary?: Record<string, unknown> | null;
+  onboarding_spec?: Record<string, unknown> | null;
+  objective_state_names: string[];
+  control_variable_names: string[];
+};
+
+export type OnboardingCreateJobRequest = {
+  preview_id: string;
+  model_path?: string | null;
+  config_path?: string | null;
+  trainable_mode: 'adapters' | 'full';
+  tune_normalization?: boolean;
+  tune_physics_params?: boolean;
+  param_indices?: number[];
+  seed?: number;
+  time_budget_minutes?: number | null;
+};
+
+export type OnboardingJobArtifacts = {
+  summary_json?: string | null;
+  report_markdown?: string | null;
+  report_json?: string | null;
+  onboarding_json?: string | null;
+  preview_summary?: string | null;
+  uploaded_file?: string | null;
+  log_path?: string | null;
+};
+
+export type OnboardingJobMetrics = {
+  best_val_loss?: number | null;
+  forecast_rmse?: number | null;
+  rollout_rmse?: number | null;
+  best_unit_template?: string | null;
+};
+
+export type OnboardingJobResponse = {
+  job_id: string;
+  preview_id: string;
+  status: string;
+  stage: string;
+  progress_message?: string | null;
+  created_at: number;
+  updated_at: number;
+  artifacts: OnboardingJobArtifacts;
+  metrics: OnboardingJobMetrics;
+  error?: string | null;
+};
+
+export type OnboardingJobReportResponse = {
+  job: OnboardingJobResponse;
+  summary: Record<string, unknown>;
+  report_markdown?: string | null;
+};

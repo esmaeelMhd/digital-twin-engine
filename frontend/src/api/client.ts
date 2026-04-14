@@ -4,6 +4,13 @@ import type {
   DemoOptimizeControlRequest,
   DemoOptimizeControlResponse,
   DemoPageResponse,
+  OnboardingCreateJobRequest,
+  OnboardingJobReportResponse,
+  OnboardingJobResponse,
+  OnboardingPreviewRequest,
+  OnboardingPreviewResponse,
+  OnboardingTemplateListResponse,
+  OnboardingUploadResponse,
 } from './types';
 
 const apiBaseUrl =
@@ -13,10 +20,11 @@ const apiBaseUrl =
 const apiKey = (import.meta.env.VITE_DTE_API_KEY as string | undefined)?.trim();
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData;
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(apiKey ? { 'X-API-Key': apiKey } : {}),
       ...(init?.headers ?? {}),
     },
@@ -42,6 +50,10 @@ export function getDemoPage() {
   return request<DemoPageResponse>('/demo/page');
 }
 
+export function getOnboardingTemplates() {
+  return request<OnboardingTemplateListResponse>('/onboarding/templates');
+}
+
 export function compareScenarios(payload: DemoCompareScenariosRequest) {
   return request<DemoCompareScenariosResponse>('/demo/compare_scenarios', {
     method: 'POST',
@@ -54,4 +66,35 @@ export function optimizeControl(payload: DemoOptimizeControlRequest) {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function uploadOnboardingFile(file: File) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request<OnboardingUploadResponse>('/onboarding/uploads', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export function previewOnboarding(payload: OnboardingPreviewRequest) {
+  return request<OnboardingPreviewResponse>('/onboarding/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createOnboardingJob(payload: OnboardingCreateJobRequest) {
+  return request<OnboardingJobResponse>('/onboarding/jobs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getOnboardingJob(jobId: string) {
+  return request<OnboardingJobResponse>(`/onboarding/jobs/${jobId}`);
+}
+
+export function getOnboardingJobReport(jobId: string) {
+  return request<OnboardingJobReportResponse>(`/onboarding/jobs/${jobId}/report`);
 }

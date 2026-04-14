@@ -35,15 +35,17 @@ Environment variables
 from __future__ import annotations
 
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Request, Security, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Security, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
@@ -63,10 +65,31 @@ from dte.api.models import (
     EnsembleResponse,
     ErrorResponse,
     HealthResponse,
+    OnboardingCreateJobRequest,
+    OnboardingJobReportResponse,
+    OnboardingJobResponse,
+    OnboardingPreviewRequest,
+    OnboardingPreviewResponse,
+    OnboardingTemplateListResponse,
+    OnboardingUploadResponse,
     PredictRequest,
     PredictResponse,
     SteadyStateRequest,
     SteadyStateResponse,
+)
+from dte.api.onboarding import (
+    build_onboarding_templates,
+    initialize_job_status,
+    job_dir,
+    load_job_report,
+    load_job_status,
+    load_preview_record,
+    new_id,
+    persist_upload,
+    resolve_adaptation_runtime,
+    run_onboarding_job,
+    run_onboarding_preview,
+    update_job_status,
 )
 from dte.demo.engine import (
     UniversalDemoRuntime,
@@ -340,6 +363,32 @@ def _validate_params(spec: SystemSpec, params: Optional[List[float]]) -> np.ndar
     return arr
 
 
+def _start_onboarding_job(
+    job_id: str,
+    preview_record: dict,
+    request_payload: dict,
+    demo_config_path: str,
+) -> None:
+    def _runner():
+        try:
+            run_onboarding_job(
+                job_id=job_id,
+                preview_record=preview_record,
+                request_payload=request_payload,
+                demo_config_path=demo_config_path,
+            )
+        except Exception as exc:
+            update_job_status(
+                job_id,
+                status="failed",
+                stage="adaptation",
+                progress_message="Customer adaptation failed.",
+                error=str(exc),
+            )
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
 def _prepare_universal_inputs(
     runtime: UniversalDemoRuntime,
     spec: SystemSpec,
@@ -566,6 +615,167 @@ async def health():
         version="0.1.0",
         uptime_seconds=uptime_s,
         models_ready=models_ready,
+    )
+
+
+@app.get(
+    "/onboarding/templates",
+    response_model=OnboardingTemplateListResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_templates():
+    """Return supported unit templates for the customer onboarding wizard."""
+
+    demo_config_path = os.environ.get("DTE_DEMO_CONFIG", "configs/demo_app.yaml")
+    config = load_demo_config(demo_config_path)
+    templates = build_onboarding_templates(_system_configs, demo_config=config)
+    return OnboardingTemplateListResponse.model_validate({"templates": templates})
+
+
+@app.post(
+    "/onboarding/uploads",
+    response_model=OnboardingUploadResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_upload(file: UploadFile = File(...)):
+    """Persist one uploaded CSV/Parquet file and return detected columns."""
+
+    if not file.filename:
+        raise HTTPException(status_code=422, detail="Upload must include a filename.")
+    try:
+        payload = persist_upload(file.filename, await file.read())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return OnboardingUploadResponse.model_validate(payload)
+
+
+@app.post(
+    "/onboarding/preview",
+    response_model=OnboardingPreviewResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_preview(req: OnboardingPreviewRequest):
+    """Validate onboarding selections and run a preview ingestion step."""
+
+    try:
+        payload = run_onboarding_preview(
+            req.model_dump(),
+            system_configs=_system_configs,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return OnboardingPreviewResponse.model_validate(payload)
+
+
+@app.post(
+    "/onboarding/jobs",
+    response_model=OnboardingJobResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_create_job(req: OnboardingCreateJobRequest):
+    """Launch a durable customer adaptation job from a validated preview."""
+
+    preview_record = load_preview_record(req.preview_id)
+    if preview_record is None:
+        raise HTTPException(status_code=404, detail=f"Preview '{req.preview_id}' was not found.")
+    if not preview_record.get("valid", False):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Preview '{req.preview_id}' is not valid for adaptation.",
+        )
+
+    demo_config_path = os.environ.get("DTE_DEMO_CONFIG", "configs/demo_app.yaml")
+    model_path, config_path = resolve_adaptation_runtime(
+        requested_model_path=req.model_path,
+        requested_config_path=req.config_path,
+        demo_config_path=demo_config_path,
+    )
+    if model_path is None or not model_path.exists():
+        raise HTTPException(
+            status_code=422,
+            detail="Could not resolve a valid universal model_path for customer adaptation.",
+        )
+    if config_path is None or not config_path.exists():
+        raise HTTPException(
+            status_code=422,
+            detail="Could not resolve a valid universal config_path for customer adaptation.",
+        )
+
+    job_id = new_id("job")
+    job_directory = job_dir(job_id)
+    preview_directory = Path(preview_record["artifacts"]["processed_data_dir"]).parent
+    job_artifacts = {
+        "onboarding_json": preview_record["artifacts"]["onboarding_json"],
+        "preview_summary": str((preview_directory / "summary.json").resolve()),
+        "uploaded_file": preview_record["artifacts"]["uploaded_file"],
+        "summary_json": str((job_directory / "summary.json").resolve()),
+        "report_json": str((job_directory / "validation_report.json").resolve()),
+        "report_markdown": str((job_directory / "validation_report.md").resolve()),
+        "log_path": str((job_directory / "logs" / "adapt_customer.log").resolve()),
+    }
+
+    status_payload = initialize_job_status(
+        job_id=job_id,
+        preview_id=req.preview_id,
+        artifacts=job_artifacts,
+    )
+    _start_onboarding_job(
+        job_id,
+        preview_record,
+        req.model_dump(),
+        demo_config_path,
+    )
+    return OnboardingJobResponse.model_validate(status_payload)
+
+
+@app.get(
+    "/onboarding/jobs/{job_id}",
+    response_model=OnboardingJobResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_job(job_id: str):
+    """Return status for one customer adaptation job."""
+
+    payload = load_job_status(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' was not found.")
+    return OnboardingJobResponse.model_validate(payload)
+
+
+@app.get(
+    "/onboarding/jobs/{job_id}/report",
+    response_model=OnboardingJobReportResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_job_report(job_id: str):
+    """Return the final validation report for a completed onboarding job."""
+
+    job_payload = load_job_status(job_id)
+    if job_payload is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' was not found.")
+    if job_payload.get("status") != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job '{job_id}' is not completed yet.",
+        )
+    try:
+        summary, report_markdown = load_job_report(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return OnboardingJobReportResponse.model_validate(
+        {
+            "job": job_payload,
+            "summary": summary,
+            "report_markdown": report_markdown,
+        }
     )
 
 

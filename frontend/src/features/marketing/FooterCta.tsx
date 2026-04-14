@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import { ArrowRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 import { Section } from '../../components/Section';
 
@@ -14,13 +15,21 @@ export function FooterCta() {
           Tell us which unit is painful, what data is available, and which operating decision
           needs a better answer. The first step is usually a bounded pilot, not a platform rollout.
         </p>
-        <a
-          className={clsx('button-primary', styles.footerButton)}
-          href="mailto:s.mohammadi.rl@gmail.com?subject=Digital%20Twin%20Engine%20enquiry"
-        >
-          Scope a pilot
-          <ArrowRight size={16} aria-hidden="true" />
-        </a>
+        <div className={styles.footerActions}>
+          <Link
+            className={clsx('button-primary', styles.footerButton)}
+            to="/onboard"
+          >
+            Start onboarding
+            <ArrowRight size={16} aria-hidden="true" />
+          </Link>
+          <a
+            className="button-secondary"
+            href="mailto:s.mohammadi.rl@gmail.com?subject=Digital%20Twin%20Engine%20enquiry"
+          >
+            Talk to us
+          </a>
+        </div>
       </div>
     </Section>
   );

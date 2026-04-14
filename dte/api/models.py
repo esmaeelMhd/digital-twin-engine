@@ -397,6 +397,138 @@ class DemoCompareScenariosResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Customer onboarding
+# ---------------------------------------------------------------------------
+
+
+class OnboardingTemplate(BaseModel):
+    """One supported onboarding template for a customer pilot."""
+
+    id: str
+    title: str
+    description: str
+    system_spec: DemoSystemSpec
+    suggested_objectives: List[str] = Field(default_factory=list)
+    suggested_controls: List[str] = Field(default_factory=list)
+
+
+class OnboardingTemplateListResponse(BaseModel):
+    """Supported onboarding templates."""
+
+    templates: List[OnboardingTemplate]
+
+
+class OnboardingUploadResponse(BaseModel):
+    """Metadata returned after persisting an uploaded data file."""
+
+    upload_id: str
+    filename: str
+    detected_format: str
+    columns: List[str]
+    row_count: int
+    size_bytes: int
+
+
+class OnboardingPreviewRequest(BaseModel):
+    """Preview ingestion and onboarding validation request."""
+
+    upload_id: str
+    template_id: str
+    customer_name: str = Field(..., min_length=1)
+    timestamp_column: Optional[str] = None
+    dt: float = Field(0.1, gt=0)
+    trajectory_duration: float = Field(100.0, gt=0)
+    trajectory_stride: float = Field(10.0, gt=0)
+    max_gap_fill: float = Field(10.0, gt=0)
+    outlier_sigma: float = Field(5.0, gt=0)
+    drop_large_gaps: bool = False
+    state_column_map: Dict[str, str]
+    control_column_map: Dict[str, str]
+    disturbance_column_map: Dict[str, str] = Field(default_factory=dict)
+    objective_state_names: List[str] = Field(default_factory=list)
+    control_variable_names: List[str] = Field(default_factory=list)
+
+
+class OnboardingPreviewResponse(BaseModel):
+    """Preview result for onboarding ingestion and validation."""
+
+    preview_id: Optional[str] = None
+    upload_id: str
+    template_id: str
+    valid: bool
+    blocking_errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    ingestion_summary: Optional[Dict[str, Any]] = None
+    onboarding_spec: Optional[Dict[str, Any]] = None
+    objective_state_names: List[str] = Field(default_factory=list)
+    control_variable_names: List[str] = Field(default_factory=list)
+
+
+class OnboardingCreateJobRequest(BaseModel):
+    """Launch an asynchronous customer adaptation job from a preview."""
+
+    preview_id: str
+    model_path: Optional[str] = None
+    config_path: Optional[str] = None
+    trainable_mode: str = Field("adapters")
+    tune_normalization: bool = True
+    tune_physics_params: bool = False
+    param_indices: List[int] = Field(default_factory=list)
+    seed: int = 42
+    time_budget_minutes: Optional[float] = Field(None, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_trainable_mode(self) -> "OnboardingCreateJobRequest":
+        if self.trainable_mode not in {"adapters", "full"}:
+            raise ValueError("trainable_mode must be one of: adapters, full.")
+        return self
+
+
+class OnboardingJobArtifacts(BaseModel):
+    """Known filesystem artifacts for a customer onboarding job."""
+
+    summary_json: Optional[str] = None
+    report_markdown: Optional[str] = None
+    report_json: Optional[str] = None
+    onboarding_json: Optional[str] = None
+    preview_summary: Optional[str] = None
+    uploaded_file: Optional[str] = None
+    log_path: Optional[str] = None
+
+
+class OnboardingJobMetrics(BaseModel):
+    """Summary metrics surfaced in the job dashboard."""
+
+    best_val_loss: Optional[float] = None
+    forecast_rmse: Optional[float] = None
+    rollout_rmse: Optional[float] = None
+    best_unit_template: Optional[str] = None
+
+
+class OnboardingJobResponse(BaseModel):
+    """Status snapshot for an onboarding adaptation job."""
+
+    job_id: str
+    preview_id: str
+    status: str
+    stage: str
+    progress_message: Optional[str] = None
+    created_at: float
+    updated_at: float
+    artifacts: OnboardingJobArtifacts = Field(default_factory=OnboardingJobArtifacts)
+    metrics: OnboardingJobMetrics = Field(default_factory=OnboardingJobMetrics)
+    error: Optional[str] = None
+
+
+class OnboardingJobReportResponse(BaseModel):
+    """Final report payload for a completed onboarding job."""
+
+    job: OnboardingJobResponse
+    summary: Dict[str, Any]
+    report_markdown: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
