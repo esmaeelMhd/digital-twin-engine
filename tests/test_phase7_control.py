@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import yaml
 import jax
+import pytest
 
 from dte.control.mpc_interface import MPCInterfaceConfig, ProcessMPCInterface
 from dte.control.rl_env import ProcessControlEnv, ProcessControlEnvConfig
@@ -12,6 +13,7 @@ from dte.control.state_correction import StateCorrectionConfig, StateCorrectionH
 from dte.evaluation.control_metrics import disturbance_sensitivity, mismatch_robustness
 from dte.models.digital_twin import DigitalTwin
 from dte.simulators.registry import get_simulator, get_system_spec
+from scripts.run_mpc import _build_pid_controller
 
 
 def _load_system(system_name: str):
@@ -178,3 +180,15 @@ def test_control_metrics_capture_sensitivity_and_mismatch():
     assert sensitivity["mean_abs_state_delta"] >= 0.0
     assert sensitivity["max_abs_state_delta"] > 0.0
     assert robustness["normalized_rmse"] >= 0.0
+
+
+def test_run_mpc_pid_builder_uses_requested_cstr_setpoints():
+    spec, _, _ = _load_system("cstr")
+    setpoints = np.asarray([0.82, 0.0, 338.0, 300.0], dtype=np.float32)
+
+    controller = _build_pid_controller(spec, setpoints, dt=0.2)
+
+    assert controller is not None
+    assert controller.pid_Ca.setpoint == pytest.approx(0.82)
+    assert controller.pid_T.setpoint == pytest.approx(338.0)
+    assert controller.dt == pytest.approx(0.2)

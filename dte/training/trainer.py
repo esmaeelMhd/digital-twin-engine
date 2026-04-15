@@ -237,6 +237,7 @@ class Trainer:
         )
         loss_traj = self.loss_computer.trajectory_loss(pred_states_norm, true_states_norm)
         loss_kl = self.loss_computer.kl_divergence_loss(z_means, z_logvars)
+        dt = ts[0, 1] - ts[0, 0]  # Keep as JAX array, don't convert to float
 
         # SDE KL: penalise diffusion magnitudes when stochastic training is active.
         sde_cfg = self.config.get("sde_training", {})
@@ -273,7 +274,6 @@ class Trainer:
         disturbances_phys = disturbances
 
         # Compute physics losses via generic PhysicsLoss interface
-        dt = ts[0, 1] - ts[0, 0]  # Keep as JAX array, don't convert to float
         total_physics_loss, physics_residuals = self.loss_computer.physics_losses(
             pred_states_phys,
             controls_phys,

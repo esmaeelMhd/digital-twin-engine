@@ -18,13 +18,31 @@ from dte.evaluation.uncertainty import (
     gaussian_nll,
     variance_collapse_rate,
 )
+from dte.evaluation.universal import (
+    compute_constraint_summary,
+    compute_control_sensitivity_summary,
+    compute_forecast_metrics,
+    compute_rollout_metrics,
+    compute_uncertainty_summary,
+    normalize_universal_batch,
+    predict_model_next_state,
+    predict_rollout_samples,
+)
 
 __all__ = [
     "calibration_gap",
+    "compute_constraint_summary",
+    "compute_control_sensitivity_summary",
+    "compute_forecast_metrics",
+    "compute_rollout_metrics",
+    "compute_uncertainty_summary",
     "empirical_coverage",
     "finite_difference_control_jacobian",
     "gaussian_nll",
+    "normalize_universal_batch",
     "plant_balance_proxy_loss",
+    "predict_model_next_state",
+    "predict_rollout_samples",
     "rollout_stability_penalty",
     "sensitivity_mismatch_metrics",
     "source_stream_values_from_states",

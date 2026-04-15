@@ -49,6 +49,21 @@ def compute_performance_metrics(states, setpoints, controls):
     }
 
 
+def _build_pid_controller(system_spec, setpoints, dt):
+    """Return the legacy PID baseline when the system supports it."""
+
+    if system_spec.name != "cstr":
+        return None
+
+    from dte.control.pid import CSTRPIDController
+
+    return CSTRPIDController(
+        T_setpoint=float(setpoints[2]),
+        Ca_setpoint=float(setpoints[0]),
+        dt=float(dt),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run MPC control comparison")
     parser.add_argument(
@@ -234,12 +249,10 @@ def main():
     
     # Run PID if requested (CSTR only for now)
     if args.compare_pid:
-        if system_spec.name != "cstr":
+        pid_controller = _build_pid_controller(system_spec, setpoints, dt)
+        if pid_controller is None:
             print(f"\nNote: PID baseline is only implemented for CSTR; skipping for '{system_spec.name}'.")
         else:
-            from dte.control.pid import CSTRPIDController
-
-        if system_spec.name == "cstr":
             pid_result = pid_controller.run_closed_loop(
                 simulator,
                 initial_state,

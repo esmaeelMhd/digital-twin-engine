@@ -15,6 +15,7 @@ from jaxtyping import Array, PRNGKeyArray
 from tqdm import tqdm
 
 from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset
+from dte.evaluation.universal import normalize_universal_batch
 from dte.models.universal_digital_twin import UniversalDigitalTwin
 from dte.physics.constraints import bound_penalty, positivity_penalty
 
@@ -83,36 +84,7 @@ class UniversalTrainer:
         self.state_role_id_table = train_dataset.metadata.state_role_id
 
     def _normalize_batch(self, model: UniversalDigitalTwin, batch: Dict[str, Array]) -> Dict[str, Array]:
-        system_ids = batch["system_id"]
-        state_mask = batch["state_mask"].astype(jnp.float32)
-        control_mask = batch["control_mask"].astype(jnp.float32)
-        disturbance_mask = batch["disturbance_mask"].astype(jnp.float32)
-        param_mask = batch["param_mask"].astype(jnp.float32)
-        time_mask = batch["time_mask"].astype(jnp.float32)
-
-        states_norm = model.normalize_states(batch["states"], system_ids) * state_mask[:, None, :]
-        controls_norm = (
-            model.normalize_controls(batch["controls"], system_ids) * control_mask[:, None, :]
-        )
-        disturbances_norm = (
-            model.normalize_disturbances(batch["disturbances"], system_ids)
-            * disturbance_mask[:, None, :]
-        )
-        params_scaled = model.scale_params(batch["params"], system_ids) * param_mask
-
-        return {
-            "states_norm": states_norm,
-            "controls_norm": controls_norm,
-            "disturbances_norm": disturbances_norm,
-            "params_scaled": params_scaled,
-            "state_mask": state_mask,
-            "control_mask": control_mask,
-            "disturbance_mask": disturbance_mask,
-            "param_mask": param_mask,
-            "time_mask": time_mask,
-            "system_id": system_ids,
-            "t": batch["t"],
-        }
+        return normalize_universal_batch(model, batch)
 
     def _predict_k_step_for_sample(
         self,

@@ -1,5 +1,8 @@
 # Foundation Process Modeling Platform Implementation Plan
 
+Status note: this file is now a historical roadmap draft.
+Use the live codebase and `WORKFLOW.md` as the operational source of truth.
+
 ## Purpose
 
 This file is the execution plan for the coding agent. The agent must first inspect and understand the current repository in full, then implement the roadmap step by step without breaking the existing working system.
