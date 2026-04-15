@@ -17,6 +17,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import type {
   OnboardingCreateJobRequest,
   OnboardingPreviewRequest,
+  OnboardingTemplate,
   OnboardingUploadResponse,
 } from '../../api/types';
 import {
@@ -73,6 +74,28 @@ function StepCard({ eyebrow, title, body, children }: StepProps) {
       {children}
     </section>
   );
+}
+
+function applyTemplateSelection(
+  template: OnboardingTemplate,
+  upload: OnboardingUploadResponse | null,
+  setSelectedTemplateId: (value: string) => void,
+  setObjectiveStateNames: (value: string[]) => void,
+  setControlVariableNames: (value: string[]) => void,
+  setStateColumnMap: (value: ChannelMap) => void,
+  setControlColumnMap: (value: ChannelMap) => void,
+  setDisturbanceColumnMap: (value: ChannelMap) => void,
+) {
+  setSelectedTemplateId(template.id);
+  setObjectiveStateNames(template.suggested_objectives);
+  setControlVariableNames(template.suggested_controls);
+  if (upload) {
+    setStateColumnMap(defaultChannelMap(template.system_spec.state_names, upload.columns));
+    setControlColumnMap(defaultChannelMap(template.system_spec.control_names, upload.columns));
+    setDisturbanceColumnMap(
+      defaultChannelMap(template.system_spec.disturbance_names, upload.columns),
+    );
+  }
 }
 
 export function OnboardingPage() {
@@ -263,38 +286,42 @@ export function OnboardingPage() {
             </div>
           ) : (
             <>
-              <div className={styles.templateGrid}>
+              <fieldset className={styles.templateFieldset}>
+                <legend className={styles.templateLegend}>Supported unit templates</legend>
+                <div className={styles.templateGrid}>
                 {templatesQuery.data?.templates.map((template) => (
-                  <button
+                  <label
                     key={template.id}
-                    type="button"
                     className={styles.templateCard}
                     data-selected={template.id === activeTemplateId}
-                    onClick={() => {
-                      setSelectedTemplateId(template.id);
-                      setObjectiveStateNames(template.suggested_objectives);
-                      setControlVariableNames(template.suggested_controls);
-                      if (upload) {
-                        setStateColumnMap(
-                          defaultChannelMap(template.system_spec.state_names, upload.columns),
-                        );
-                        setControlColumnMap(
-                          defaultChannelMap(template.system_spec.control_names, upload.columns),
-                        );
-                        setDisturbanceColumnMap(
-                          defaultChannelMap(template.system_spec.disturbance_names, upload.columns),
-                        );
-                      }
-                    }}
                   >
+                    <input
+                      className={styles.srOnlyInput}
+                      type="radio"
+                      name="pilot-template"
+                      checked={template.id === activeTemplateId}
+                      onChange={() =>
+                        applyTemplateSelection(
+                          template,
+                          upload,
+                          setSelectedTemplateId,
+                          setObjectiveStateNames,
+                          setControlVariableNames,
+                          setStateColumnMap,
+                          setControlColumnMap,
+                          setDisturbanceColumnMap,
+                        )
+                      }
+                    />
                     <span className={styles.templateIcon}>
                       <FlaskConical size={18} aria-hidden="true" />
                     </span>
                     <strong>{template.title}</strong>
                     <span>{template.description}</span>
-                  </button>
+                  </label>
                 ))}
-              </div>
+                </div>
+              </fieldset>
 
               <div className={styles.formGrid}>
                 <label>

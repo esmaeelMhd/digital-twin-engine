@@ -69,27 +69,31 @@ export function HeroSection({ page }: HeroSectionProps) {
     let width = 0;
     let height = 0;
     let frame = 0;
+    const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 
     const resize = () => {
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
       width = window.innerWidth;
       height = window.innerHeight;
-      canvas.width = width * window.devicePixelRatio;
-      canvas.height = height * window.devicePixelRatio;
+      canvas.width = width * pixelRatio;
+      canvas.height = height * pixelRatio;
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
-      context.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     };
 
-    const render = () => {
+    const paint = (shouldAnimate: boolean) => {
       context.clearRect(0, 0, width, height);
-      for (const particle of particles) {
-        particle.x += particle.vx;
-        particle.y += particle.vy;
-        if (particle.x <= 0 || particle.x >= 1) {
-          particle.vx *= -1;
-        }
-        if (particle.y <= 0 || particle.y >= 1) {
-          particle.vy *= -1;
+      if (shouldAnimate) {
+        for (const particle of particles) {
+          particle.x += particle.vx;
+          particle.y += particle.vy;
+          if (particle.x <= 0 || particle.x >= 1) {
+            particle.vx *= -1;
+          }
+          if (particle.y <= 0 || particle.y >= 1) {
+            particle.vy *= -1;
+          }
         }
       }
 
@@ -117,15 +121,39 @@ export function HeroSection({ page }: HeroSectionProps) {
         context.arc(particle.x * width, particle.y * height, particle.radius, 0, Math.PI * 2);
         context.fill();
       }
+    };
 
+    const render = () => {
+      paint(true);
       frame = window.requestAnimationFrame(render);
     };
 
+    const renderStatic = () => {
+      window.cancelAnimationFrame(frame);
+      paint(false);
+    };
+
+    const handleMotionChange = (event: MediaQueryListEvent) => {
+      window.cancelAnimationFrame(frame);
+      resize();
+      if (event.matches) {
+        renderStatic();
+      } else {
+        render();
+      }
+    };
+
     resize();
-    render();
+    if (motionQuery.matches) {
+      renderStatic();
+    } else {
+      render();
+    }
     window.addEventListener('resize', resize);
+    motionQuery.addEventListener('change', handleMotionChange);
     return () => {
       window.removeEventListener('resize', resize);
+      motionQuery.removeEventListener('change', handleMotionChange);
       window.cancelAnimationFrame(frame);
     };
   }, []);
@@ -133,7 +161,7 @@ export function HeroSection({ page }: HeroSectionProps) {
   return (
     <>
       <section className={styles.hero}>
-        <canvas ref={canvasRef} className={styles.heroCanvas} />
+        <canvas ref={canvasRef} className={styles.heroCanvas} aria-hidden="true" />
         <div className={styles.heroInner}>
           <span className="pill">Industrial decision support for one critical unit</span>
           <h1 className={styles.heroTitle}>{page.product_name}</h1>
