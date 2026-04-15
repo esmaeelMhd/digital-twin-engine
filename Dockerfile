@@ -46,6 +46,7 @@ RUN pip install --no-cache-dir \
     matplotlib>=3.7.0 \
     tqdm>=4.66.0 \
     fastapi>=0.111.0 \
+    python-multipart>=0.0.9 \
     uvicorn[standard]>=0.29.0 \
     pydantic>=2.0.0 \
     httpx>=0.27.0 \
