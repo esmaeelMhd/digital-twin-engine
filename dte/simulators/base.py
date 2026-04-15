@@ -184,8 +184,11 @@ class ProcessUnitSpec(SystemSpec):
     family: str = "generic"
     subtype: Optional[str] = None
     law_tags: List[str] = field(default_factory=list)
+    conditioning_tags: Dict[str, str] = field(default_factory=dict)
     topology_ports: List[TopologyPort] = field(default_factory=list)
     constraints_metadata: Dict[str, Any] = field(default_factory=dict)
+    law_feature_names: List[str] = field(default_factory=list)
+    law_feature_defaults: List[float] = field(default_factory=list)
 
     def __post_init__(self):
         super().__post_init__()
@@ -211,6 +214,14 @@ class ProcessUnitSpec(SystemSpec):
                 ParameterDescriptor(name=f"param_{idx}")
                 for idx in range(self.param_dim)
             ]
+        if not self.law_feature_names and self.law_tags:
+            ordered_tags: list[str] = []
+            for tag in self.law_tags:
+                normalized = str(tag)
+                if normalized not in ordered_tags:
+                    ordered_tags.append(normalized)
+            self.law_feature_names = [f"law_tag::{tag}" for tag in ordered_tags]
+            self.law_feature_defaults = [1.0] * len(ordered_tags)
 
         if len(self.state_channels) != self.state_dim:
             raise ValueError(
@@ -231,6 +242,10 @@ class ProcessUnitSpec(SystemSpec):
             raise ValueError(
                 f"{self.name}: expected {self.param_dim} parameter descriptors, "
                 f"got {len(self.parameter_descriptors)}."
+            )
+        if len(self.law_feature_names) != len(self.law_feature_defaults):
+            raise ValueError(
+                f"{self.name}: law_feature_names and law_feature_defaults must have the same length."
             )
 
         if not self.constraints_metadata:
@@ -267,6 +282,24 @@ class ProcessUnitSpec(SystemSpec):
 
     def state_role_names(self) -> Tuple[str, ...]:
         return tuple(channel.role for channel in self.state_channels)
+
+    def control_role_names(self) -> Tuple[str, ...]:
+        return tuple(channel.role for channel in self.control_channels)
+
+    def disturbance_role_names(self) -> Tuple[str, ...]:
+        return tuple(channel.role for channel in self.disturbance_channels)
+
+    def state_channel_names(self) -> Tuple[str, ...]:
+        return tuple(channel.name for channel in self.state_channels)
+
+    def control_channel_names(self) -> Tuple[str, ...]:
+        return tuple(channel.name for channel in self.control_channels)
+
+    def disturbance_channel_names(self) -> Tuple[str, ...]:
+        return tuple(channel.name for channel in self.disturbance_channels)
+
+    def law_feature_defaults_array(self) -> Float[Array, "n_law_features"]:
+        return jnp.asarray(self.law_feature_defaults, dtype=jnp.float32)
 
 
 class ProcessSimulator(ABC):

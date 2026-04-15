@@ -1,5 +1,7 @@
 """Tests for the grouped universal digital twin path."""
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -209,6 +211,42 @@ def test_universal_model_respects_inactive_state_dimensions():
 
     assert decoded.shape == (4,)
     assert jnp.allclose(decoded[2:], 0.0)
+
+
+def test_universal_model_supports_channel_and_law_conditioning_tables():
+    metadata = replace(
+        _build_metadata(),
+        control_role_names=("flow", "temperature"),
+        control_role_id=jnp.asarray([[0, 1], [0, 0]], dtype=jnp.int32),
+        disturbance_role_names=("concentration", "temperature"),
+        disturbance_role_id=jnp.asarray([[0, 1], [1, 1]], dtype=jnp.int32),
+        channel_name_names=("generic", "Ca", "Cb", "T", "Tc", "F_in", "Tc_in", "Ca_in", "T_in"),
+        state_name_id=jnp.asarray([[1, 2, 3, 4], [3, 4, 0, 0]], dtype=jnp.int32),
+        control_name_id=jnp.asarray([[5, 6], [5, 5]], dtype=jnp.int32),
+        disturbance_name_id=jnp.asarray([[7, 8], [8, 8]], dtype=jnp.int32),
+        law_feature_names=("law_tag::mass_balance", "law_tag::energy_balance"),
+        law_feature_defaults=jnp.asarray(
+            [[1.0, 1.0], [0.0, 1.0]],
+            dtype=jnp.float32,
+        ),
+    )
+    config = _build_config()
+    config["model"]["channel_conditioning"] = {"enabled": True}
+    config["model"]["law_conditioning"] = {"enabled": True}
+    model = UniversalDigitalTwin.from_config(config, metadata, jax.random.PRNGKey(4))
+
+    z, _, _ = model.encode(
+        jnp.array([0.2, -0.1, 0.1, 0.3], dtype=jnp.float32),
+        jnp.ones((6,), dtype=jnp.float32),
+        jnp.array([0.1, -0.2], dtype=jnp.float32),
+        jnp.ones((4,), dtype=jnp.float32),
+        jnp.ones((2,), dtype=jnp.float32),
+        jnp.ones((6,), dtype=jnp.float32),
+        jnp.asarray(0, dtype=jnp.int32),
+        jax.random.PRNGKey(5),
+    )
+
+    assert z.shape == (16,)
 
 
 def test_universal_model_adapter_filter_is_smaller_than_full_filter():

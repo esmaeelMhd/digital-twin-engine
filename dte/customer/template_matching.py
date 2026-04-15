@@ -20,8 +20,12 @@ from dte.simulators.registry import get_system_spec
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REGISTERED_UNIT_CONFIGS = {
+    "bioreactor_compartment": PROJECT_ROOT / "configs" / "bioreactor_compartment_default.yaml",
     "cstr": PROJECT_ROOT / "configs" / "cstr_default.yaml",
     "heat_exchanger": PROJECT_ROOT / "configs" / "heat_exchanger_default.yaml",
+    "isothermal_cstr": PROJECT_ROOT / "configs" / "isothermal_cstr_default.yaml",
+    "separator": PROJECT_ROOT / "configs" / "separator_default.yaml",
+    "storage_tank": PROJECT_ROOT / "configs" / "storage_tank_default.yaml",
     "two_tank": PROJECT_ROOT / "configs" / "two_tank_default.yaml",
 }
 

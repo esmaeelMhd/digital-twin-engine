@@ -52,7 +52,13 @@ class FlowsheetModel(eqx.Module):
     graph_update: ResidualMLP
     stream_message_proj: eqx.nn.Linear
     descriptor_proj: eqx.nn.Linear
+    channel_context_proj: eqx.nn.Linear | None
+    law_feature_proj: eqx.nn.Linear | None
     family_embedding_table: Array
+    state_role_embedding_table: Array
+    control_role_embedding_table: Array
+    disturbance_role_embedding_table: Array
+    channel_name_embedding_table: Array
 
     unit_state_center_table: Array
     unit_state_scale_table: Array
@@ -67,6 +73,13 @@ class FlowsheetModel(eqx.Module):
     unit_param_mask_table: Array
     unit_descriptor_table: Array
     unit_family_id_table: Array
+    unit_state_role_id_table: Array
+    unit_control_role_id_table: Array
+    unit_disturbance_role_id_table: Array
+    unit_state_name_id_table: Array
+    unit_control_name_id_table: Array
+    unit_disturbance_name_id_table: Array
+    unit_law_feature_table: Array
     stream_source_index_table: Array
     stream_target_index_table: Array
     stream_source_var_index_table: Array
@@ -87,6 +100,8 @@ class FlowsheetModel(eqx.Module):
     family_embedding_dim: int = eqx.field(static=True)
     message_dim: int = eqx.field(static=True)
     message_passing_steps: int = eqx.field(static=True)
+    channel_conditioning_enabled: bool = eqx.field(static=True)
+    law_conditioning_enabled: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -98,6 +113,8 @@ class FlowsheetModel(eqx.Module):
         n_layers: int,
         graph_layers: int,
         message_passing_steps: int,
+        channel_conditioning_enabled: bool,
+        law_conditioning_enabled: bool,
         key: PRNGKeyArray,
     ):
         self.n_units = len(metadata.unit_names)
@@ -113,6 +130,8 @@ class FlowsheetModel(eqx.Module):
         self.family_embedding_dim = family_embedding_dim
         self.message_dim = message_dim
         self.message_passing_steps = max(int(message_passing_steps), 1)
+        self.channel_conditioning_enabled = channel_conditioning_enabled
+        self.law_conditioning_enabled = law_conditioning_enabled
 
         self.unit_state_center_table = metadata.unit_state_center
         self.unit_state_scale_table = metadata.unit_state_scale
@@ -127,6 +146,13 @@ class FlowsheetModel(eqx.Module):
         self.unit_param_mask_table = metadata.unit_param_mask
         self.unit_descriptor_table = metadata.unit_descriptor
         self.unit_family_id_table = metadata.unit_family_id
+        self.unit_state_role_id_table = metadata.unit_state_role_id
+        self.unit_control_role_id_table = metadata.unit_control_role_id
+        self.unit_disturbance_role_id_table = metadata.unit_disturbance_role_id
+        self.unit_state_name_id_table = metadata.unit_state_name_id
+        self.unit_control_name_id_table = metadata.unit_control_name_id
+        self.unit_disturbance_name_id_table = metadata.unit_disturbance_name_id
+        self.unit_law_feature_table = metadata.unit_law_feature_defaults
         self.stream_source_index_table = metadata.stream_source_index
         self.stream_target_index_table = metadata.stream_target_index
         self.stream_source_var_index_table = metadata.stream_source_var_index
@@ -134,19 +160,62 @@ class FlowsheetModel(eqx.Module):
         self.stream_var_mask_table = metadata.stream_var_mask
         self.stream_delay_table = metadata.stream_delay
 
-        key_family, key_desc, key_stream, key_backbone, key_delta, key_graph = jax.random.split(
-            key, 6
-        )
+        (
+            key_family,
+            key_desc,
+            key_state_role,
+            key_control_role,
+            key_disturbance_role,
+            key_channel_name,
+            key_channel_context_proj,
+            key_law_feature_proj,
+            key_stream,
+            key_backbone,
+            key_delta,
+            key_graph,
+        ) = jax.random.split(key, 12)
         n_families = max(len(metadata.unit_family_names), 1)
         self.family_embedding_table = 0.02 * jax.random.normal(
             key_family,
             (n_families, family_embedding_dim),
+        )
+        self.state_role_embedding_table = 0.02 * jax.random.normal(
+            key_state_role,
+            (max(len(metadata.unit_state_role_names), 1), family_embedding_dim),
+        )
+        self.control_role_embedding_table = 0.02 * jax.random.normal(
+            key_control_role,
+            (max(len(metadata.unit_control_role_names), 1), family_embedding_dim),
+        )
+        self.disturbance_role_embedding_table = 0.02 * jax.random.normal(
+            key_disturbance_role,
+            (max(len(metadata.unit_disturbance_role_names), 1), family_embedding_dim),
+        )
+        self.channel_name_embedding_table = 0.02 * jax.random.normal(
+            key_channel_name,
+            (max(len(metadata.unit_channel_name_names), 1), family_embedding_dim),
         )
         self.descriptor_proj = eqx.nn.Linear(
             self.descriptor_dim,
             family_embedding_dim,
             key=key_desc,
         )
+        if self.channel_conditioning_enabled:
+            self.channel_context_proj = eqx.nn.Linear(
+                family_embedding_dim,
+                family_embedding_dim,
+                key=key_channel_context_proj,
+            )
+        else:
+            self.channel_context_proj = None
+        if self.law_conditioning_enabled and int(self.unit_law_feature_table.shape[1]) > 0:
+            self.law_feature_proj = eqx.nn.Linear(
+                int(self.unit_law_feature_table.shape[1]),
+                family_embedding_dim,
+                key=key_law_feature_proj,
+            )
+        else:
+            self.law_feature_proj = None
         self.stream_message_proj = eqx.nn.Linear(
             self.max_stream_vars,
             message_dim,
@@ -196,6 +265,12 @@ class FlowsheetModel(eqx.Module):
             n_layers=int(model_cfg.get("n_layers", 2)),
             graph_layers=int(model_cfg.get("graph_layers", 2)),
             message_passing_steps=int(model_cfg.get("message_passing_steps", 2)),
+            channel_conditioning_enabled=bool(
+                model_cfg.get("channel_conditioning", {}).get("enabled", False)
+            ),
+            law_conditioning_enabled=bool(
+                model_cfg.get("law_conditioning", {}).get("enabled", False)
+            ),
             key=key,
         )
 
@@ -220,7 +295,41 @@ class FlowsheetModel(eqx.Module):
         descriptor_context = jax.vmap(
             lambda descriptor: jax.nn.gelu(self.descriptor_proj(descriptor))
         )(self.unit_descriptor_table)
-        return family_context + descriptor_context
+        context = family_context + descriptor_context
+        if self.channel_context_proj is not None:
+            state_semantics = (
+                self.state_role_embedding_table[self.unit_state_role_id_table]
+                + self.channel_name_embedding_table[self.unit_state_name_id_table]
+            )
+            control_semantics = (
+                self.control_role_embedding_table[self.unit_control_role_id_table]
+                + self.channel_name_embedding_table[self.unit_control_name_id_table]
+            )
+            disturbance_semantics = (
+                self.disturbance_role_embedding_table[self.unit_disturbance_role_id_table]
+                + self.channel_name_embedding_table[self.unit_disturbance_name_id_table]
+            )
+            state_summary = jax.vmap(
+                lambda emb, mask: jnp.sum(emb * mask[:, None], axis=0)
+                / jnp.maximum(jnp.sum(mask), 1.0)
+            )(state_semantics, self.unit_state_mask_table)
+            control_summary = jax.vmap(
+                lambda emb, mask: jnp.sum(emb * mask[:, None], axis=0)
+                / jnp.maximum(jnp.sum(mask), 1.0)
+            )(control_semantics, self.unit_control_mask_table)
+            disturbance_summary = jax.vmap(
+                lambda emb, mask: jnp.sum(emb * mask[:, None], axis=0)
+                / jnp.maximum(jnp.sum(mask), 1.0)
+            )(disturbance_semantics, self.unit_disturbance_mask_table)
+            channel_summary = (state_summary + control_summary + disturbance_summary) / 3.0
+            context = context + jax.vmap(
+                lambda summary: jax.nn.gelu(self.channel_context_proj(summary))
+            )(channel_summary)
+        if self.law_feature_proj is not None:
+            context = context + jax.vmap(
+                lambda features: jax.nn.gelu(self.law_feature_proj(features))
+            )(self.unit_law_feature_table)
+        return context
 
     def _compute_stream_values(
         self,

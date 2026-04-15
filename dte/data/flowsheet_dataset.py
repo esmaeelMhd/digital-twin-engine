@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 from typing import Any
@@ -79,6 +79,32 @@ class FlowsheetGraphMetadata:
     stream_var_mask: Array
     stream_kind_id: Array
     stream_delay: Array
+    unit_state_role_names: tuple[str, ...] = ()
+    unit_control_role_names: tuple[str, ...] = ()
+    unit_disturbance_role_names: tuple[str, ...] = ()
+    unit_channel_name_names: tuple[str, ...] = ()
+    unit_state_role_id: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.int32)
+    )
+    unit_control_role_id: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.int32)
+    )
+    unit_disturbance_role_id: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.int32)
+    )
+    unit_state_name_id: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.int32)
+    )
+    unit_control_name_id: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.int32)
+    )
+    unit_disturbance_name_id: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.int32)
+    )
+    unit_law_feature_names: tuple[str, ...] = ()
+    unit_law_feature_defaults: Array = field(
+        default_factory=lambda: jnp.zeros((0, 0), dtype=jnp.float32)
+    )
 
     @classmethod
     def from_flowsheet_spec(cls, flowsheet: FlowsheetSpec) -> "FlowsheetGraphMetadata":
@@ -101,6 +127,77 @@ class FlowsheetGraphMetadata:
             dict.fromkeys(["process", *[stream.kind for stream in flowsheet.streams]]).keys()
         )
         stream_kind_to_id = {name: idx for idx, name in enumerate(stream_kind_names)}
+        unit_state_role_names = tuple(
+            dict.fromkeys(
+                [
+                    "generic",
+                    *[
+                        channel.role
+                        for unit in units
+                        for channel in getattr(unit, "state_channels", [])
+                    ],
+                ]
+            ).keys()
+        )
+        unit_control_role_names = tuple(
+            dict.fromkeys(
+                [
+                    "generic",
+                    *[
+                        channel.role
+                        for unit in units
+                        for channel in getattr(unit, "control_channels", [])
+                    ],
+                ]
+            ).keys()
+        )
+        unit_disturbance_role_names = tuple(
+            dict.fromkeys(
+                [
+                    "generic",
+                    *[
+                        channel.role
+                        for unit in units
+                        for channel in getattr(unit, "disturbance_channels", [])
+                    ],
+                ]
+            ).keys()
+        )
+        unit_channel_name_names = tuple(
+            dict.fromkeys(
+                [
+                    "generic",
+                    *[
+                        channel.name
+                        for unit in units
+                        for channel in (
+                            [
+                                *getattr(unit, "state_channels", []),
+                                *getattr(unit, "control_channels", []),
+                                *getattr(unit, "disturbance_channels", []),
+                            ]
+                        )
+                    ],
+                ]
+            ).keys()
+        )
+        unit_law_feature_names = tuple(
+            dict.fromkeys(
+                [
+                    name
+                    for unit in units
+                    for name in getattr(unit, "law_feature_names", [])
+                ]
+            ).keys()
+        )
+        state_role_to_id = {name: idx for idx, name in enumerate(unit_state_role_names)}
+        control_role_to_id = {name: idx for idx, name in enumerate(unit_control_role_names)}
+        disturbance_role_to_id = {
+            name: idx for idx, name in enumerate(unit_disturbance_role_names)
+        }
+        channel_name_to_id = {
+            name: idx for idx, name in enumerate(unit_channel_name_names)
+        }
 
         unit_state_center = []
         unit_state_scale = []
@@ -115,6 +212,13 @@ class FlowsheetGraphMetadata:
         unit_param_mask = []
         unit_descriptor = []
         unit_family_id = []
+        unit_state_role_id = []
+        unit_control_role_id = []
+        unit_disturbance_role_id = []
+        unit_state_name_id = []
+        unit_control_name_id = []
+        unit_disturbance_name_id = []
+        unit_law_feature_defaults = []
 
         for unit in units:
             norm = unit.normalization
@@ -145,6 +249,79 @@ class FlowsheetGraphMetadata:
                 )
             )
             unit_family_id.append(family_to_id[str(unit.family or "generic")])
+            unit_state_role_id.append(
+                _pad(
+                    [
+                        state_role_to_id[channel.role]
+                        for channel in getattr(unit, "state_channels", [])
+                    ],
+                    max_state_dim,
+                    state_role_to_id["generic"],
+                )
+            )
+            unit_control_role_id.append(
+                _pad(
+                    [
+                        control_role_to_id[channel.role]
+                        for channel in getattr(unit, "control_channels", [])
+                    ],
+                    max_control_dim,
+                    control_role_to_id["generic"],
+                )
+            )
+            unit_disturbance_role_id.append(
+                _pad(
+                    [
+                        disturbance_role_to_id[channel.role]
+                        for channel in getattr(unit, "disturbance_channels", [])
+                    ],
+                    max_disturbance_dim,
+                    disturbance_role_to_id["generic"],
+                )
+            )
+            unit_state_name_id.append(
+                _pad(
+                    [
+                        channel_name_to_id[str(channel.name)]
+                        for channel in getattr(unit, "state_channels", [])
+                    ],
+                    max_state_dim,
+                    channel_name_to_id["generic"],
+                )
+            )
+            unit_control_name_id.append(
+                _pad(
+                    [
+                        channel_name_to_id[str(channel.name)]
+                        for channel in getattr(unit, "control_channels", [])
+                    ],
+                    max_control_dim,
+                    channel_name_to_id["generic"],
+                )
+            )
+            unit_disturbance_name_id.append(
+                _pad(
+                    [
+                        channel_name_to_id[str(channel.name)]
+                        for channel in getattr(unit, "disturbance_channels", [])
+                    ],
+                    max_disturbance_dim,
+                    channel_name_to_id["generic"],
+                )
+            )
+            unit_law_feature_defaults.append(
+                [
+                    float(
+                        dict(
+                            zip(
+                                getattr(unit, "law_feature_names", []),
+                                getattr(unit, "law_feature_defaults", []),
+                            )
+                        ).get(feature_name, 0.0)
+                    )
+                    for feature_name in unit_law_feature_names
+                ]
+            )
 
         stream_source_index = []
         stream_target_index = []
@@ -221,6 +398,24 @@ class FlowsheetGraphMetadata:
             stream_var_mask=jnp.asarray(np.asarray(stream_var_mask, dtype=np.float32)),
             stream_kind_id=jnp.asarray(np.asarray(stream_kind_id, dtype=np.int32)),
             stream_delay=jnp.asarray(np.asarray(stream_delay, dtype=np.float32)),
+            unit_state_role_names=unit_state_role_names,
+            unit_control_role_names=unit_control_role_names,
+            unit_disturbance_role_names=unit_disturbance_role_names,
+            unit_channel_name_names=unit_channel_name_names,
+            unit_state_role_id=jnp.asarray(np.asarray(unit_state_role_id, dtype=np.int32)),
+            unit_control_role_id=jnp.asarray(np.asarray(unit_control_role_id, dtype=np.int32)),
+            unit_disturbance_role_id=jnp.asarray(
+                np.asarray(unit_disturbance_role_id, dtype=np.int32)
+            ),
+            unit_state_name_id=jnp.asarray(np.asarray(unit_state_name_id, dtype=np.int32)),
+            unit_control_name_id=jnp.asarray(np.asarray(unit_control_name_id, dtype=np.int32)),
+            unit_disturbance_name_id=jnp.asarray(
+                np.asarray(unit_disturbance_name_id, dtype=np.int32)
+            ),
+            unit_law_feature_names=unit_law_feature_names,
+            unit_law_feature_defaults=jnp.asarray(
+                np.asarray(unit_law_feature_defaults, dtype=np.float32)
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -252,6 +447,18 @@ class FlowsheetGraphMetadata:
             "stream_var_mask": np.asarray(self.stream_var_mask).tolist(),
             "stream_kind_id": np.asarray(self.stream_kind_id).tolist(),
             "stream_delay": np.asarray(self.stream_delay).tolist(),
+            "unit_state_role_names": list(self.unit_state_role_names),
+            "unit_control_role_names": list(self.unit_control_role_names),
+            "unit_disturbance_role_names": list(self.unit_disturbance_role_names),
+            "unit_channel_name_names": list(self.unit_channel_name_names),
+            "unit_state_role_id": np.asarray(self.unit_state_role_id).tolist(),
+            "unit_control_role_id": np.asarray(self.unit_control_role_id).tolist(),
+            "unit_disturbance_role_id": np.asarray(self.unit_disturbance_role_id).tolist(),
+            "unit_state_name_id": np.asarray(self.unit_state_name_id).tolist(),
+            "unit_control_name_id": np.asarray(self.unit_control_name_id).tolist(),
+            "unit_disturbance_name_id": np.asarray(self.unit_disturbance_name_id).tolist(),
+            "unit_law_feature_names": list(self.unit_law_feature_names),
+            "unit_law_feature_defaults": np.asarray(self.unit_law_feature_defaults).tolist(),
         }
 
     @classmethod
@@ -294,6 +501,41 @@ class FlowsheetGraphMetadata:
             stream_var_mask=jnp.asarray(payload["stream_var_mask"], dtype=jnp.float32),
             stream_kind_id=jnp.asarray(payload["stream_kind_id"], dtype=jnp.int32),
             stream_delay=jnp.asarray(payload["stream_delay"], dtype=jnp.float32),
+            unit_state_role_names=tuple(payload.get("unit_state_role_names", [])),
+            unit_control_role_names=tuple(payload.get("unit_control_role_names", [])),
+            unit_disturbance_role_names=tuple(
+                payload.get("unit_disturbance_role_names", [])
+            ),
+            unit_channel_name_names=tuple(payload.get("unit_channel_name_names", [])),
+            unit_state_role_id=jnp.asarray(
+                payload.get("unit_state_role_id", []),
+                dtype=jnp.int32,
+            ),
+            unit_control_role_id=jnp.asarray(
+                payload.get("unit_control_role_id", []),
+                dtype=jnp.int32,
+            ),
+            unit_disturbance_role_id=jnp.asarray(
+                payload.get("unit_disturbance_role_id", []),
+                dtype=jnp.int32,
+            ),
+            unit_state_name_id=jnp.asarray(
+                payload.get("unit_state_name_id", []),
+                dtype=jnp.int32,
+            ),
+            unit_control_name_id=jnp.asarray(
+                payload.get("unit_control_name_id", []),
+                dtype=jnp.int32,
+            ),
+            unit_disturbance_name_id=jnp.asarray(
+                payload.get("unit_disturbance_name_id", []),
+                dtype=jnp.int32,
+            ),
+            unit_law_feature_names=tuple(payload.get("unit_law_feature_names", [])),
+            unit_law_feature_defaults=jnp.asarray(
+                payload.get("unit_law_feature_defaults", []),
+                dtype=jnp.float32,
+            ),
         )
 
     def manifest(self) -> dict[str, Any]:
@@ -309,6 +551,7 @@ class FlowsheetGraphMetadata:
                 "unit_disturbance_center": list(self.unit_disturbance_center.shape),
                 "unit_param_scale": list(self.unit_param_scale.shape),
                 "unit_descriptor": list(self.unit_descriptor.shape),
+                "unit_law_feature_defaults": list(self.unit_law_feature_defaults.shape),
                 "stream_source_var_index": list(self.stream_source_var_index.shape),
                 "stream_var_mask": list(self.stream_var_mask.shape),
             },

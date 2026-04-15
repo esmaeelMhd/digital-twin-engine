@@ -19,6 +19,8 @@ def _load_training_config() -> dict:
         "group_encoder_layers": 2,
         "group_mixer_layers": 2,
     }
+    config["model"]["channel_conditioning"] = {"enabled": True}
+    config["model"]["law_conditioning"] = {"enabled": True}
     return config
 
 

@@ -104,6 +104,8 @@ class UniversalDigitalTwin(eqx.Module):
     drift: ResidualMLP
     cde_matrix: ResidualMLP | None
     descriptor_proj: eqx.nn.Linear | None
+    channel_context_proj: eqx.nn.Linear | None
+    law_feature_proj: eqx.nn.Linear | None
     encoder_adapter: BottleneckAdapter | None
     drift_adapter: BottleneckAdapter | None
     decoder_adapter: BottleneckAdapter | None
@@ -114,6 +116,10 @@ class UniversalDigitalTwin(eqx.Module):
     law_embedding_table: Float[Array, "n_law_tags embedding_dim"]
     conditioning_category_embedding_table: Float[Array, "n_conditioning_categories embedding_dim"]
     conditioning_value_embedding_table: Float[Array, "n_conditioning_values embedding_dim"]
+    state_role_embedding_table: Float[Array, "n_state_roles embedding_dim"]
+    control_role_embedding_table: Float[Array, "n_control_roles embedding_dim"]
+    disturbance_role_embedding_table: Float[Array, "n_disturbance_roles embedding_dim"]
+    channel_name_embedding_table: Float[Array, "n_channel_names embedding_dim"]
 
     state_center_table: Float[Array, "n_systems max_state_dim"]
     state_scale_table: Float[Array, "n_systems max_state_dim"]
@@ -136,6 +142,13 @@ class UniversalDigitalTwin(eqx.Module):
     law_tag_mask_table: Float[Array, "n_systems n_law_tags"]
     conditioning_value_id_table: Array
     parameter_law_tag_id_table: Array
+    state_role_id_table: Array
+    control_role_id_table: Array
+    disturbance_role_id_table: Array
+    state_name_id_table: Array
+    control_name_id_table: Array
+    disturbance_name_id_table: Array
+    law_feature_table: Float[Array, "n_systems n_law_features"]
 
     state_center_delta_table: Float[Array, "n_systems max_state_dim"]
     state_scale_log_delta_table: Float[Array, "n_systems max_state_dim"]
@@ -162,6 +175,8 @@ class UniversalDigitalTwin(eqx.Module):
     use_variational_encoder: bool = eqx.field(static=True)
     adapters_enabled: bool = eqx.field(static=True)
     adapter_bottleneck_dim: int = eqx.field(static=True)
+    channel_conditioning_enabled: bool = eqx.field(static=True)
+    law_conditioning_enabled: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -182,6 +197,8 @@ class UniversalDigitalTwin(eqx.Module):
         neural_cde_hidden_dim: int,
         neural_cde_layers: int,
         use_variational_encoder: bool,
+        channel_conditioning_enabled: bool,
+        law_conditioning_enabled: bool,
         adapters_enabled: bool,
         adapter_bottleneck_dim: int,
         adapter_residual_scale: float,
@@ -204,6 +221,8 @@ class UniversalDigitalTwin(eqx.Module):
         self.use_system_spec_embedding = use_system_spec_embedding
         self.neural_cde_enabled = neural_cde_enabled
         self.use_variational_encoder = use_variational_encoder
+        self.channel_conditioning_enabled = channel_conditioning_enabled
+        self.law_conditioning_enabled = law_conditioning_enabled
         self.adapters_enabled = adapters_enabled
         self.adapter_bottleneck_dim = adapter_bottleneck_dim
 
@@ -256,6 +275,41 @@ class UniversalDigitalTwin(eqx.Module):
             if int(getattr(metadata.parameter_law_tag_id, "size", 0)) > 0
             else jnp.zeros((n_systems, self.max_param_dim), dtype=jnp.int32)
         )
+        self.state_role_id_table = (
+            metadata.state_role_id
+            if int(getattr(metadata.state_role_id, "size", 0)) > 0
+            else jnp.zeros((n_systems, self.max_state_dim), dtype=jnp.int32)
+        )
+        self.control_role_id_table = (
+            metadata.control_role_id
+            if int(getattr(metadata.control_role_id, "size", 0)) > 0
+            else jnp.zeros((n_systems, self.max_control_dim), dtype=jnp.int32)
+        )
+        self.disturbance_role_id_table = (
+            metadata.disturbance_role_id
+            if int(getattr(metadata.disturbance_role_id, "size", 0)) > 0
+            else jnp.zeros((n_systems, self.max_disturbance_dim), dtype=jnp.int32)
+        )
+        self.state_name_id_table = (
+            metadata.state_name_id
+            if int(getattr(metadata.state_name_id, "size", 0)) > 0
+            else jnp.zeros((n_systems, self.max_state_dim), dtype=jnp.int32)
+        )
+        self.control_name_id_table = (
+            metadata.control_name_id
+            if int(getattr(metadata.control_name_id, "size", 0)) > 0
+            else jnp.zeros((n_systems, self.max_control_dim), dtype=jnp.int32)
+        )
+        self.disturbance_name_id_table = (
+            metadata.disturbance_name_id
+            if int(getattr(metadata.disturbance_name_id, "size", 0)) > 0
+            else jnp.zeros((n_systems, self.max_disturbance_dim), dtype=jnp.int32)
+        )
+        self.law_feature_table = (
+            metadata.law_feature_defaults
+            if int(getattr(metadata.law_feature_defaults, "size", 0)) > 0
+            else jnp.zeros((n_systems, 0), dtype=jnp.float32)
+        )
 
         self.state_center_delta_table = jnp.zeros_like(self.state_center_table)
         self.state_scale_log_delta_table = jnp.zeros_like(self.state_scale_table)
@@ -274,6 +328,10 @@ class UniversalDigitalTwin(eqx.Module):
             key_law,
             key_conditioning_category,
             key_conditioning_value,
+            key_state_role,
+            key_control_role,
+            key_disturbance_role,
+            key_channel_name,
             key_group_kind,
             key_group_enc,
             key_group_mix,
@@ -283,6 +341,8 @@ class UniversalDigitalTwin(eqx.Module):
             key_group_mixer_film_shift,
             key_decoder_film_scale,
             key_decoder_film_shift,
+            key_channel_context_proj,
+            key_law_feature_proj,
             key_enc_mean,
             key_enc_logvar,
             key_dec,
@@ -291,7 +351,7 @@ class UniversalDigitalTwin(eqx.Module):
             key_encoder_adapter,
             key_drift_adapter,
             key_decoder_adapter,
-        ) = jax.random.split(key, 24)
+        ) = jax.random.split(key, 30)
 
         self.system_embedding_table = (
             0.02 * jax.random.normal(key_embed, (n_systems, system_embedding_dim))
@@ -319,6 +379,22 @@ class UniversalDigitalTwin(eqx.Module):
                 (n_conditioning_values, system_embedding_dim),
             )
         )
+        self.state_role_embedding_table = 0.02 * jax.random.normal(
+            key_state_role,
+            (max(len(metadata.state_role_names), 1), system_embedding_dim),
+        )
+        self.control_role_embedding_table = 0.02 * jax.random.normal(
+            key_control_role,
+            (max(len(metadata.control_role_names), 1), system_embedding_dim),
+        )
+        self.disturbance_role_embedding_table = 0.02 * jax.random.normal(
+            key_disturbance_role,
+            (max(len(metadata.disturbance_role_names), 1), system_embedding_dim),
+        )
+        self.channel_name_embedding_table = 0.02 * jax.random.normal(
+            key_channel_name,
+            (max(len(metadata.channel_name_names), 1), system_embedding_dim),
+        )
         self.state_group_kind_embedding_table = (
             0.02 * jax.random.normal(key_group_kind, (n_group_kinds, group_kind_dim))
         )
@@ -331,6 +407,23 @@ class UniversalDigitalTwin(eqx.Module):
             )
         else:
             self.descriptor_proj = None
+
+        if self.channel_conditioning_enabled:
+            self.channel_context_proj = eqx.nn.Linear(
+                system_embedding_dim,
+                system_embedding_dim,
+                key=key_channel_context_proj,
+            )
+        else:
+            self.channel_context_proj = None
+        if self.law_conditioning_enabled and int(self.law_feature_table.shape[1]) > 0:
+            self.law_feature_proj = eqx.nn.Linear(
+                int(self.law_feature_table.shape[1]),
+                system_embedding_dim,
+                key=key_law_feature_proj,
+            )
+        else:
+            self.law_feature_proj = None
 
         context_dim = system_embedding_dim
         group_encoder_input_dim = 2 * self.max_state_dim + context_dim + group_kind_dim
@@ -480,6 +573,8 @@ class UniversalDigitalTwin(eqx.Module):
     ) -> "UniversalDigitalTwin":
         model_cfg = config.get("model", {})
         neural_cde_cfg = model_cfg.get("neural_cde", {})
+        channel_conditioning_cfg = model_cfg.get("channel_conditioning", {})
+        law_conditioning_cfg = model_cfg.get("law_conditioning", {})
         adapter_cfg = model_cfg.get("adapters", {})
         return cls(
             metadata,
@@ -505,6 +600,8 @@ class UniversalDigitalTwin(eqx.Module):
             ),
             neural_cde_layers=int(neural_cde_cfg.get("n_layers", 2)),
             use_variational_encoder=bool(model_cfg.get("use_variational_encoder", True)),
+            channel_conditioning_enabled=bool(channel_conditioning_cfg.get("enabled", False)),
+            law_conditioning_enabled=bool(law_conditioning_cfg.get("enabled", False)),
             adapters_enabled=bool(adapter_cfg.get("enabled", False)),
             adapter_bottleneck_dim=int(adapter_cfg.get("bottleneck_dim", 16)),
             adapter_residual_scale=float(adapter_cfg.get("residual_scale", 0.1)),
@@ -542,7 +639,7 @@ class UniversalDigitalTwin(eqx.Module):
 
         fixed_replace = (
             False,
-        ) * 21
+        ) * 28
         calibration_replace = (False,) * 7
         fixed_selector = lambda m: (  # noqa: E731
             m.state_center_table,
@@ -565,6 +662,13 @@ class UniversalDigitalTwin(eqx.Module):
             m.law_tag_mask_table,
             m.conditioning_value_id_table,
             m.parameter_law_tag_id_table,
+            m.state_role_id_table,
+            m.control_role_id_table,
+            m.disturbance_role_id_table,
+            m.state_name_id_table,
+            m.control_name_id_table,
+            m.disturbance_name_id_table,
+            m.law_feature_table,
             m.param_bias_mask_table,
         )
         calibration_selector = lambda m: (  # noqa: E731
@@ -648,6 +752,10 @@ class UniversalDigitalTwin(eqx.Module):
             context = context + 0.5 * jax.nn.gelu(
                 self.descriptor_proj(self.descriptor_table[system_id])
             )
+        if self.law_feature_proj is not None:
+            context = context + 0.5 * jax.nn.gelu(
+                self.law_feature_proj(self.law_feature_table[system_id])
+            )
         return context
 
     def _parameter_conditioning_summary(
@@ -667,6 +775,8 @@ class UniversalDigitalTwin(eqx.Module):
         system_id: Array,
         params_scaled: Array | None = None,
         param_mask: Array | None = None,
+        control_mask: Array | None = None,
+        disturbance_mask: Array | None = None,
     ) -> Array:
         context = self._static_conditioning_context(system_id)
         if params_scaled is not None and param_mask is not None:
@@ -675,7 +785,71 @@ class UniversalDigitalTwin(eqx.Module):
                 params_scaled,
                 param_mask,
             )
+        if self.channel_context_proj is not None:
+            context = context + 0.5 * self._channel_conditioning_summary(
+                system_id,
+                control_mask=control_mask,
+                disturbance_mask=disturbance_mask,
+            )
         return context
+
+    def _channel_semantic_mean(
+        self,
+        role_embedding_table: Array,
+        name_id_table: Array,
+        role_id_table: Array,
+        system_id: Array,
+        weights: Array,
+    ) -> Array:
+        semantics = (
+            role_embedding_table[role_id_table[system_id]]
+            + self.channel_name_embedding_table[name_id_table[system_id]]
+        )
+        return _masked_embedding_mean(semantics, weights)
+
+    def _channel_conditioning_summary(
+        self,
+        system_id: Array,
+        *,
+        control_mask: Array | None = None,
+        disturbance_mask: Array | None = None,
+    ) -> Array:
+        state_summary = self._channel_semantic_mean(
+            self.state_role_embedding_table,
+            self.state_name_id_table,
+            self.state_role_id_table,
+            system_id,
+            self.state_mask_table[system_id],
+        )
+        control_weights = (
+            self.control_mask_table[system_id]
+            if control_mask is None
+            else self.control_mask_table[system_id] * control_mask
+        )
+        control_summary = self._channel_semantic_mean(
+            self.control_role_embedding_table,
+            self.control_name_id_table,
+            self.control_role_id_table,
+            system_id,
+            control_weights,
+        )
+        disturbance_weights = (
+            self.disturbance_mask_table[system_id]
+            if disturbance_mask is None
+            else self.disturbance_mask_table[system_id] * disturbance_mask
+        )
+        disturbance_summary = self._channel_semantic_mean(
+            self.disturbance_role_embedding_table,
+            self.disturbance_name_id_table,
+            self.disturbance_role_id_table,
+            system_id,
+            disturbance_weights,
+        )
+        return jax.nn.gelu(
+            self.channel_context_proj(
+                (state_summary + control_summary + disturbance_summary) / 3.0
+            )
+        )
 
     def _apply_descriptor_film(
         self,
@@ -845,7 +1019,12 @@ class UniversalDigitalTwin(eqx.Module):
             params_scaled,
             param_mask,
         )
-        context = self._system_context(system_id, params_scaled, param_mask)
+        context = self._system_context(
+            system_id,
+            params_scaled,
+            param_mask,
+            control_mask,
+        )
         features = jnp.concatenate(
             [
                 state_summary,
@@ -878,7 +1057,12 @@ class UniversalDigitalTwin(eqx.Module):
         param_mask: Array,
         system_id: Array,
     ) -> Array:
-        context = self._system_context(system_id, params_scaled, param_mask)
+        context = self._system_context(
+            system_id,
+            params_scaled,
+            param_mask,
+            control_mask,
+        )
         descriptor = self.descriptor_table[system_id]
         group_masks, group_active, _, group_kind_embeddings = self._state_group_tables(system_id)
         effective_masks = group_masks * state_mask[None, :]
@@ -932,7 +1116,13 @@ class UniversalDigitalTwin(eqx.Module):
     ) -> Array:
         if not self.neural_cde_enabled or self.cde_matrix is None:
             return jnp.zeros_like(z)
-        context = self._system_context(system_id, params_scaled, param_mask)
+        context = self._system_context(
+            system_id,
+            params_scaled,
+            param_mask,
+            control_mask,
+            disturbance_mask,
+        )
         features = jnp.concatenate(
             [
                 z,
@@ -961,7 +1151,13 @@ class UniversalDigitalTwin(eqx.Module):
         system_id: Array,
         path_derivative: Array | None = None,
     ) -> Array:
-        context = self._system_context(system_id, params_scaled, param_mask)
+        context = self._system_context(
+            system_id,
+            params_scaled,
+            param_mask,
+            control_mask,
+            disturbance_mask,
+        )
         features = jnp.concatenate(
             [
                 z,

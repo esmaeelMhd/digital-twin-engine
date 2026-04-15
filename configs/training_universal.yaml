@@ -9,6 +9,10 @@ model:
   state_group_kind_dim: 16
   state_group_encoder_layers: 2
   state_group_coupling_layers: 2
+  channel_conditioning:
+    enabled: false
+  law_conditioning:
+    enabled: false
   encoder_layers: 3
   decoder_layers: 3
   drift_layers: 3

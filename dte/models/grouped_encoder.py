@@ -10,6 +10,12 @@ from jaxtyping import Array, Float, PRNGKeyArray
 from dte.simulators.base import SystemSpec
 
 
+def _masked_embedding_mean(embeddings: Array, weights: Array) -> Array:
+    weights = weights.astype(embeddings.dtype)
+    denom = jnp.maximum(jnp.sum(weights), jnp.asarray(1.0, dtype=embeddings.dtype))
+    return jnp.sum(embeddings * weights[:, None], axis=0) / denom
+
+
 class ResidualMLP(eqx.Module):
     """Small residual MLP used by the grouped encoder path."""
 
@@ -59,10 +65,24 @@ class GroupedStateEncoder(eqx.Module):
     group_active: Float[Array, "max_groups"]
     group_kind_ids: Array
     group_kind_embedding_table: Float[Array, "n_group_kinds group_kind_dim"]
+    state_role_ids: Array
+    state_name_ids: Array
+    control_role_ids: Array
+    control_name_ids: Array
+    state_role_embedding_table: Float[Array, "n_state_roles group_kind_dim"]
+    control_role_embedding_table: Float[Array, "n_control_roles group_kind_dim"]
+    channel_name_embedding_table: Float[Array, "n_channel_names group_kind_dim"]
+    law_feature_defaults: Float[Array, "n_law_features"]
+    state_channel_proj: eqx.nn.Linear | None
+    control_channel_proj: eqx.nn.Linear | None
+    law_feature_proj: eqx.nn.Linear | None
 
     param_scale: float = eqx.field(static=True)
     max_groups: int = eqx.field(static=True)
     group_kind_dim: int = eqx.field(static=True)
+    context_dim: int = eqx.field(static=True)
+    channel_conditioning_enabled: bool = eqx.field(static=True)
+    law_conditioning_enabled: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -77,6 +97,8 @@ class GroupedStateEncoder(eqx.Module):
         group_kind_dim: int,
         group_encoder_layers: int,
         group_mixer_layers: int,
+        channel_conditioning_enabled: bool,
+        law_conditioning_enabled: bool,
         key: PRNGKeyArray,
     ):
         group_kinds: list[str] = []
@@ -87,18 +109,46 @@ class GroupedStateEncoder(eqx.Module):
             group_kinds.append("generic")
         kind_to_id = {name: idx for idx, name in enumerate(group_kinds)}
 
-        group_masks = jnp.zeros((len(system_spec.state_groups), system_spec.state_dim), dtype=jnp.float32)
+        group_masks = jnp.zeros(
+            (len(system_spec.state_groups), system_spec.state_dim),
+            dtype=jnp.float32,
+        )
         group_active = jnp.ones((len(system_spec.state_groups),), dtype=jnp.float32)
         group_kind_ids = jnp.zeros((len(system_spec.state_groups),), dtype=jnp.int32)
         for group_idx, group in enumerate(system_spec.state_groups):
             group_masks = group_masks.at[group_idx, jnp.asarray(group.indices)].set(1.0)
             group_kind_ids = group_kind_ids.at[group_idx].set(kind_to_id[group.kind])
 
-        key_group_embed, key_group_enc, key_group_mix, key_summary, key_mean, key_logvar = jax.random.split(key, 6)
-        self.state_center = jnp.asarray(system_spec.normalization.state_center, dtype=jnp.float32)
-        self.state_scale = jnp.asarray(system_spec.normalization.state_scale, dtype=jnp.float32)
-        self.control_center = jnp.asarray(system_spec.normalization.control_center, dtype=jnp.float32)
-        self.control_scale = jnp.asarray(system_spec.normalization.control_scale, dtype=jnp.float32)
+        (
+            key_group_embed,
+            key_group_enc,
+            key_group_mix,
+            key_summary,
+            key_mean,
+            key_logvar,
+            key_state_role,
+            key_control_role,
+            key_channel_name,
+            key_state_channel_proj,
+            key_control_channel_proj,
+            key_law_feature_proj,
+        ) = jax.random.split(key, 12)
+        self.state_center = jnp.asarray(
+            system_spec.normalization.state_center,
+            dtype=jnp.float32,
+        )
+        self.state_scale = jnp.asarray(
+            system_spec.normalization.state_scale,
+            dtype=jnp.float32,
+        )
+        self.control_center = jnp.asarray(
+            system_spec.normalization.control_center,
+            dtype=jnp.float32,
+        )
+        self.control_scale = jnp.asarray(
+            system_spec.normalization.control_scale,
+            dtype=jnp.float32,
+        )
         self.group_masks = group_masks
         self.group_active = group_active
         self.group_kind_ids = group_kind_ids
@@ -106,14 +156,113 @@ class GroupedStateEncoder(eqx.Module):
             key_group_embed,
             (len(group_kinds), group_kind_dim),
         )
+        self.law_feature_defaults = jnp.asarray(
+            getattr(system_spec, "law_feature_defaults", ()),
+            dtype=jnp.float32,
+        )
         self.param_scale = system_spec.normalization.param_scale
         self.max_groups = len(system_spec.state_groups)
         self.group_kind_dim = group_kind_dim
+        self.context_dim = param_dim + control_dim
+        self.channel_conditioning_enabled = bool(channel_conditioning_enabled)
+        self.law_conditioning_enabled = bool(law_conditioning_enabled)
 
-        context_dim = param_dim + control_dim
-        group_input_dim = 2 * system_spec.state_dim + context_dim + group_kind_dim
-        group_mix_dim = 2 * group_token_dim + context_dim + group_kind_dim
-        summary_input_dim = group_token_dim + system_spec.state_dim + context_dim
+        if self.channel_conditioning_enabled:
+            state_role_names = list(
+                dict.fromkeys(
+                    [*getattr(system_spec, "state_role_names", lambda: tuple())(), "generic"]
+                )
+            )
+            control_role_names = list(
+                dict.fromkeys(
+                    [*getattr(system_spec, "control_role_names", lambda: tuple())(), "generic"]
+                )
+            )
+            channel_names = list(
+                dict.fromkeys(
+                    [
+                        "generic",
+                        *getattr(system_spec, "state_channel_names", lambda: tuple())(),
+                        *getattr(system_spec, "control_channel_names", lambda: tuple())(),
+                    ]
+                )
+            )
+            state_role_to_id = {name: idx for idx, name in enumerate(state_role_names)}
+            control_role_to_id = {name: idx for idx, name in enumerate(control_role_names)}
+            channel_name_to_id = {name: idx for idx, name in enumerate(channel_names)}
+            self.state_role_ids = jnp.asarray(
+                [
+                    state_role_to_id[getattr(channel, "role", "generic")]
+                    for channel in getattr(system_spec, "state_channels", [])
+                ],
+                dtype=jnp.int32,
+            )
+            self.state_name_ids = jnp.asarray(
+                [
+                    channel_name_to_id[str(getattr(channel, "name", "generic"))]
+                    for channel in getattr(system_spec, "state_channels", [])
+                ],
+                dtype=jnp.int32,
+            )
+            self.control_role_ids = jnp.asarray(
+                [
+                    control_role_to_id[getattr(channel, "role", "generic")]
+                    for channel in getattr(system_spec, "control_channels", [])
+                ],
+                dtype=jnp.int32,
+            )
+            self.control_name_ids = jnp.asarray(
+                [
+                    channel_name_to_id[str(getattr(channel, "name", "generic"))]
+                    for channel in getattr(system_spec, "control_channels", [])
+                ],
+                dtype=jnp.int32,
+            )
+            self.state_role_embedding_table = 0.02 * jax.random.normal(
+                key_state_role,
+                (len(state_role_names), group_kind_dim),
+            )
+            self.control_role_embedding_table = 0.02 * jax.random.normal(
+                key_control_role,
+                (len(control_role_names), group_kind_dim),
+            )
+            self.channel_name_embedding_table = 0.02 * jax.random.normal(
+                key_channel_name,
+                (len(channel_names), group_kind_dim),
+            )
+            self.state_channel_proj = eqx.nn.Linear(
+                group_kind_dim,
+                group_kind_dim,
+                key=key_state_channel_proj,
+            )
+            self.control_channel_proj = eqx.nn.Linear(
+                group_kind_dim,
+                self.context_dim,
+                key=key_control_channel_proj,
+            )
+        else:
+            self.state_role_ids = jnp.zeros((system_spec.state_dim,), dtype=jnp.int32)
+            self.state_name_ids = jnp.zeros((system_spec.state_dim,), dtype=jnp.int32)
+            self.control_role_ids = jnp.zeros((system_spec.control_dim,), dtype=jnp.int32)
+            self.control_name_ids = jnp.zeros((system_spec.control_dim,), dtype=jnp.int32)
+            self.state_role_embedding_table = jnp.zeros((1, group_kind_dim), dtype=jnp.float32)
+            self.control_role_embedding_table = jnp.zeros((1, group_kind_dim), dtype=jnp.float32)
+            self.channel_name_embedding_table = jnp.zeros((1, group_kind_dim), dtype=jnp.float32)
+            self.state_channel_proj = None
+            self.control_channel_proj = None
+
+        if self.law_conditioning_enabled and int(self.law_feature_defaults.size) > 0:
+            self.law_feature_proj = eqx.nn.Linear(
+                int(self.law_feature_defaults.shape[0]),
+                self.context_dim,
+                key=key_law_feature_proj,
+            )
+        else:
+            self.law_feature_proj = None
+
+        group_input_dim = 2 * system_spec.state_dim + self.context_dim + group_kind_dim
+        group_mix_dim = 2 * group_token_dim + self.context_dim + group_kind_dim
+        summary_input_dim = group_token_dim + system_spec.state_dim + self.context_dim
 
         self.state_group_encoder = ResidualMLP(
             group_input_dim,
@@ -150,6 +299,37 @@ class GroupedStateEncoder(eqx.Module):
         params_scaled = jnp.sign(params) * jnp.log1p(jnp.abs(params)) * self.param_scale
         return state_norm, params_scaled, control_norm
 
+    def _state_group_channel_embeddings(self) -> Array:
+        if not self.channel_conditioning_enabled or self.state_channel_proj is None:
+            return jnp.zeros((self.max_groups, self.group_kind_dim), dtype=jnp.float32)
+        state_semantics = (
+            self.state_role_embedding_table[self.state_role_ids]
+            + self.channel_name_embedding_table[self.state_name_ids]
+        )
+        return jax.vmap(
+            lambda mask: jax.nn.gelu(
+                self.state_channel_proj(_masked_embedding_mean(state_semantics, mask))
+            )
+        )(self.group_masks)
+
+    def _control_channel_context(self) -> Array:
+        if not self.channel_conditioning_enabled or self.control_channel_proj is None:
+            return jnp.zeros((self.context_dim,), dtype=jnp.float32)
+        control_semantics = (
+            self.control_role_embedding_table[self.control_role_ids]
+            + self.channel_name_embedding_table[self.control_name_ids]
+        )
+        summary = _masked_embedding_mean(
+            control_semantics,
+            jnp.ones((control_semantics.shape[0],), dtype=jnp.float32),
+        )
+        return jax.nn.gelu(self.control_channel_proj(summary))
+
+    def _law_context(self) -> Array:
+        if self.law_feature_proj is None:
+            return jnp.zeros((self.context_dim,), dtype=jnp.float32)
+        return jax.nn.gelu(self.law_feature_proj(self.law_feature_defaults))
+
     def encode(
         self,
         state: Float[Array, "state_dim"],
@@ -158,7 +338,14 @@ class GroupedStateEncoder(eqx.Module):
     ) -> tuple[Float[Array, "latent_dim"], Float[Array, "latent_dim"]]:
         state_norm, params_scaled, control_norm = self._normalize_inputs(state, params, control)
         context = jnp.concatenate([params_scaled, control_norm], axis=-1)
+        if self.channel_conditioning_enabled:
+            context = context + 0.25 * self._control_channel_context()
+        if self.law_conditioning_enabled:
+            context = context + 0.25 * self._law_context()
+
         group_kind_embeddings = self.group_kind_embedding_table[self.group_kind_ids]
+        if self.channel_conditioning_enabled:
+            group_kind_embeddings = group_kind_embeddings + self._state_group_channel_embeddings()
         context_tokens = jnp.broadcast_to(context, (self.max_groups, context.shape[0]))
 
         group_features = jnp.concatenate(
@@ -182,9 +369,7 @@ class GroupedStateEncoder(eqx.Module):
             )
         )
         summary = jnp.sum((group_tokens + mixed) * active, axis=0) / denom
-        hidden = self.summary_head(
-            jnp.concatenate([summary, state_norm, context], axis=-1)
-        )
+        hidden = self.summary_head(jnp.concatenate([summary, state_norm, context], axis=-1))
         z_mean = self.mean_layer(hidden)
         z_logvar = jnp.clip(self.logvar_layer(hidden), -10.0, 5.0)
         return z_mean, z_logvar

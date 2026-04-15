@@ -98,6 +98,8 @@ class DigitalTwin(eqx.Module):
         nominal_disturbance = system_spec.default_nominal_disturbance
 
         grouped_encoder_cfg = model_config.get("grouped_encoder", {})
+        channel_conditioning_cfg = model_config.get("channel_conditioning", {})
+        law_conditioning_cfg = model_config.get("law_conditioning", {})
         if bool(grouped_encoder_cfg.get("enabled", False)):
             encoder = GroupedStateEncoder(
                 system_spec=system_spec,
@@ -110,6 +112,10 @@ class DigitalTwin(eqx.Module):
                 group_kind_dim=int(grouped_encoder_cfg.get("group_kind_dim", 8)),
                 group_encoder_layers=int(grouped_encoder_cfg.get("group_encoder_layers", 2)),
                 group_mixer_layers=int(grouped_encoder_cfg.get("group_mixer_layers", 2)),
+                channel_conditioning_enabled=bool(
+                    channel_conditioning_cfg.get("enabled", False)
+                ),
+                law_conditioning_enabled=bool(law_conditioning_cfg.get("enabled", False)),
                 key=key_enc,
             )
         else:

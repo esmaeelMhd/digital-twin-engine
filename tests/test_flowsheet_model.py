@@ -21,6 +21,8 @@ def _build_config() -> dict:
             "n_layers": 2,
             "graph_layers": 2,
             "message_passing_steps": 2,
+            "channel_conditioning": {"enabled": True},
+            "law_conditioning": {"enabled": True},
         }
     }
 

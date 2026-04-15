@@ -53,6 +53,42 @@ def _build_two_tank_physics_loss(system_config: dict) -> PhysicsLoss:
     return TwoTankPhysicsLoss(params_obj)
 
 
+def _build_isothermal_cstr_physics_loss(system_config: dict) -> PhysicsLoss:
+    from dte.physics.isothermal_cstr import IsothermalCSTRPhysicsLoss
+    from dte.simulators.isothermal_cstr import IsothermalCSTRParams
+
+    cfg = system_config.get("isothermal_cstr", {})
+    params_obj = IsothermalCSTRParams(**{k: float(v) for k, v in cfg.items()})
+    return IsothermalCSTRPhysicsLoss(params_obj)
+
+
+def _build_storage_tank_physics_loss(system_config: dict) -> PhysicsLoss:
+    from dte.physics.storage_tank import StorageTankPhysicsLoss
+    from dte.simulators.storage_tank import StorageTankParams
+
+    cfg = system_config.get("storage_tank", {})
+    params_obj = StorageTankParams(**{k: float(v) for k, v in cfg.items()})
+    return StorageTankPhysicsLoss(params_obj)
+
+
+def _build_separator_physics_loss(system_config: dict) -> PhysicsLoss:
+    from dte.physics.separator import SeparatorPhysicsLoss
+    from dte.simulators.separator import SeparatorParams
+
+    cfg = system_config.get("separator", {})
+    params_obj = SeparatorParams(**{k: float(v) for k, v in cfg.items()})
+    return SeparatorPhysicsLoss(params_obj)
+
+
+def _build_bioreactor_compartment_physics_loss(system_config: dict) -> PhysicsLoss:
+    from dte.physics.bioreactor_compartment import BioreactorCompartmentPhysicsLoss
+    from dte.simulators.bioreactor_compartment import BioreactorCompartmentParams
+
+    cfg = system_config.get("bioreactor_compartment", {})
+    params_obj = BioreactorCompartmentParams(**{k: float(v) for k, v in cfg.items()})
+    return BioreactorCompartmentPhysicsLoss(params_obj)
+
+
 def _build_cstr_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
     from dte.physics.cstr import (
         energy_balance_residual,
@@ -128,15 +164,112 @@ def _build_two_tank_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
     return _diagnose
 
 
+def _build_isothermal_cstr_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
+    from dte.physics.isothermal_cstr import (
+        mass_balance_residual_with_params,
+        species_mass_balance_residuals_with_params,
+    )
+    from dte.simulators.isothermal_cstr import IsothermalCSTRParams
+
+    cfg = system_config.get("isothermal_cstr", {})
+    params_obj = IsothermalCSTRParams(**{k: float(v) for k, v in cfg.items()})
+    nominal_params = jnp.array(
+        [params_obj.V, params_obj.k0, params_obj.Ea_over_R, params_obj.T_ref],
+        dtype=jnp.float32,
+    )
+
+    def _diagnose(states, controls, disturbances, dt, params=None):
+        p = nominal_params if params is None else params
+        return {
+            "mass": mass_balance_residual_with_params(states, controls, disturbances, p, dt),
+            "species_mass": jnp.mean(
+                species_mass_balance_residuals_with_params(states, controls, disturbances, p, dt),
+                axis=-1,
+            ),
+        }
+
+    return _diagnose
+
+
+def _build_storage_tank_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
+    from dte.physics.storage_tank import state_residuals_with_params
+    from dte.simulators.storage_tank import StorageTankParams
+
+    cfg = system_config.get("storage_tank", {})
+    params_obj = StorageTankParams(**{k: float(v) for k, v in cfg.items()})
+    nominal_params = jnp.array([params_obj.volume, params_obj.heat_loss], dtype=jnp.float32)
+
+    def _diagnose(states, controls, disturbances, dt, params=None):
+        p = nominal_params if params is None else params
+        residuals = state_residuals_with_params(states, controls, disturbances, p, dt)
+        return {
+            "mass": residuals[:, 0],
+            "composition": residuals[:, 1],
+            "energy": residuals[:, 2],
+        }
+
+    return _diagnose
+
+
+def _build_separator_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
+    from dte.physics.separator import state_residuals_with_params
+    from dte.simulators.separator import SeparatorParams
+
+    cfg = system_config.get("separator", {})
+    params_obj = SeparatorParams(**{k: float(v) for k, v in cfg.items()})
+    nominal_params = jnp.array([params_obj.holdup, params_obj.separation_gain], dtype=jnp.float32)
+
+    def _diagnose(states, controls, disturbances, dt, params=None):
+        p = nominal_params if params is None else params
+        residuals = state_residuals_with_params(states, controls, disturbances, p, dt)
+        return {
+            "phase_split": 0.5 * (residuals[:, 0] + residuals[:, 1]),
+            "energy": residuals[:, 2],
+        }
+
+    return _diagnose
+
+
+def _build_bioreactor_compartment_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
+    from dte.physics.bioreactor_compartment import state_residuals_with_params
+    from dte.simulators.bioreactor_compartment import BioreactorCompartmentParams
+
+    cfg = system_config.get("bioreactor_compartment", {})
+    params_obj = BioreactorCompartmentParams(**{k: float(v) for k, v in cfg.items()})
+    nominal_params = jnp.array(
+        [params_obj.mu_max, params_obj.kla, params_obj.decay_rate, params_obj.dilution_rate],
+        dtype=jnp.float32,
+    )
+
+    def _diagnose(states, controls, disturbances, dt, params=None):
+        p = nominal_params if params is None else params
+        residuals = state_residuals_with_params(states, controls, disturbances, p, dt)
+        return {
+            "substrate": residuals[:, 0],
+            "biomass": residuals[:, 1],
+            "oxygen": residuals[:, 2],
+        }
+
+    return _diagnose
+
+
 _PHYSICS_LOSS_BUILDERS = {
+    "bioreactor_compartment": _build_bioreactor_compartment_physics_loss,
     "cstr": _build_cstr_physics_loss,
     "heat_exchanger": _build_heat_exchanger_physics_loss,
+    "isothermal_cstr": _build_isothermal_cstr_physics_loss,
+    "separator": _build_separator_physics_loss,
+    "storage_tank": _build_storage_tank_physics_loss,
     "two_tank": _build_two_tank_physics_loss,
 }
 
 _PHYSICS_DIAGNOSTIC_BUILDERS = {
+    "bioreactor_compartment": _build_bioreactor_compartment_diagnostic_fn,
     "cstr": _build_cstr_diagnostic_fn,
     "heat_exchanger": _build_heat_exchanger_diagnostic_fn,
+    "isothermal_cstr": _build_isothermal_cstr_diagnostic_fn,
+    "separator": _build_separator_diagnostic_fn,
+    "storage_tank": _build_storage_tank_diagnostic_fn,
     "two_tank": _build_two_tank_diagnostic_fn,
 }
 
