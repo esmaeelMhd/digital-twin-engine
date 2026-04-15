@@ -82,6 +82,53 @@ class UniversalTrainer:
         self.state_lower_bound_table = train_dataset.metadata.state_lower_bound
         self.state_upper_bound_table = train_dataset.metadata.state_upper_bound
         self.state_role_id_table = train_dataset.metadata.state_role_id
+        self.system_role_derivative_terms = self._build_system_role_derivative_terms(train_dataset)
+
+    def _build_system_role_derivative_terms(
+        self,
+        dataset: MultiSystemTrajectoryDataset,
+    ) -> tuple[tuple[str, float, int, Array], ...]:
+        """Resolve optional targeted derivative-matching losses from config."""
+        configured_terms = (
+            self.config.get("system_specific_losses", {}).get("role_derivative_terms", [])
+        )
+        if not configured_terms:
+            return ()
+
+        role_to_id = {
+            name: idx for idx, name in enumerate(dataset.metadata.state_role_names)
+        }
+        resolved_terms: list[tuple[str, float, int, Array]] = []
+        for idx, item in enumerate(configured_terms):
+            if not bool(item.get("enabled", True)):
+                continue
+
+            name = str(item.get("name", f"role_derivative_{idx}"))
+            weight = float(item.get("weight", 1.0))
+            state_role = str(item["state_role"])
+            if state_role not in role_to_id:
+                raise ValueError(
+                    f"Unknown state role '{state_role}' for targeted derivative loss '{name}'."
+                )
+
+            systems = tuple(str(system_name) for system_name in item.get("systems", ()))
+            if not systems:
+                raise ValueError(
+                    f"Targeted derivative loss '{name}' must list at least one system."
+                )
+
+            missing = [system_name for system_name in systems if system_name not in dataset.system_ids]
+            if missing:
+                raise ValueError(
+                    f"Unknown systems for targeted derivative loss '{name}': {missing}"
+                )
+
+            system_mask = jnp.zeros((dataset.n_systems,), dtype=jnp.float32)
+            for system_name in systems:
+                system_mask = system_mask.at[dataset.system_ids[system_name]].set(1.0)
+            resolved_terms.append((name, weight, int(role_to_id[state_role]), system_mask))
+
+        return tuple(resolved_terms)
 
     def _normalize_batch(self, model: UniversalDigitalTwin, batch: Dict[str, Array]) -> Dict[str, Array]:
         return normalize_universal_batch(model, batch)
@@ -352,6 +399,30 @@ class UniversalTrainer:
         else:
             loss_k_step = jnp.asarray(0.0, dtype=loss_one_step.dtype)
 
+        targeted_role_derivative_losses: dict[str, Array] = {}
+        if self.system_role_derivative_terms:
+            pred_delta = pred_states[:, 1:, :] - pred_states[:, :-1, :]
+            true_delta = (
+                normalized["states_norm"][:, 1:, :] - normalized["states_norm"][:, :-1, :]
+            )
+            delta_time_mask = (
+                normalized["time_mask"][:, 1:, None] * normalized["time_mask"][:, :-1, None]
+            )
+            for loss_name, weight, role_id, system_mask in self.system_role_derivative_terms:
+                role_mask = (
+                    self.state_role_id_table[normalized["system_id"]] == role_id
+                ).astype(pred_states.dtype)
+                target_mask = (
+                    delta_time_mask
+                    * normalized["state_mask"][:, None, :]
+                    * role_mask[:, None, :]
+                    * system_mask[normalized["system_id"]][:, None, None]
+                )
+                targeted_role_derivative_losses[loss_name] = _masked_huber(
+                    pred_delta - true_delta,
+                    target_mask,
+                )
+
         pred_states_phys = model.denormalize_states(
             pred_states,
             normalized["system_id"],
@@ -381,6 +452,8 @@ class UniversalTrainer:
             + float(weights.get("state_bounds", 0.0)) * loss_state_bounds
             + float(weights.get("positivity", 0.0)) * loss_positivity
         )
+        for loss_name, weight, _, _ in self.system_role_derivative_terms:
+            total_loss = total_loss + weight * targeted_role_derivative_losses[loss_name]
         loss_dict = {
             "total": total_loss,
             "reconstruction": loss_recon,
@@ -393,6 +466,7 @@ class UniversalTrainer:
         }
         for horizon, loss_value in k_step_losses.items():
             loss_dict[f"k_step_{horizon}"] = loss_value
+        loss_dict.update(targeted_role_derivative_losses)
         return total_loss, loss_dict
 
     def compute_group_pretraining_loss(

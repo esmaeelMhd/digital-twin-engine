@@ -1,0 +1,130 @@
+# GPU-oriented rebalanced Phase 1 regime training config.
+# Same corpus, model, and weighting scheme as the CPU-safe rebalanced config,
+# but with a larger training budget intended to make productive use of GPU
+# throughput without changing the modeling stack again.
+
+model:
+  family: universal_backbone
+  latent_dim: 32
+  shared_hidden_dim: 128
+  system_embedding_dim: 32
+  state_group_token_dim: 96
+  state_group_kind_dim: 16
+  state_group_encoder_layers: 2
+  state_group_coupling_layers: 2
+  encoder_layers: 3
+  decoder_layers: 3
+  drift_layers: 3
+  use_system_spec_embedding: true
+  use_variational_encoder: true
+  adapters:
+    enabled: true
+    bottleneck_dim: 16
+    residual_scale: 0.1
+    encoder: true
+    drift: true
+    decoder: true
+  neural_cde:
+    enabled: true
+    hidden_dim: 64
+    n_layers: 2
+
+training:
+  batch_size: 64
+  seq_len: 48
+  stride: 8
+  val_split: 0.2
+  n_epochs: 16
+  mixed_batching: weighted
+  max_batches_per_epoch: 128
+
+loss_weights:
+  reconstruction: 1.0
+  trajectory: 1.0
+  one_step: 0.5
+  k_step: 0.0
+  kl: 0.0001
+  state_bounds: 0.0
+  positivity: 0.0
+
+multi_horizon:
+  k_steps: [3, 5]
+
+optimizer:
+  peak_lr: 0.0005
+  end_lr: 0.00001
+  warmup_steps: 100
+  total_steps: 2048
+  gradient_clip: 1.0
+
+checkpointing:
+  val_every: 2
+  save_every: 4
+  max_val_batches: 6
+
+data:
+  systems:
+    - name: cstr
+      system_config: configs/cstr_default.yaml
+      data_dir: data/phase1_regime/cstr/
+      weight: 1.0
+    - name: cstr_fast_kinetics
+      system_config: configs/cstr_fast_kinetics_hot_feed.yaml
+      data_dir: data/phase1_regime/cstr_fast_kinetics/
+      weight: 1.0
+    - name: isothermal_cstr
+      system_config: configs/isothermal_cstr_default.yaml
+      data_dir: data/phase1_regime/isothermal_cstr/
+      weight: 1.5
+    - name: isothermal_cstr_slow_kinetics
+      system_config: configs/isothermal_cstr_slow_kinetics.yaml
+      data_dir: data/phase1_regime/isothermal_cstr_slow_kinetics/
+      weight: 1.5
+    - name: heat_exchanger
+      system_config: configs/heat_exchanger_default.yaml
+      data_dir: data/phase1_regime/heat_exchanger/
+      weight: 1.25
+    - name: heat_exchanger_high_ua
+      system_config: configs/heat_exchanger_high_ua.yaml
+      data_dir: data/phase1_regime/heat_exchanger_high_ua/
+      weight: 1.5
+    - name: two_tank
+      system_config: configs/two_tank_default.yaml
+      data_dir: data/phase1_regime/two_tank/
+      weight: 1.0
+    - name: two_tank_high_throughput
+      system_config: configs/two_tank_high_throughput.yaml
+      data_dir: data/phase1_regime/two_tank_high_throughput/
+      weight: 1.0
+    - name: storage_tank
+      system_config: configs/storage_tank_default.yaml
+      data_dir: data/phase1_regime/storage_tank/
+      weight: 2.5
+    - name: storage_tank_high_holdup
+      system_config: configs/storage_tank_high_holdup.yaml
+      data_dir: data/phase1_regime/storage_tank_high_holdup/
+      weight: 2.5
+    - name: separator
+      system_config: configs/separator_default.yaml
+      data_dir: data/phase1_regime/separator/
+      weight: 2.0
+    - name: separator_sharp_split
+      system_config: configs/separator_sharp_split.yaml
+      data_dir: data/phase1_regime/separator_sharp_split/
+      weight: 2.0
+    - name: bioreactor_compartment
+      system_config: configs/bioreactor_compartment_default.yaml
+      data_dir: data/phase1_regime/bioreactor_compartment/
+      weight: 1.0
+    - name: bioreactor_compartment_high_transfer
+      system_config: configs/bioreactor_compartment_high_transfer.yaml
+      data_dir: data/phase1_regime/bioreactor_compartment_high_transfer/
+      weight: 1.0
+
+evaluation:
+  per_system_batches: 6
+  aggregate_method: geometric_mean
+  metric_name: geometric_mean_per_system_total_loss
+  uncertainty_samples: 12
+  uncertainty_batches: 3
+  sensitivity_batches: 3
