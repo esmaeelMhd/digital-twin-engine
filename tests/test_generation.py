@@ -4,10 +4,17 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import yaml
 
 from dte.data.generation import load_dataset
 from dte.data.generation_generic import GenericDataGenerator
 from dte.simulators.cstr import CSTRParams, CSTRSimulator
+from dte.simulators.registry import get_simulator, get_system_spec
+
+
+def _load_yaml(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
 
 
 def test_generate_dataset_retries_until_requested_count(monkeypatch, tmp_path):
@@ -266,3 +273,73 @@ def test_generic_generator_uses_cstr_signal_policies_and_param_formatting():
         simulator.sample_data_generation_params_batch(keys)
     )
     assert stored_params.shape == (3, 6)
+
+
+@pytest.mark.parametrize(
+    ("config_path", "expected_dims"),
+    [
+        ("configs/bioreactor_compartment_default.yaml", (3, 1, 1, 4)),
+        ("configs/isothermal_cstr_default.yaml", (2, 1, 1, 4)),
+        ("configs/storage_tank_default.yaml", (3, 1, 3, 2)),
+        ("configs/separator_default.yaml", (3, 1, 2, 2)),
+    ],
+)
+def test_generic_generator_supports_new_phase1_systems(config_path, expected_dims):
+    state_dim, control_dim, disturbance_dim, param_dim = expected_dims
+    config = _load_yaml(config_path)
+    spec = get_system_spec(config)
+    simulator = get_simulator(spec.name, config)
+    generator = GenericDataGenerator(simulator, config, spec)
+
+    batch = generator._generate_trajectories_batched(
+        jax.random.split(jax.random.PRNGKey(7), 2),
+        n_steps=10,
+        dt=0.1,
+        simulation_mode="dataset",
+    )
+
+    assert batch["states"].shape[1:] == (10, state_dim)
+    assert batch["controls"].shape[1:] == (10, control_dim)
+    assert batch["disturbances"].shape[1:] == (10, disturbance_dim)
+    assert batch["params"].shape[1] == param_dim
+    assert np.all(np.isfinite(np.asarray(batch["states"])))
+
+
+@pytest.mark.parametrize(
+    ("config_path", "expected_dims"),
+    [
+        ("configs/bioreactor_compartment_default.yaml", (3, 1, 1, 4)),
+        ("configs/isothermal_cstr_default.yaml", (2, 1, 1, 4)),
+        ("configs/storage_tank_default.yaml", (3, 1, 3, 2)),
+        ("configs/separator_default.yaml", (3, 1, 2, 2)),
+    ],
+)
+def test_generate_dataset_to_hdf5_round_trips_for_new_phase1_systems(
+    config_path,
+    expected_dims,
+    tmp_path,
+):
+    state_dim, control_dim, disturbance_dim, param_dim = expected_dims
+    config = _load_yaml(config_path)
+    spec = get_system_spec(config)
+    simulator = get_simulator(spec.name, config)
+    generator = GenericDataGenerator(simulator, config, spec)
+    output_path = tmp_path / f"{spec.name}_train_data.h5"
+
+    dataset_summary = generator.generate_dataset_to_hdf5(
+        jax.random.PRNGKey(0),
+        str(output_path),
+        n_trajectories=2,
+        n_steps=8,
+        simulation_mode="dataset",
+        batch_size=2,
+    )
+    reloaded = load_dataset(str(output_path))
+
+    assert output_path.exists()
+    assert dataset_summary["states_shape"] == (2, 8, state_dim)
+    assert dataset_summary["controls_shape"] == (2, 8, control_dim)
+    assert dataset_summary["disturbances_shape"] == (2, 8, disturbance_dim)
+    assert dataset_summary["params_shape"] == (2, param_dim)
+    assert reloaded["states"].shape == (2, 8, state_dim)
+    assert "param_mean" in reloaded["normalization"]

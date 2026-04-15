@@ -1,0 +1,107 @@
+system:
+  name: separator
+  unit_type: separator
+  family: separator
+  subtype: flash_like
+  law_tags: [phase_split, thermal_separation]
+  conditioning_tags:
+    reaction_class: none
+    thermo_regime: flash_proxy
+    bio_model_family: none
+    operating_regime: split_controlled
+  state_names: [light_cut, heavy_cut, tray_temperature]
+  state_groups:
+    - name: cuts
+      kind: concentration
+      indices: [0, 1]
+    - name: thermal
+      kind: thermal
+      indices: [2]
+  state_channels:
+    - name: light_cut
+      role: concentration
+      lower_bound: 0.0
+      upper_bound: 1.0
+      conserved_group: cuts
+    - name: heavy_cut
+      role: concentration
+      lower_bound: 0.0
+      upper_bound: 1.0
+      conserved_group: cuts
+    - name: tray_temperature
+      role: temperature
+      unit: K
+      lower_bound: 260.0
+      upper_bound: 420.0
+      conserved_group: thermal
+  control_names: [split_fraction]
+  control_channels:
+    - name: split_fraction
+      role: actuator_state
+      lower_bound: 0.2
+      upper_bound: 0.8
+  disturbance_names: [feed_quality, feed_temperature]
+  disturbance_channels:
+    - name: feed_quality
+      role: concentration
+      lower_bound: 0.1
+      upper_bound: 0.9
+    - name: feed_temperature
+      role: temperature
+      unit: K
+      lower_bound: 305.0
+      upper_bound: 360.0
+  parameter_descriptors:
+    - name: holdup
+      unit: min
+      law_tag: geometry
+    - name: separation_gain
+      law_tag: phase_split
+  normalization:
+    state_center: [0.5, 0.5, 330.0]
+    state_scale: [2.0, 2.0, 0.02]
+    control_center: [0.5]
+    control_scale: [4.0]
+    disturbance_center: [0.5, 332.5]
+    disturbance_scale: [2.0, 0.02]
+    param_scale: 0.1
+  decoder_constraints:
+    - type: sigmoid_range
+      indices: [0, 1]
+      low: 0.0
+      high: 1.0
+    - type: sigmoid_range
+      indices: [2]
+      low: 260.0
+      high: 420.0
+
+separator:
+  holdup: 1.0
+  separation_gain: 0.35
+
+simulation:
+  dt: 0.1
+  t_span: [0.0, 100.0]
+
+data_generation:
+  control_signals:
+    split_fraction:
+      type: prbs
+      switch_prob: 0.05
+  disturbance_signals:
+    feed_quality:
+      type: multistep
+      n_changes: 5
+    feed_temperature:
+      type: multistep
+      n_changes: 4
+
+initial_conditions:
+  light_cut: 0.5
+  heavy_cut: 0.5
+  tray_temperature: 330.0
+
+operating_ranges:
+  split_fraction: [0.2, 0.8]
+  feed_quality: [0.1, 0.9]
+  feed_temperature: [305.0, 360.0]

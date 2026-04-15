@@ -1,0 +1,100 @@
+system:
+  name: bioreactor_compartment
+  unit_type: aerobic_bioreactor
+  family: bioprocess
+  subtype: aerobic_compartment
+  law_tags: [biology, oxygen_transfer, mass_balance]
+  conditioning_tags:
+    reaction_class: biological_growth
+    thermo_regime: isothermal_aerobic_liquid
+    bio_model_family: monod_growth
+    operating_regime: aerobic_nominal
+  state_names: [substrate, biomass, dissolved_oxygen]
+  state_groups:
+    - name: substrate_group
+      kind: concentration
+      indices: [0]
+    - name: biomass_group
+      kind: biological
+      indices: [1]
+    - name: oxygen_group
+      kind: concentration
+      indices: [2]
+  state_channels:
+    - name: substrate
+      role: concentration
+      lower_bound: 0.0
+      upper_bound: 3.0
+      conserved_group: substrate_group
+    - name: biomass
+      role: biological_state
+      lower_bound: 0.0
+      upper_bound: 3.0
+      conserved_group: biomass_group
+    - name: dissolved_oxygen
+      role: concentration
+      lower_bound: 0.0
+      upper_bound: 1.2
+      conserved_group: oxygen_group
+  control_names: [aeration]
+  control_channels:
+    - name: aeration
+      role: flow
+      lower_bound: 0.1
+      upper_bound: 1.0
+  disturbance_names: [feed_substrate]
+  disturbance_channels:
+    - name: feed_substrate
+      role: concentration
+      lower_bound: 0.0
+      upper_bound: 2.0
+  parameter_descriptors:
+    - name: mu_max
+      law_tag: biology
+    - name: kla
+      law_tag: oxygen_transfer
+    - name: decay_rate
+      law_tag: biology
+    - name: dilution_rate
+      law_tag: hydraulics
+  normalization:
+    state_center: [1.0, 0.4, 0.6]
+    state_scale: [1.0, 2.0, 2.0]
+    control_center: [0.5]
+    control_scale: [2.0]
+    disturbance_center: [1.0]
+    disturbance_scale: [1.0]
+    param_scale: 0.1
+  decoder_constraints:
+    - type: softplus
+      indices: [0, 1, 2]
+      bias: 0.2
+
+bioreactor_compartment:
+  mu_max: 0.45
+  kla: 1.2
+  decay_rate: 0.03
+  dilution_rate: 0.12
+
+simulation:
+  dt: 0.1
+  t_span: [0.0, 100.0]
+
+data_generation:
+  control_signals:
+    aeration:
+      type: prbs
+      switch_prob: 0.05
+  disturbance_signals:
+    feed_substrate:
+      type: multistep
+      n_changes: 5
+
+initial_conditions:
+  substrate: 1.2
+  biomass: 0.4
+  dissolved_oxygen: 0.6
+
+operating_ranges:
+  aeration: [0.1, 1.0]
+  feed_substrate: [0.0, 2.0]

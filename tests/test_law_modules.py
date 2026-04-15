@@ -73,7 +73,7 @@ def test_cstr_law_bundle_exposes_features_deltas_and_residuals():
 def test_biology_law_bundle_example_is_usable():
     spec, _, bundle = build_bioreactor_law_bundle_example()
 
-    assert spec.name == "bioreactor_example"
+    assert spec.name == "bioreactor_compartment"
     assert len(bundle.modules) == 1
     assert "biology_aerobic_growth_specific_growth_rate" in bundle.feature_names()
     assert "biology_aerobic_growth_biomass_consistency" in bundle.residual_names()

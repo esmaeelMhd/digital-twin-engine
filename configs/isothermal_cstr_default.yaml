@@ -1,0 +1,97 @@
+system:
+  name: isothermal_cstr
+  unit_type: stirred_tank_reactor
+  family: reactor
+  subtype: isothermal_cstr
+  law_tags: [mass_balance, reaction_kinetics]
+  conditioning_tags:
+    reaction_class: irreversible_first_order
+    thermo_regime: isothermal_liquid_well_mixed
+    bio_model_family: none
+    operating_regime: nominal_continuous
+  state_names: [Ca, Cb]
+  state_groups:
+    - name: species
+      kind: concentration
+      indices: [0, 1]
+  state_channels:
+    - name: Ca
+      role: concentration
+      unit: mol/L
+      lower_bound: 0.0
+      upper_bound: 3.0
+      conserved_group: species
+    - name: Cb
+      role: concentration
+      unit: mol/L
+      lower_bound: 0.0
+      upper_bound: 3.0
+      conserved_group: species
+  control_names: [F_in]
+  control_channels:
+    - name: F_in
+      role: flow
+      unit: L/min
+      lower_bound: 10.0
+      upper_bound: 100.0
+  disturbance_names: [Ca_in]
+  disturbance_channels:
+    - name: Ca_in
+      role: concentration
+      unit: mol/L
+      lower_bound: 0.5
+      upper_bound: 2.0
+  parameter_descriptors:
+    - name: V
+      unit: L
+      law_tag: geometry
+    - name: k0
+      unit: 1/min
+      law_tag: kinetics
+    - name: Ea_over_R
+      unit: K
+      law_tag: kinetics
+    - name: T_ref
+      unit: K
+      law_tag: thermodynamics
+  normalization:
+    state_center: [1.0, 1.0]
+    state_scale: [1.0, 1.0]
+    control_center: [55.0]
+    control_scale: [0.02]
+    disturbance_center: [1.25]
+    disturbance_scale: [1.0]
+    param_scale: 0.1
+  decoder_constraints:
+    - type: softplus
+      indices: [0, 1]
+      bias: 0.5
+
+isothermal_cstr:
+  V: 100.0
+  k0: 7.2e10
+  Ea_over_R: 8750.0
+  T_ref: 330.0
+
+simulation:
+  dt: 0.1
+  t_span: [0.0, 100.0]
+
+data_generation:
+  control_signals:
+    F_in:
+      type: mixed
+      switch_prob: 0.05
+      n_changes: 5
+  disturbance_signals:
+    Ca_in:
+      type: prbs
+      switch_prob: 0.01
+
+initial_conditions:
+  Ca: 0.5
+  Cb: 0.5
+
+operating_ranges:
+  F_in: [10.0, 100.0]
+  Ca_in: [0.5, 2.0]

@@ -44,3 +44,22 @@ def test_two_tank_process_unit_spec_exposes_bounds_and_roles():
     assert [channel.role for channel in spec.control_channels] == ["flow", "actuator_state"]
     assert list(spec.state_lower_bounds()) == [0.0, 0.0]
     assert list(spec.state_upper_bounds()) == [5.0, 5.0]
+
+
+def test_bioreactor_process_unit_spec_exposes_biological_channel_metadata():
+    spec = _load_spec("configs/bioreactor_compartment_default.yaml")
+
+    assert isinstance(spec, ProcessUnitSpec)
+    assert spec.unit_type == "aerobic_bioreactor"
+    assert spec.family == "bioprocess"
+    assert spec.law_tags == ["biology", "oxygen_transfer", "mass_balance"]
+    assert [group.kind for group in spec.state_groups] == [
+        "concentration",
+        "biological",
+        "concentration",
+    ]
+    assert [channel.role for channel in spec.state_channels] == [
+        "concentration",
+        "biological",
+        "concentration",
+    ]
