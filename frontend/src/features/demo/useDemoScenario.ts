@@ -77,6 +77,9 @@ export function useDemoScenario(demo: DemoDefinition, api: ScenarioApi) {
   };
 
   const runScenario = async () => {
+    if (compareMutation.isPending) {
+      return;
+    }
     setOptimizedResult(null);
     const nextDraft = cloneDraft(draft);
     const payloads = buildScenarioPayloads(demo, nextDraft);
@@ -90,6 +93,9 @@ export function useDemoScenario(demo: DemoDefinition, api: ScenarioApi) {
   };
 
   const optimizeScenario = async () => {
+    if (optimizeMutation.isPending) {
+      return;
+    }
     const payloads = buildScenarioPayloads(demo, draft);
     await toast.promise(optimizeMutation.mutateAsync(payloads.optimizeRequest), {
       loading: `Searching for a stabilizing ${demo.title} sequence…`,

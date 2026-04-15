@@ -31,6 +31,11 @@
   outline: none;
 }
 
+.tabContent:focus-visible {
+  outline: 3px solid rgba(47, 122, 105, 0.28);
+  outline-offset: 6px;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 360px minmax(0, 1fr);

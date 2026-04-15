@@ -200,11 +200,21 @@ export function DemoWorkspace({
         </div>
 
         <div className={styles.buttonRow}>
-          <button className="button-primary" type="button" onClick={() => void runScenario()}>
+          <button
+            className="button-primary"
+            type="button"
+            disabled={comparisonPending}
+            onClick={() => void runScenario()}
+          >
             <Play size={16} aria-hidden="true" />
             {comparisonPending ? 'Running…' : demo.run_button_label}
           </button>
-          <button className="button-secondary" type="button" onClick={() => void runOptimizeScenario()}>
+          <button
+            className="button-secondary"
+            type="button"
+            disabled={optimizationPending}
+            onClick={() => void runOptimizeScenario()}
+          >
             <Target size={16} aria-hidden="true" />
             {optimizationPending ? 'Optimising…' : demo.optimize_button_label}
           </button>

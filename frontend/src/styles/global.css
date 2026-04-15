@@ -40,6 +40,10 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+}
+
 #root {
   min-height: 100vh;
 }
@@ -208,6 +212,34 @@ button {
 .button-secondary:hover {
   transform: translateY(-1px);
   background: rgba(26, 74, 62, 0.12);
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(47, 122, 105, 0.28);
+  outline-offset: 3px;
+}
+
+.button-primary:focus-visible,
+.button-secondary:focus-visible,
+.input-shell:focus-visible,
+.select-shell:focus-visible {
+  outline-color: rgba(47, 122, 105, 0.34);
+  box-shadow: 0 0 0 4px rgba(47, 122, 105, 0.14);
+}
+
+.range-shell:focus-visible {
+  outline-offset: 6px;
+}
+
+.button-primary:disabled,
+.button-secondary:disabled {
+  transform: none;
+  opacity: 0.68;
+  box-shadow: none;
 }
 
 .field-label {

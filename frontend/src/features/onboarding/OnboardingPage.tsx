@@ -9,7 +9,7 @@ import {
   UploadCloud,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import toast from 'react-hot-toast';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -96,6 +96,9 @@ export function OnboardingPage() {
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInputId = useId();
+  const uploadStatusId = useId();
 
   const activeTemplateId = selectedTemplateId || templatesQuery.data?.templates[0]?.id || '';
   const selectedTemplate =
@@ -174,6 +177,9 @@ export function OnboardingPage() {
   });
 
   async function handleUpload(file: File) {
+    if (uploadMutation.isPending) {
+      return;
+    }
     await toast.promise(uploadMutation.mutateAsync(file), {
       loading: 'Uploading historian export…',
       success: 'Upload stored and columns detected.',
@@ -182,7 +188,7 @@ export function OnboardingPage() {
   }
 
   async function handlePreview() {
-    if (!upload || !selectedTemplate) {
+    if (!upload || !selectedTemplate || previewMutation.isPending) {
       return;
     }
     const payload: OnboardingPreviewRequest = {
@@ -207,7 +213,7 @@ export function OnboardingPage() {
   }
 
   async function handleStartJob() {
-    if (!previewId) {
+    if (!previewId || createJobMutation.isPending) {
       return;
     }
     const payload: OnboardingCreateJobRequest = {
@@ -376,22 +382,39 @@ export function OnboardingPage() {
           body="The upload step stores one CSV or Parquet file, detects the available columns, and prepares the signal-mapping surface."
         >
           <div className={styles.uploadRow}>
-            <label className={styles.uploadButton}>
+            <button
+              className={styles.uploadButton}
+              type="button"
+              disabled={uploadMutation.isPending}
+              aria-controls={uploadInputId}
+              aria-describedby={uploadStatusId}
+              onClick={() => uploadInputRef.current?.click()}
+            >
               <UploadCloud size={16} aria-hidden="true" />
               <span>{upload ? 'Replace upload' : 'Upload CSV or Parquet'}</span>
-              <input
-                type="file"
-                accept=".csv,.parquet"
-                hidden
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) {
-                    void handleUpload(file);
-                  }
-                }}
-              />
-            </label>
-            {uploadMutation.isPending ? <span className="field-help">Reading upload…</span> : null}
+            </button>
+            <input
+              ref={uploadInputRef}
+              id={uploadInputId}
+              className={styles.srOnlyInput}
+              type="file"
+              accept=".csv,.parquet"
+              tabIndex={-1}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  void handleUpload(file);
+                }
+                event.target.value = '';
+              }}
+            />
+            <span id={uploadStatusId} className="field-help" aria-live="polite">
+              {uploadMutation.isPending
+                ? 'Reading upload…'
+                : upload
+                  ? `Selected file: ${upload.filename}`
+                  : 'No file selected yet.'}
+            </span>
           </div>
 
           {upload ? (
@@ -529,7 +552,12 @@ export function OnboardingPage() {
               </div>
 
               <div className={styles.actionRow}>
-                <button className="button-primary" type="button" onClick={() => void handlePreview()}>
+                <button
+                  className="button-primary"
+                  type="button"
+                  disabled={previewMutation.isPending}
+                  onClick={() => void handlePreview()}
+                >
                   <ShieldCheck size={16} aria-hidden="true" />
                   {previewMutation.isPending ? 'Validating…' : 'Run preview'}
                 </button>
@@ -586,7 +614,7 @@ export function OnboardingPage() {
             <button
               className="button-primary"
               type="button"
-              disabled={!previewId || previewErrors.length > 0}
+              disabled={!previewId || previewErrors.length > 0 || createJobMutation.isPending}
               onClick={() => void handleStartJob()}
             >
               <PlayCircle size={16} aria-hidden="true" />
