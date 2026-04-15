@@ -1,5 +1,6 @@
 """Tests for simulator registry helpers."""
 
+import pytest
 import yaml
 
 from dte.core.process_unit_spec import ProcessUnitSpec
@@ -159,3 +160,31 @@ def test_separator_system_spec_and_simulator_are_registered():
     assert [group.kind for group in spec.state_groups] == ["concentration", "thermal"]
     assert spec.state_channels[0].upper_bound == 1.0
     assert spec.control_channels[0].role == "actuator_state"
+
+
+@pytest.mark.parametrize(
+    ("config_path", "expected_name", "expected_subtype"),
+    [
+        ("configs/cstr_fast_kinetics_hot_feed.yaml", "cstr", "fast_kinetics_hot_feed"),
+        ("configs/isothermal_cstr_slow_kinetics.yaml", "isothermal_cstr", "slow_kinetics_isothermal"),
+        ("configs/heat_exchanger_high_ua.yaml", "heat_exchanger", "high_ua_counter_current"),
+        ("configs/two_tank_high_throughput.yaml", "two_tank", "high_throughput_two_tank"),
+        ("configs/storage_tank_high_holdup.yaml", "storage_tank", "high_holdup_storage_tank"),
+        ("configs/separator_sharp_split.yaml", "separator", "sharp_split_flash_like"),
+        ("configs/bioreactor_compartment_high_transfer.yaml", "bioreactor_compartment", "high_transfer_aerobic_compartment"),
+    ],
+)
+def test_regime_variant_configs_resolve_to_registered_systems(
+    config_path,
+    expected_name,
+    expected_subtype,
+):
+    system_config = _load_yaml(config_path)
+
+    spec = get_system_spec(system_config)
+    simulator = get_simulator(expected_name, system_config)
+
+    assert spec.name == expected_name
+    assert spec.subtype == expected_subtype
+    assert isinstance(simulator, ProcessSimulator)
+    assert simulator.spec.name == expected_name

@@ -1,0 +1,125 @@
+system:
+  name: storage_tank
+  unit_type: surge_tank
+  family: hydraulic
+  subtype: high_holdup_storage_tank
+  law_tags: [mass_balance, mixing, heat_loss]
+  conditioning_tags:
+    reaction_class: none
+    thermo_regime: mixed_liquid_holdup
+    bio_model_family: none
+    operating_regime: high_holdup_buffering
+  state_names: [inventory, quality, temperature]
+  state_groups:
+    - name: holdup
+      kind: inventory
+      indices: [0]
+    - name: composition
+      kind: concentration
+      indices: [1]
+    - name: thermal
+      kind: thermal
+      indices: [2]
+  state_channels:
+    - name: inventory
+      role: inventory
+      unit: m^3
+      lower_bound: 0.0
+      upper_bound: 12.0
+      conserved_group: holdup
+    - name: quality
+      role: concentration
+      lower_bound: 0.0
+      upper_bound: 1.0
+      conserved_group: composition
+    - name: temperature
+      role: temperature
+      unit: K
+      lower_bound: 260.0
+      upper_bound: 420.0
+      conserved_group: thermal
+  control_names: [outlet_flow]
+  control_channels:
+    - name: outlet_flow
+      role: flow
+      unit: m^3/min
+      lower_bound: 0.4
+      upper_bound: 0.8
+  disturbance_names: [feed_rate, feed_quality, feed_temperature]
+  disturbance_channels:
+    - name: feed_rate
+      role: flow
+      unit: m^3/min
+      lower_bound: 0.45
+      upper_bound: 0.85
+    - name: feed_quality
+      role: concentration
+      lower_bound: 0.1
+      upper_bound: 0.9
+    - name: feed_temperature
+      role: temperature
+      unit: K
+      lower_bound: 295.0
+      upper_bound: 345.0
+  parameter_descriptors:
+    - name: volume
+      unit: m^3
+      law_tag: geometry
+    - name: heat_loss
+      unit: 1/min
+      law_tag: energy_balance
+  normalization:
+    state_center: [2.0, 0.5, 320.0]
+    state_scale: [0.75, 2.0, 0.02]
+    control_center: [0.6]
+    control_scale: [4.0]
+    disturbance_center: [0.65, 0.5, 320.0]
+    disturbance_scale: [4.0, 2.0, 0.02]
+    param_scale: 0.1
+  decoder_constraints:
+    - type: softplus
+      indices: [0]
+      bias: 0.2
+    - type: sigmoid_range
+      indices: [1]
+      low: 0.0
+      high: 1.0
+    - type: sigmoid_range
+      indices: [2]
+      low: 260.0
+      high: 420.0
+
+storage_tank:
+  volume: 2.5
+  heat_loss: 0.1
+
+simulation:
+  dt: 0.1
+  t_span: [0.0, 100.0]
+
+data_generation:
+  control_signals:
+    outlet_flow:
+      type: prbs
+      switch_prob: 0.05
+  disturbance_signals:
+    feed_rate:
+      type: multistep
+      n_changes: 5
+    feed_quality:
+      type: prbs
+      switch_prob: 0.03
+    feed_temperature:
+      type: multistep
+      n_changes: 4
+
+initial_conditions:
+  inventory: 2.0
+  quality: 0.5
+  temperature: 320.0
+
+operating_ranges:
+  outlet_flow: [0.4, 0.8]
+  feed_rate: [0.45, 0.85]
+  feed_quality: [0.1, 0.9]
+  feed_temperature: [295.0, 345.0]

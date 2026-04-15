@@ -166,8 +166,12 @@ class TrajectoryDataset:
         Returns:
             Dictionary with batched arrays
         """
+        # Smoke-size validation splits can be smaller than the requested mixed
+        # batch share for a given system. Fall back to replacement only in that
+        # case so larger datasets still sample without duplicates by default.
+        replace = batch_size > self._n_samples
         indices = np.asarray(
-            jax.random.choice(key, self._n_samples, shape=(batch_size,), replace=False)
+            jax.random.choice(key, self._n_samples, shape=(batch_size,), replace=replace)
         )
 
         batch = {

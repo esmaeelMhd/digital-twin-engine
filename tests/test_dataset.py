@@ -65,6 +65,34 @@ def test_sample_batch_seq_len_override_does_not_truncate_params():
     assert batch["params"].shape == (2, 6)
 
 
+def test_sample_batch_falls_back_to_replacement_for_tiny_datasets():
+    data = {
+        "states": jnp.zeros((2, 8, 2)),
+        "controls": jnp.zeros((2, 8, 1)),
+        "disturbances": jnp.zeros((2, 8, 1)),
+        "params": jnp.array([[1.0], [2.0]], dtype=jnp.float32),
+        "time": jnp.tile(jnp.linspace(0.0, 0.7, 8), (2, 1)),
+        "normalization": {
+            "state_mean": jnp.zeros(2),
+            "state_std": jnp.ones(2),
+            "control_mean": jnp.zeros(1),
+            "control_std": jnp.ones(1),
+            "disturbance_mean": jnp.zeros(1),
+            "disturbance_std": jnp.ones(1),
+            "param_mean": jnp.zeros(1),
+            "param_std": jnp.ones(1),
+        },
+    }
+
+    dataset = TrajectoryDataset(data, seq_len=8, stride=8)
+    batch = dataset.sample_batch(jax.random.PRNGKey(0), batch_size=5)
+
+    assert dataset.n_samples == 2
+    assert batch["states"].shape == (5, 8, 2)
+    assert batch["params"].shape == (5, 1)
+    assert jnp.all(jnp.isin(batch["params"].reshape(-1), jnp.array([1.0, 2.0], dtype=jnp.float32)))
+
+
 def test_missing_param_normalization_stats_are_backfilled():
     data = {
         "states": jnp.zeros((2, 12, 3)),

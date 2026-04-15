@@ -1,0 +1,119 @@
+system:
+  name: heat_exchanger
+  unit_type: heat_exchanger
+  family: thermal
+  subtype: high_ua_counter_current
+  law_tags: [energy_balance, heat_transfer]
+  conditioning_tags:
+    reaction_class: none
+    thermo_regime: single_phase_countercurrent
+    bio_model_family: none
+    operating_regime: aggressive_heat_exchange
+  state_names: [T_hot, T_cold]
+  state_groups:
+    - name: temperatures
+      kind: thermal
+      indices: [0, 1]
+  state_channels:
+    - name: T_hot
+      role: temperature
+      unit: K
+      lower_bound: 250.0
+      upper_bound: 450.0
+      conserved_group: temperatures
+    - name: T_cold
+      role: temperature
+      unit: K
+      lower_bound: 250.0
+      upper_bound: 450.0
+      conserved_group: temperatures
+  control_names: [F_hot, F_cold]
+  control_channels:
+    - name: F_hot
+      role: flow
+      unit: L/min
+      lower_bound: 2.0
+      upper_bound: 12.0
+    - name: F_cold
+      role: flow
+      unit: L/min
+      lower_bound: 2.0
+      upper_bound: 12.0
+  disturbance_names: [T_hot_in, T_cold_in]
+  disturbance_channels:
+    - name: T_hot_in
+      role: temperature
+      unit: K
+      lower_bound: 370.0
+      upper_bound: 430.0
+    - name: T_cold_in
+      role: temperature
+      unit: K
+      lower_bound: 265.0
+      upper_bound: 305.0
+  parameter_descriptors:
+    - name: V_hot
+      unit: L
+      law_tag: geometry
+    - name: V_cold
+      unit: L
+      law_tag: geometry
+    - name: UA
+      unit: J/(min*K)
+      law_tag: heat_transfer
+    - name: rho
+      unit: g/L
+      law_tag: thermodynamics
+    - name: Cp
+      unit: J/(g*K)
+      law_tag: thermodynamics
+  normalization:
+    state_center: [345.0, 305.0]
+    state_scale: [0.01, 0.01]
+    control_center: [7.0, 7.0]
+    control_scale: [0.1, 0.1]
+    disturbance_center: [400.0, 285.0]
+    disturbance_scale: [0.01, 0.01]
+    param_scale: 0.1
+  decoder_constraints:
+    - type: sigmoid_range
+      indices: [0, 1]
+      low: 250.0
+      high: 450.0
+
+heat_exchanger:
+  V_hot: 45.0
+  V_cold: 45.0
+  UA: 8000.0
+  rho: 1000.0
+  Cp: 4.18
+
+simulation:
+  dt: 0.1
+  t_span: [0.0, 100.0]
+
+data_generation:
+  control_signals:
+    F_hot:
+      type: prbs
+      switch_prob: 0.05
+    F_cold:
+      type: prbs
+      switch_prob: 0.05
+  disturbance_signals:
+    T_hot_in:
+      type: multistep
+      n_changes: 5
+    T_cold_in:
+      type: multistep
+      n_changes: 5
+
+initial_conditions:
+  T_hot: 345.0
+  T_cold: 305.0
+
+operating_ranges:
+  F_hot: [2.0, 12.0]
+  F_cold: [2.0, 12.0]
+  T_hot_in: [370.0, 430.0]
+  T_cold_in: [265.0, 305.0]
