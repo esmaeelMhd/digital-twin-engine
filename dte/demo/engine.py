@@ -793,6 +793,7 @@ def optimize_control_sequence(
     initial_state: np.ndarray,
     disturbances: np.ndarray,
     reference_controls: np.ndarray | None = None,
+    active_control_names: list[str] | None = None,
     dt: float,
     target_state: np.ndarray,
     tracked_state_names: list[str] | None = None,
@@ -812,6 +813,14 @@ def optimize_control_sequence(
         if reference_controls is None
         else _clip_controls(spec, np.asarray(reference_controls, dtype=np.float32))
     )
+    active_control_names = active_control_names or list(spec.control_names)
+    active_indices = [
+        spec.control_names.index(name)
+        for name in active_control_names
+        if name in spec.control_names
+    ]
+    if not active_indices:
+        active_indices = list(range(spec.control_dim))
 
     rng = np.random.default_rng(seed)
     tracked_scale = np.maximum(
@@ -825,6 +834,11 @@ def optimize_control_sequence(
     terminal_guard = 25.0 * tracked_scale
     huge_cost = float(1e12)
     local_span = 0.15 * (upper - lower)
+    fixed_controls = (
+        reference_controls.copy()
+        if reference_controls is not None
+        else default_control_sequence(spec, n_steps)
+    )
 
     def _evaluate_controls(controls: np.ndarray) -> tuple[float, np.ndarray]:
         states = simulate_open_loop(
@@ -858,15 +872,14 @@ def optimize_control_sequence(
         return cost, states
 
     best_controls = (
-        reference_controls.copy()
-        if reference_controls is not None
-        else default_control_sequence(spec, n_steps)
+        fixed_controls.copy()
     )
     best_cost, best_states = _evaluate_controls(best_controls)
     if not np.isfinite(best_cost):
         best_cost = huge_cost
 
     for _ in range(max(int(n_candidates), 1)):
+        controls = fixed_controls.copy()
         if reference_controls is not None and rng.random() < 0.7:
             reference_start = reference_controls[0]
             reference_end = reference_controls[-1]
@@ -883,13 +896,8 @@ def optimize_control_sequence(
         else:
             start = rng.uniform(lower, upper).astype(np.float32)
             end = rng.uniform(lower, upper).astype(np.float32)
-        controls = np.stack(
-            [
-                np.linspace(start[idx], end[idx], n_steps, dtype=np.float32)
-                for idx in range(spec.control_dim)
-            ],
-            axis=-1,
-        )
+        for idx in active_indices:
+            controls[:, idx] = np.linspace(start[idx], end[idx], n_steps, dtype=np.float32)
         cost, states = _evaluate_controls(controls)
         if cost < best_cost:
             best_cost = cost
@@ -1081,6 +1089,7 @@ def serialize_demo_definition(
         "optimize_button_label": str(
             demo.get("optimize_button_label", "Recommend Control Sequence")
         ),
+        "editable_control_names": demo.get("editable_control_names"),
         "system_spec": serialize_system_spec(spec),
     }
 

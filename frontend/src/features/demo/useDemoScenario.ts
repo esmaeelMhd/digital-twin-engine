@@ -2,8 +2,13 @@ import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 
-import { compareScenarios, optimizeControl } from '../../api/client';
-import type { DemoCompareScenariosRequest, DemoDefinition } from '../../api/types';
+import type {
+  DemoCompareScenariosRequest,
+  DemoCompareScenariosResponse,
+  DemoDefinition,
+  DemoOptimizeControlRequest,
+  DemoOptimizeControlResponse,
+} from '../../api/types';
 import {
   buildScenarioPayloads,
   cloneDraft,
@@ -11,20 +16,23 @@ import {
   type ScenarioDraft,
 } from './demoSignals';
 
-export function useDemoScenario(demo: DemoDefinition) {
+type ScenarioApi = {
+  compareScenario: (payload: DemoCompareScenariosRequest) => Promise<DemoCompareScenariosResponse>;
+  optimizeScenario: (payload: DemoOptimizeControlRequest) => Promise<DemoOptimizeControlResponse>;
+};
+
+export function useDemoScenario(demo: DemoDefinition, api: ScenarioApi) {
   const [draft, setDraft] = useState<ScenarioDraft>(() => defaultDraft(demo));
   const [appliedDraft, setAppliedDraft] = useState<ScenarioDraft>(() => defaultDraft(demo));
-  const [optimizedResult, setOptimizedResult] = useState<Awaited<
-    ReturnType<typeof optimizeControl>
-  > | null>(null);
+  const [optimizedResult, setOptimizedResult] = useState<DemoOptimizeControlResponse | null>(null);
   const appliedPayloads = buildScenarioPayloads(demo, appliedDraft);
 
   const compareMutation = useMutation({
-    mutationFn: compareScenarios,
+    mutationFn: api.compareScenario,
   });
 
   const optimizeMutation = useMutation({
-    mutationFn: optimizeControl,
+    mutationFn: api.optimizeScenario,
     onSuccess: (result) => {
       setOptimizedResult(result);
     },

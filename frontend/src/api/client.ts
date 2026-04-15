@@ -11,6 +11,7 @@ import type {
   OnboardingPreviewResponse,
   OnboardingTemplateListResponse,
   OnboardingUploadResponse,
+  OnboardingWorkspaceResponse,
 } from './types';
 
 const apiBaseUrl =
@@ -97,4 +98,22 @@ export function getOnboardingJob(jobId: string) {
 
 export function getOnboardingJobReport(jobId: string) {
   return request<OnboardingJobReportResponse>(`/onboarding/jobs/${jobId}/report`);
+}
+
+export function getOnboardingWorkspace(jobId: string) {
+  return request<OnboardingWorkspaceResponse>(`/onboarding/jobs/${jobId}/workspace`);
+}
+
+export function compareOnboardingScenarios(jobId: string, payload: DemoCompareScenariosRequest) {
+  return request<DemoCompareScenariosResponse>(`/onboarding/jobs/${jobId}/compare_scenarios`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function optimizeOnboardingControl(jobId: string, payload: DemoOptimizeControlRequest) {
+  return request<DemoOptimizeControlResponse>(`/onboarding/jobs/${jobId}/optimize_control`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }

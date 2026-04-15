@@ -3,7 +3,14 @@ import { Play, Target } from 'lucide-react';
 import { lazy, Suspense } from 'react';
 import * as Accordion from '@radix-ui/react-accordion';
 
-import type { DemoDefinition } from '../../api/types';
+import { compareScenarios, optimizeControl } from '../../api/client';
+import type {
+  DemoCompareScenariosRequest,
+  DemoCompareScenariosResponse,
+  DemoDefinition,
+  DemoOptimizeControlRequest,
+  DemoOptimizeControlResponse,
+} from '../../api/types';
 import { MetricCard } from '../../components/MetricCard';
 import { formatMetric, titleCase } from '../../lib/format';
 import { useDemoScenario } from './useDemoScenario';
@@ -16,9 +23,15 @@ const TrajectoryChart = lazy(async () => {
 
 type DemoWorkspaceProps = {
   demo: DemoDefinition;
+  compareScenario?: (payload: DemoCompareScenariosRequest) => Promise<DemoCompareScenariosResponse>;
+  optimizeScenario?: (payload: DemoOptimizeControlRequest) => Promise<DemoOptimizeControlResponse>;
 };
 
-export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
+export function DemoWorkspace({
+  demo,
+  compareScenario = compareScenarios,
+  optimizeScenario = optimizeControl,
+}: DemoWorkspaceProps) {
   const {
     draft,
     comparison,
@@ -33,10 +46,14 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
     setControlAdjustment,
     setDisturbanceAdjustment,
     runScenario,
-    optimizeScenario,
+    optimizeScenario: runOptimizeScenario,
     controlAdjustmentRange,
     disturbanceAdjustmentRange,
-  } = useDemoScenario(demo);
+  } = useDemoScenario(demo, {
+    compareScenario,
+    optimizeScenario,
+  });
+  const editableControlNames = demo.editable_control_names ?? demo.system_spec.control_names;
 
   const selectedDisturbance = demo.disturbance_presets.find(
     (item) => item.id === draft.selectedDisturbanceId,
@@ -124,7 +141,7 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
                 before sending the comparison to the API.
               </p>
               <div className={styles.sliderGroup}>
-                {demo.system_spec.control_names.map((controlName) => {
+                {editableControlNames.map((controlName) => {
                   const range = controlAdjustmentRange(controlName);
                   return (
                     <label key={controlName} className={styles.sliderField}>
@@ -187,7 +204,7 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
             <Play size={16} aria-hidden="true" />
             {comparisonPending ? 'Running…' : demo.run_button_label}
           </button>
-          <button className="button-secondary" type="button" onClick={() => void optimizeScenario()}>
+          <button className="button-secondary" type="button" onClick={() => void runOptimizeScenario()}>
             <Target size={16} aria-hidden="true" />
             {optimizationPending ? 'Optimising…' : demo.optimize_button_label}
           </button>
@@ -239,7 +256,8 @@ export function DemoWorkspace({ demo }: DemoWorkspaceProps) {
               <div className={styles.optimizedBlock}>
                 <h4 className={styles.optimizedTitle}>Recommended stabilization plan</h4>
                 <div className="metric-grid">
-                  {demo.system_spec.control_names.map((controlName, index) => {
+                  {editableControlNames.map((controlName) => {
+                    const index = demo.system_spec.control_names.indexOf(controlName);
                     const sequence = optimizedResult.control_sequence.map((row) => row[index]);
                     return (
                       <MetricCard

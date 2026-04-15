@@ -1,6 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 
-import { getDemoPage, getOnboardingJob, getOnboardingTemplates } from './client';
+import {
+  getDemoPage,
+  getOnboardingJob,
+  getOnboardingTemplates,
+  getOnboardingWorkspace,
+} from './client';
 
 export function useDemoPageQuery() {
   return useQuery({
@@ -25,5 +30,13 @@ export function useOnboardingJobQuery(jobId: string | null) {
       const status = query.state.data?.status;
       return status === 'queued' || status === 'running' ? 1500 : false;
     },
+  });
+}
+
+export function useOnboardingWorkspaceQuery(jobId: string | null) {
+  return useQuery({
+    queryKey: ['onboarding-workspace', jobId],
+    queryFn: () => getOnboardingWorkspace(jobId ?? ''),
+    enabled: Boolean(jobId),
   });
 }

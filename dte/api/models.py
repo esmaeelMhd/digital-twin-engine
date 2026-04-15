@@ -215,6 +215,7 @@ class DemoDefinition(BaseModel):
     optimization: DemoOptimizationConfig = Field(default_factory=DemoOptimizationConfig)
     run_button_label: str = "Run Scenario"
     optimize_button_label: str = "Recommend Control Sequence"
+    editable_control_names: Optional[List[str]] = None
     system_spec: DemoSystemSpec
 
 
@@ -344,6 +345,7 @@ class DemoOptimizeControlRequest(BaseModel):
     initial_state: List[float]
     disturbances: List[List[float]]
     reference_controls: Optional[List[List[float]]] = None
+    active_control_names: Optional[List[str]] = None
     target_state: List[float]
     tracked_state_names: Optional[List[str]] = None
     dt: float = Field(0.1, gt=0)
@@ -526,6 +528,23 @@ class OnboardingJobReportResponse(BaseModel):
     job: OnboardingJobResponse
     summary: Dict[str, Any]
     report_markdown: Optional[str] = None
+
+
+class OnboardingWorkspaceGate(BaseModel):
+    """Soft-gate payload for the customer planning workspace."""
+
+    status: str = Field(pattern="^(ready|warning)$")
+    message: str
+    forecast_rmse_ratio: Optional[float] = None
+    rollout_rmse_ratio: Optional[float] = None
+
+
+class OnboardingWorkspaceResponse(BaseModel):
+    """Customer workspace bootstrap payload for MVP-2."""
+
+    job: OnboardingJobResponse
+    gate: OnboardingWorkspaceGate
+    workspace: DemoDefinition
 
 
 # ---------------------------------------------------------------------------

@@ -648,6 +648,11 @@ export function OnboardingPage() {
                       <ReactMarkdown>{reportQuery.data.report_markdown}</ReactMarkdown>
                     </div>
                   ) : null}
+                  <div className={styles.actionRow}>
+                    <Link className="button-primary" to={`/onboard/jobs/${jobQuery.data.job_id}/workspace`}>
+                      Open planning workspace
+                    </Link>
+                  </div>
                 </article>
               ) : null}
             </>

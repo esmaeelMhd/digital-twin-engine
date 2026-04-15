@@ -71,6 +71,7 @@ from dte.api.models import (
     OnboardingPreviewRequest,
     OnboardingPreviewResponse,
     OnboardingTemplateListResponse,
+    OnboardingWorkspaceResponse,
     OnboardingUploadResponse,
     PredictRequest,
     PredictResponse,
@@ -78,9 +79,12 @@ from dte.api.models import (
     SteadyStateResponse,
 )
 from dte.api.onboarding import (
+    build_job_workspace,
     build_onboarding_templates,
     initialize_job_status,
     job_dir,
+    load_completed_job_context,
+    load_job_demo_runtime,
     load_job_report,
     load_job_status,
     load_preview_record,
@@ -599,6 +603,164 @@ def _ensure_disturbance_sequence(
     return values
 
 
+def _validate_active_control_names(
+    spec: SystemSpec,
+    active_control_names: Optional[List[str]],
+) -> list[str] | None:
+    if not active_control_names:
+        return None
+    invalid = sorted(set(active_control_names) - set(spec.control_names))
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"active_control_names must be drawn from {spec.control_names}; "
+                f"got {invalid}."
+            ),
+        )
+    return [name for name in active_control_names if name in spec.control_names]
+
+
+def _build_compare_response(
+    *,
+    system: str,
+    spec: SystemSpec,
+    result: dict[str, object],
+) -> DemoCompareScenariosResponse:
+    baseline = result["baseline"]
+    candidate = result["candidate"]
+    return DemoCompareScenariosResponse(
+        system=system,
+        times=np.asarray(candidate["times"]).tolist(),
+        baseline_source=str(baseline["source"]),
+        candidate_source=str(candidate["source"]),
+        state_names=spec.state_names,
+        baseline_mean=np.asarray(baseline["mean"]).tolist(),
+        candidate_mean=np.asarray(candidate["mean"]).tolist(),
+        baseline_p05=np.asarray(baseline["p05"]).tolist(),
+        baseline_p95=np.asarray(baseline["p95"]).tolist(),
+        candidate_p05=np.asarray(candidate["p05"]).tolist(),
+        candidate_p95=np.asarray(candidate["p95"]).tolist(),
+        summary=result["summary"],
+        baseline_constraints={
+            key: float(value) for key, value in baseline["constraint_summary"].items()
+        },
+        candidate_constraints={
+            key: float(value) for key, value in candidate["constraint_summary"].items()
+        },
+    )
+
+
+def _build_optimize_response(
+    *,
+    system: str,
+    spec: SystemSpec,
+    result: dict[str, object],
+) -> DemoOptimizeControlResponse:
+    return DemoOptimizeControlResponse(
+        system=system,
+        control_sequence=np.asarray(result["control_sequence"]).tolist(),
+        predicted_states=np.asarray(result["predicted_states"]).tolist(),
+        objective=float(result["objective"]),
+        tracked_state_names=list(result["tracked_state_names"]),
+        state_names=spec.state_names,
+        constraint_summary={
+            key: float(value) for key, value in result["constraint_summary"].items()
+        },
+    )
+
+
+def _run_demo_compare(
+    *,
+    system: str,
+    spec: SystemSpec,
+    simulator,
+    model,
+    req: DemoCompareScenariosRequest,
+) -> DemoCompareScenariosResponse:
+    baseline_controls = _validate_control_sequence(spec, req.baseline_controls)
+    candidate_controls = _validate_control_sequence(spec, req.candidate_controls)
+    if baseline_controls.shape != candidate_controls.shape:
+        raise HTTPException(
+            status_code=422,
+            detail="baseline_controls and candidate_controls must have the same shape.",
+        )
+    disturbances = _ensure_disturbance_sequence(
+        spec,
+        req.disturbances,
+        baseline_controls.shape[0],
+    )
+    result = compare_scenarios(
+        spec,
+        simulator,
+        initial_state=_validate_state_vector(spec, req.initial_state),
+        baseline_controls=baseline_controls,
+        candidate_controls=candidate_controls,
+        disturbances=disturbances,
+        dt=float(req.dt),
+        model=model,
+        params=_validate_params(spec, req.params) if req.params is not None else None,
+        n_samples=int(req.n_samples),
+        seed=int(req.seed),
+    )
+    return _build_compare_response(system=system, spec=spec, result=result)
+
+
+def _run_demo_optimize(
+    *,
+    system: str,
+    spec: SystemSpec,
+    simulator,
+    req: DemoOptimizeControlRequest,
+) -> DemoOptimizeControlResponse:
+    disturbances = np.asarray(req.disturbances, dtype=np.float32)
+    if disturbances.ndim != 2 or disturbances.shape[1] != spec.disturbance_dim:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"disturbances must have shape [T, {spec.disturbance_dim}] for '{system}'."
+            ),
+        )
+    reference_controls = None
+    if req.reference_controls is not None:
+        reference_controls = _validate_control_sequence(spec, req.reference_controls)
+        if reference_controls.shape[0] != disturbances.shape[0]:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"reference_controls must have shape [T, {spec.control_dim}] with the same "
+                    f"T as disturbances for '{system}'."
+                ),
+            )
+    result = optimize_control_sequence(
+        spec,
+        simulator,
+        initial_state=_validate_state_vector(spec, req.initial_state),
+        disturbances=disturbances,
+        reference_controls=reference_controls,
+        active_control_names=_validate_active_control_names(spec, req.active_control_names),
+        dt=float(req.dt),
+        target_state=_validate_state_vector(spec, req.target_state),
+        tracked_state_names=req.tracked_state_names,
+        n_candidates=int(req.n_candidates),
+        seed=int(req.seed),
+    )
+    return _build_optimize_response(system=system, spec=spec, result=result)
+
+
+def _get_onboarding_job_demo_runtime(job_id: str):
+    job_payload, preview_record, _summary = load_completed_job_context(job_id)
+    template_system_name = str(preview_record["template_system_name"])
+    system_config = _system_configs.get(template_system_name)
+    if system_config is None:
+        with open(preview_record["template_config_path"], "r", encoding="utf-8") as handle:
+            system_config = yaml.safe_load(handle) or {}
+    spec = get_system_spec(system_config)
+    simulator = get_simulator(template_system_name, system_config)
+    model = load_job_demo_runtime(job_id)
+    return job_payload, preview_record, spec, simulator, model
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -780,6 +942,96 @@ async def onboarding_job_report(job_id: str):
 
 
 @app.get(
+    "/onboarding/jobs/{job_id}/workspace",
+    response_model=OnboardingWorkspaceResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_job_workspace(job_id: str):
+    """Return the customer planning workspace bootstrap for one completed job."""
+
+    demo_config_path = os.environ.get("DTE_DEMO_CONFIG", "configs/demo_app.yaml")
+    try:
+        payload = build_job_workspace(
+            job_id,
+            demo_config_path=demo_config_path,
+            system_configs=_system_configs,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return OnboardingWorkspaceResponse.model_validate(payload)
+
+
+@app.post(
+    "/onboarding/jobs/{job_id}/compare_scenarios",
+    response_model=DemoCompareScenariosResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_job_compare_scenarios(job_id: str, req: DemoCompareScenariosRequest):
+    """Compare customer scenarios against the adapted job-specific runtime."""
+
+    try:
+        _job_payload, preview_record, spec, simulator, model = _get_onboarding_job_demo_runtime(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    expected_system = str(preview_record["template_system_name"])
+    if req.system != expected_system:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"system must match the job template system '{expected_system}' "
+                f"for onboarding job '{job_id}'."
+            ),
+        )
+    return _run_demo_compare(
+        system=req.system,
+        spec=spec,
+        simulator=simulator,
+        model=model,
+        req=req,
+    )
+
+
+@app.post(
+    "/onboarding/jobs/{job_id}/optimize_control",
+    response_model=DemoOptimizeControlResponse,
+    tags=["onboarding"],
+    dependencies=[Depends(_verify_api_key)],
+)
+async def onboarding_job_optimize_control(job_id: str, req: DemoOptimizeControlRequest):
+    """Recommend a customer control schedule using the adapted workspace context."""
+
+    try:
+        _job_payload, preview_record, spec, simulator, _model = _get_onboarding_job_demo_runtime(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    expected_system = str(preview_record["template_system_name"])
+    if req.system != expected_system:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"system must match the job template system '{expected_system}' "
+                f"for onboarding job '{job_id}'."
+            ),
+        )
+    return _run_demo_optimize(
+        system=req.system,
+        spec=spec,
+        simulator=simulator,
+        req=req,
+    )
+
+
+@app.get(
     "/demo/catalog",
     response_model=DemoCatalogResponse,
     tags=["demo"],
@@ -895,47 +1147,11 @@ async def demo_optimize_control(req: DemoOptimizeControlRequest):
     """Return a lightweight random-shooting control recommendation."""
 
     spec, simulator, _ = _get_demo_runtime(req.system)
-    disturbances = np.asarray(req.disturbances, dtype=np.float32)
-    if disturbances.shape[1] != spec.disturbance_dim:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"disturbances must have shape [T, {spec.disturbance_dim}] for '{req.system}'."
-            ),
-        )
-    reference_controls = None
-    if req.reference_controls is not None:
-        reference_controls = _validate_control_sequence(spec, req.reference_controls)
-        if reference_controls.shape[0] != disturbances.shape[0]:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"reference_controls must have shape [T, {spec.control_dim}] with the same "
-                    f"T as disturbances for '{req.system}'."
-                ),
-            )
-    result = optimize_control_sequence(
-        spec,
-        simulator,
-        initial_state=_validate_state_vector(spec, req.initial_state),
-        disturbances=disturbances,
-        reference_controls=reference_controls,
-        dt=float(req.dt),
-        target_state=_validate_state_vector(spec, req.target_state),
-        tracked_state_names=req.tracked_state_names,
-        n_candidates=int(req.n_candidates),
-        seed=int(req.seed),
-    )
-    return DemoOptimizeControlResponse(
+    return _run_demo_optimize(
         system=req.system,
-        control_sequence=np.asarray(result["control_sequence"]).tolist(),
-        predicted_states=np.asarray(result["predicted_states"]).tolist(),
-        objective=float(result["objective"]),
-        tracked_state_names=list(result["tracked_state_names"]),
-        state_names=spec.state_names,
-        constraint_summary={
-            key: float(value) for key, value in result["constraint_summary"].items()
-        },
+        spec=spec,
+        simulator=simulator,
+        req=req,
     )
 
 
@@ -949,52 +1165,12 @@ async def demo_compare_scenarios(req: DemoCompareScenariosRequest):
     """Compare baseline and candidate control schedules for one demo system."""
 
     spec, simulator, model = _get_demo_runtime(req.system)
-    baseline_controls = _validate_control_sequence(spec, req.baseline_controls)
-    candidate_controls = _validate_control_sequence(spec, req.candidate_controls)
-    if baseline_controls.shape != candidate_controls.shape:
-        raise HTTPException(
-            status_code=422,
-            detail="baseline_controls and candidate_controls must have the same shape.",
-        )
-    disturbances = _ensure_disturbance_sequence(
-        spec,
-        req.disturbances,
-        baseline_controls.shape[0],
-    )
-    result = compare_scenarios(
-        spec,
-        simulator,
-        initial_state=_validate_state_vector(spec, req.initial_state),
-        baseline_controls=baseline_controls,
-        candidate_controls=candidate_controls,
-        disturbances=disturbances,
-        dt=float(req.dt),
-        model=model,
-        params=_validate_params(spec, req.params) if req.params is not None else None,
-        n_samples=int(req.n_samples),
-        seed=int(req.seed),
-    )
-    baseline = result["baseline"]
-    candidate = result["candidate"]
-    return DemoCompareScenariosResponse(
+    return _run_demo_compare(
         system=req.system,
-        times=np.asarray(candidate["times"]).tolist(),
-        baseline_source=str(baseline["source"]),
-        candidate_source=str(candidate["source"]),
-        state_names=spec.state_names,
-        baseline_mean=np.asarray(baseline["mean"]).tolist(),
-        candidate_mean=np.asarray(candidate["mean"]).tolist(),
-        baseline_p05=np.asarray(baseline["p05"]).tolist(),
-        baseline_p95=np.asarray(baseline["p95"]).tolist(),
-        candidate_p05=np.asarray(candidate["p05"]).tolist(),
-        candidate_p95=np.asarray(candidate["p95"]).tolist(),
-        summary=result["summary"],
-        baseline_constraints={
-            key: float(value) for key, value in baseline["constraint_summary"].items()
-        },
-        candidate_constraints={
-            key: float(value) for key, value in candidate["constraint_summary"].items()
-        },
+        spec=spec,
+        simulator=simulator,
+        model=model,
+        req=req,
     )
 
 

@@ -69,6 +69,7 @@ export type DemoDefinition = {
   optimization: DemoOptimizationConfig;
   run_button_label: string;
   optimize_button_label: string;
+  editable_control_names?: string[] | null;
   system_spec: DemoSystemSpec;
 };
 
@@ -161,6 +162,7 @@ export type DemoOptimizeControlRequest = {
   initial_state: number[];
   disturbances: number[][];
   reference_controls?: number[][];
+  active_control_names?: string[];
   target_state: number[];
   tracked_state_names: string[];
   dt: number;
@@ -277,4 +279,17 @@ export type OnboardingJobReportResponse = {
   job: OnboardingJobResponse;
   summary: Record<string, unknown>;
   report_markdown?: string | null;
+};
+
+export type OnboardingWorkspaceGate = {
+  status: 'ready' | 'warning';
+  message: string;
+  forecast_rmse_ratio?: number | null;
+  rollout_rmse_ratio?: number | null;
+};
+
+export type OnboardingWorkspaceResponse = {
+  job: OnboardingJobResponse;
+  gate: OnboardingWorkspaceGate;
+  workspace: DemoDefinition;
 };

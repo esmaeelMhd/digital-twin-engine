@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -13,8 +14,10 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import yaml
 
+from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
 from dte.customer.onboarding_schema import (
     CustomerMeasurementSpec,
     CustomerOnboardingSpec,
@@ -23,12 +26,21 @@ from dte.customer.onboarding_schema import (
 )
 from dte.customer.template_matching import REGISTERED_UNIT_CONFIGS
 from dte.data.real_data import RealDataIngestion
-from dte.demo.engine import load_demo_config, serialize_system_spec
+from dte.demo.engine import (
+    UniversalDemoRuntime,
+    build_signal_sequence,
+    default_disturbance_sequence,
+    load_demo_config,
+    serialize_demo_definition,
+    serialize_system_spec,
+)
+from dte.models.universal_digital_twin import UniversalDigitalTwin
 from dte.simulators.base import ProcessUnitSpec
 from dte.simulators.registry import get_system_spec
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ONBOARDING_ROOT = PROJECT_ROOT / "outputs" / "customer_jobs"
+_JOB_RUNTIME_CACHE: dict[str, UniversalDemoRuntime] = {}
 
 
 def onboarding_root() -> Path:
@@ -582,6 +594,8 @@ def run_onboarding_job(
         str(preview_record["template_config_path"]),
         "--data_dir",
         str(preview_record["artifacts"]["processed_data_dir"]),
+        "--system_name",
+        str(preview_record["template_system_name"]),
         "--output_dir",
         str(output_dir),
         "--trainable_mode",
@@ -676,3 +690,549 @@ def load_job_report(job_id: str) -> tuple[dict[str, Any], str | None]:
         if candidate.exists():
             report_markdown = candidate.read_text(encoding="utf-8")
     return summary, report_markdown
+
+
+def load_completed_job_context(job_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Load the completed job, preview, and summary artifacts for one onboarding job."""
+
+    job_payload = load_job_status(job_id)
+    if job_payload is None:
+        raise FileNotFoundError(f"Job '{job_id}' was not found.")
+    if job_payload.get("status") != "completed":
+        raise ValueError(f"Job '{job_id}' is not completed.")
+
+    preview_id = str(job_payload.get("preview_id") or "")
+    preview_record = load_preview_record(preview_id)
+    if preview_record is None:
+        raise FileNotFoundError(f"Preview '{preview_id}' for job '{job_id}' was not found.")
+
+    summary = _read_json(job_dir(job_id) / "summary.json")
+    if summary is None:
+        raise FileNotFoundError(f"Job '{job_id}' does not have a completed summary.")
+    return job_payload, preview_record, summary
+
+
+def _load_yaml(path: str | Path) -> dict[str, Any]:
+    with Path(path).open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def _summary_vector(
+    summary: dict[str, Any],
+    key: str,
+    names: list[str],
+    fallback: list[float] | np.ndarray,
+) -> np.ndarray:
+    values = summary.get(key)
+    fallback_arr = np.asarray(fallback, dtype=np.float32)
+    if values is None:
+        return fallback_arr.copy()
+    arr = np.asarray(values, dtype=np.float32).reshape(-1)
+    if arr.shape[0] < len(names):
+        padded = fallback_arr.copy()
+        padded[: arr.shape[0]] = arr
+        return padded
+    return arr[: len(names)]
+
+
+def _named_map(names: list[str], values: list[float] | np.ndarray) -> dict[str, float]:
+    arr = np.asarray(values, dtype=np.float32).reshape(-1)
+    return {
+        name: float(arr[idx])
+        for idx, name in enumerate(names)
+    }
+
+
+def _constant_profile(names: list[str], values: list[float] | np.ndarray) -> dict[str, Any]:
+    return {
+        "type": "constant",
+        "channels": _named_map(names, values),
+    }
+
+
+def _midpoint_controls(spec: ProcessUnitSpec) -> np.ndarray:
+    return np.asarray(
+        [0.5 * sum(spec.control_ranges[name]) for name in spec.control_names],
+        dtype=np.float32,
+    )
+
+
+def _recenter_named_values(
+    values: dict[str, Any],
+    template_center: dict[str, float],
+    customer_center: dict[str, float],
+) -> dict[str, float]:
+    recentered: dict[str, float] = {}
+    for name, value in values.items():
+        template_value = float(template_center.get(name, value))
+        customer_value = float(customer_center.get(name, template_value))
+        recentered[name] = float(customer_value + (float(value) - template_value))
+    return recentered
+
+
+def _recenter_profile(
+    profile: dict[str, Any] | None,
+    *,
+    template_center: dict[str, float],
+    customer_center: dict[str, float],
+) -> dict[str, Any] | None:
+    if profile is None:
+        return None
+
+    recentered = copy.deepcopy(profile)
+    for field_name in ("channels", "values", "start", "end", "base", "pulse"):
+        raw_values = recentered.get(field_name)
+        if isinstance(raw_values, dict):
+            recentered[field_name] = _recenter_named_values(
+                raw_values,
+                template_center,
+                customer_center,
+            )
+    return recentered
+
+
+def _range_shift(std_value: float, bounds: list[float] | tuple[float, float]) -> float:
+    lower, upper = float(bounds[0]), float(bounds[1])
+    return max(float(std_value), 0.1 * (upper - lower), 1e-3)
+
+
+def _build_generic_customer_workspace(
+    *,
+    job_id: str,
+    customer_name: str,
+    spec: ProcessUnitSpec,
+    preview_summary: dict[str, Any],
+    initial_state: dict[str, float],
+    target_state: dict[str, float],
+    control_center: np.ndarray,
+    disturbance_center: np.ndarray,
+    editable_control_names: list[str],
+    highlight_states: list[str],
+) -> dict[str, Any]:
+    n_steps = max(12, min(int(preview_summary.get("n_steps_per_trajectory", 25)), 40))
+    dt = float(preview_summary.get("dt", 0.1))
+    control_std = _summary_vector(
+        preview_summary,
+        "control_std",
+        list(spec.control_names),
+        np.zeros(spec.control_dim, dtype=np.float32),
+    )
+    disturbance_std = _summary_vector(
+        preview_summary,
+        "disturbance_std",
+        list(spec.disturbance_names),
+        np.zeros(spec.disturbance_dim, dtype=np.float32),
+    )
+
+    candidate_profiles: list[dict[str, Any]] = []
+    lead_control = editable_control_names[0] if editable_control_names else spec.control_names[0]
+    lead_control_idx = spec.control_names.index(lead_control)
+    lead_control_shift = _range_shift(
+        float(control_std[lead_control_idx]),
+        spec.control_ranges[lead_control],
+    )
+    control_center_map = _named_map(list(spec.control_names), control_center)
+    disturbance_center_map = _named_map(list(spec.disturbance_names), disturbance_center)
+
+    candidate_profiles.append(
+        {
+            "id": "customer-ramp",
+            "title": f"{lead_control} ramp",
+            "description": "Ramp the primary customer control around the observed operating mean.",
+            "profile": {
+                "type": "ramp",
+                "start": {
+                    lead_control: float(control_center_map[lead_control] - lead_control_shift),
+                },
+                "end": {
+                    lead_control: float(control_center_map[lead_control] + lead_control_shift),
+                },
+            },
+        }
+    )
+
+    disturbance_presets: list[dict[str, Any]] = [
+        {
+            "id": "customer-nominal",
+            "title": "Observed nominal",
+            "description": "Hold disturbances at the observed mean operating point.",
+            "profile": _constant_profile(list(spec.disturbance_names), disturbance_center),
+        }
+    ]
+    if spec.disturbance_names:
+        lead_disturbance = spec.disturbance_names[0]
+        lead_disturbance_idx = spec.disturbance_names.index(lead_disturbance)
+        disturbance_shift = _range_shift(
+            float(disturbance_std[lead_disturbance_idx]),
+            spec.disturbance_ranges[lead_disturbance],
+        )
+        disturbance_presets.append(
+            {
+                "id": "customer-pulse",
+                "title": f"{lead_disturbance} pulse",
+                "description": "Pulse the lead disturbance around the observed mean.",
+                "profile": {
+                    "type": "pulse",
+                    "base": disturbance_center_map,
+                    "pulse": {
+                        lead_disturbance: float(
+                            disturbance_center_map[lead_disturbance] + disturbance_shift
+                        ),
+                    },
+                    "start_step": max(n_steps // 3, 1),
+                    "duration": max(n_steps // 5, 1),
+                },
+            }
+        )
+
+    return {
+        "id": f"customer-{job_id}",
+        "title": f"{customer_name} Planning Workspace",
+        "system": spec.name,
+        "kind": "customer_workspace",
+        "description": (
+            f"Customer-specific planning surface for {customer_name}. "
+            "Forecasts come from the adapted checkpoint built from the uploaded plant history."
+        ),
+        "operator_goal": "Compare plan options against the adapted customer checkpoint.",
+        "dt": dt,
+        "n_steps": n_steps,
+        "highlight_states": highlight_states,
+        "target_state": target_state,
+        "initial_state": initial_state,
+        "baseline_control_profile": _constant_profile(list(spec.control_names), control_center),
+        "disturbance_presets": disturbance_presets,
+        "candidate_profiles": candidate_profiles,
+        "optimization": {
+            "n_candidates": 48,
+            "seed": 0,
+        },
+        "run_button_label": "Compare customer plan",
+        "optimize_button_label": "Recommend stabilization plan",
+        "editable_control_names": editable_control_names,
+        "system_spec": serialize_system_spec(spec),
+    }
+
+
+def build_job_workspace(
+    job_id: str,
+    *,
+    demo_config_path: str | Path | None,
+    system_configs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a customer planning workspace centered on one completed onboarding job."""
+
+    job_payload, preview_record, summary = load_completed_job_context(job_id)
+    template_system_name = str(preview_record["template_system_name"])
+    customer_name = str(
+        (preview_record.get("onboarding_spec") or {}).get("name")
+        or template_system_name
+    )
+    system_config = system_configs.get(template_system_name)
+    if system_config is None:
+        system_config = _load_yaml(preview_record["template_config_path"])
+    spec = get_system_spec(system_config)
+
+    preview_summary = preview_record.get("ingestion_summary") or {}
+    demo_config = load_demo_config(demo_config_path)
+    template_demo = next(
+        (
+            item
+            for item in demo_config.get("demos", [])
+            if str(item.get("system")) == template_system_name
+        ),
+        None,
+    )
+    template_workspace = (
+        serialize_demo_definition(template_demo, spec)
+        if template_demo is not None
+        else None
+    )
+
+    template_control_center = (
+        np.mean(
+            build_signal_sequence(
+                spec,
+                int(template_workspace["n_steps"]),
+                signal_kind="control",
+                profile=template_workspace.get("baseline_control_profile"),
+            ),
+            axis=0,
+        )
+        if template_workspace is not None
+        else _midpoint_controls(spec)
+    )
+    template_disturbance_center = (
+        np.mean(
+            default_disturbance_sequence(spec, int(template_workspace["n_steps"])),
+            axis=0,
+        )
+        if template_workspace is not None
+        else np.asarray(spec.default_nominal_disturbance, dtype=np.float32)
+    )
+    state_center = _summary_vector(
+        preview_summary,
+        "state_mean",
+        list(spec.state_names),
+        spec.default_initial_state,
+    )
+    control_center = _summary_vector(
+        preview_summary,
+        "control_mean",
+        list(spec.control_names),
+        template_control_center,
+    )
+    disturbance_center = _summary_vector(
+        preview_summary,
+        "disturbance_mean",
+        list(spec.disturbance_names),
+        template_disturbance_center,
+    )
+    initial_state = _named_map(list(spec.state_names), state_center)
+    editable_control_names = [
+        name
+        for name in preview_record.get("control_variable_names") or []
+        if name in spec.control_names
+    ] or list(spec.control_names)
+    highlight_states = [
+        name
+        for name in preview_record.get("objective_state_names") or []
+        if name in spec.state_names
+    ]
+    if not highlight_states:
+        highlight_states = (
+            list(template_workspace["highlight_states"])
+            if template_workspace is not None
+            else list(spec.state_names[: min(2, spec.state_dim)])
+        )
+
+    if template_workspace is None:
+        target_state = _named_map(list(spec.state_names), spec.default_initial_state)
+        return build_job_workspace_response(
+            job_payload,
+            preview_record,
+            summary,
+            _build_generic_customer_workspace(
+                job_id=job_id,
+                customer_name=customer_name,
+                spec=spec,
+                preview_summary=preview_summary,
+                initial_state=initial_state,
+                target_state=target_state,
+                control_center=control_center,
+                disturbance_center=disturbance_center,
+                editable_control_names=editable_control_names,
+                highlight_states=highlight_states,
+            ),
+        )
+
+    template_initial = template_workspace["initial_state"]
+    template_target = template_workspace["target_state"]
+    target_state = {
+        name: float(
+            initial_state[name]
+            + (
+                float(template_target.get(name, template_initial[name]))
+                - float(template_initial[name])
+            )
+        )
+        for name in spec.state_names
+    }
+
+    template_control_center_map = _named_map(list(spec.control_names), template_control_center)
+    customer_control_center_map = _named_map(list(spec.control_names), control_center)
+    template_disturbance_center_map = _named_map(
+        list(spec.disturbance_names),
+        template_disturbance_center,
+    )
+    customer_disturbance_center_map = _named_map(
+        list(spec.disturbance_names),
+        disturbance_center,
+    )
+
+    workspace = copy.deepcopy(template_workspace)
+    workspace.update(
+        {
+            "id": f"customer-{job_id}",
+            "title": f"{customer_name} Planning Workspace",
+            "kind": "customer_workspace",
+            "description": (
+                f"Customer-specific planning surface for {customer_name}. "
+                "Forecasts come from the adapted checkpoint built from the uploaded plant history."
+            ),
+            "initial_state": initial_state,
+            "target_state": target_state,
+            "highlight_states": highlight_states,
+            "baseline_control_profile": _constant_profile(list(spec.control_names), control_center),
+            "disturbance_presets": [
+                {
+                    **preset,
+                    "profile": _recenter_profile(
+                        preset.get("profile"),
+                        template_center=template_disturbance_center_map,
+                        customer_center=customer_disturbance_center_map,
+                    ),
+                }
+                for preset in template_workspace["disturbance_presets"]
+            ],
+            "candidate_profiles": [
+                {
+                    **preset,
+                    "profile": _recenter_profile(
+                        preset.get("profile"),
+                        template_center=template_control_center_map,
+                        customer_center=customer_control_center_map,
+                    ),
+                }
+                for preset in template_workspace["candidate_profiles"]
+            ],
+            "editable_control_names": editable_control_names,
+        }
+    )
+    return build_job_workspace_response(job_payload, preview_record, summary, workspace)
+
+
+def build_job_workspace_gate(
+    job_payload: dict[str, Any],
+    preview_record: dict[str, Any],
+    summary: dict[str, Any],
+    workspace: dict[str, Any],
+) -> dict[str, Any]:
+    """Classify the soft-gate state for the customer planning workspace."""
+
+    preview_summary = preview_record.get("ingestion_summary") or {}
+    metrics = job_payload.get("metrics") or {}
+    summary_status = str(summary.get("status") or "").strip().lower()
+    state_std = np.asarray(preview_summary.get("state_std") or [], dtype=np.float32).reshape(-1)
+    state_names = list(workspace["system_spec"]["state_names"])
+    highlight_states = [
+        name for name in workspace.get("highlight_states", []) if name in state_names
+    ]
+    highlight_indices = [state_names.index(name) for name in highlight_states]
+
+    if not highlight_indices or state_std.shape[0] < len(state_names):
+        return {
+            "status": "warning",
+            "message": (
+                "Preview variability is incomplete for the selected objective states. "
+                "Review the validation report before trusting the planning outputs."
+            ),
+        }
+
+    mean_highlight_std = float(np.mean(state_std[highlight_indices]))
+    if not np.isfinite(mean_highlight_std) or mean_highlight_std <= 0.0:
+        return {
+            "status": "warning",
+            "message": (
+                "Preview variability could not be estimated for the selected objective states. "
+                "Use the workspace as a diagnostic aid, not a production recommendation."
+            ),
+        }
+
+    if summary_status and summary_status not in {"ok", "completed", "success"}:
+        return {
+            "status": "warning",
+            "message": (
+                "The adaptation summary indicates this job did not complete cleanly. "
+                "Use the workspace for investigation, not operational decisions."
+            ),
+        }
+
+    forecast_rmse = metrics.get("forecast_rmse")
+    rollout_rmse = metrics.get("rollout_rmse")
+    if forecast_rmse is None or rollout_rmse is None:
+        return {
+            "status": "warning",
+            "message": (
+                "Fit metrics are incomplete for this job. The workspace is available, "
+                "but forecasts should be reviewed alongside the validation report."
+            ),
+        }
+
+    forecast_ratio = float(forecast_rmse) / mean_highlight_std
+    rollout_ratio = float(rollout_rmse) / mean_highlight_std
+    if forecast_ratio > 1.0 or rollout_ratio > 1.0:
+        return {
+            "status": "warning",
+            "message": (
+                "The adapted model error is larger than the preview variability band for "
+                "the selected objective states. Use this workspace for inspection, not direct action."
+            ),
+            "forecast_rmse_ratio": forecast_ratio,
+            "rollout_rmse_ratio": rollout_ratio,
+        }
+
+    return {
+        "status": "ready",
+        "message": (
+            "The adapted model fit is within the preview variability band for the selected "
+            "objective states. Compare plans here before escalating to operations."
+        ),
+        "forecast_rmse_ratio": forecast_ratio,
+        "rollout_rmse_ratio": rollout_ratio,
+    }
+
+
+def build_job_workspace_response(
+    job_payload: dict[str, Any],
+    preview_record: dict[str, Any],
+    summary: dict[str, Any],
+    workspace: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "job": job_payload,
+        "gate": build_job_workspace_gate(job_payload, preview_record, summary, workspace),
+        "workspace": workspace,
+    }
+
+
+def load_job_demo_runtime(job_id: str) -> UniversalDemoRuntime:
+    """Load or reuse a cached adapted runtime for one completed onboarding job."""
+
+    runtime = _JOB_RUNTIME_CACHE.get(job_id)
+    if runtime is not None:
+        return runtime
+
+    _job_payload, preview_record, summary = load_completed_job_context(job_id)
+    adaptation_dir = job_dir(job_id) / "adaptation"
+    model_path = adaptation_dir / "best_model.eqx"
+    if not model_path.exists():
+        model_path = adaptation_dir / "final_model.eqx"
+    if not model_path.exists():
+        raise FileNotFoundError(f"Job '{job_id}' does not have an adapted model checkpoint.")
+
+    config_path = adaptation_dir / "config.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"Job '{job_id}' does not have an adaptation config.")
+    config = _load_yaml(config_path)
+    sources = [
+        SystemDatasetSource(
+            name=str(item["name"]),
+            system_config=str(item["system_config"]),
+            data_dir=str(item["data_dir"]),
+            weight=float(item.get("weight", 1.0)),
+        )
+        for item in config.get("data", {}).get("systems", [])
+    ]
+    if not sources:
+        raise ValueError(f"Job '{job_id}' adaptation config does not define data.systems.")
+
+    metadata = MultiSystemTrajectoryDataset.metadata_from_sources(sources)
+    model = UniversalDigitalTwin.load(str(model_path), config, metadata)
+    system_ids = {
+        name: idx for idx, name in enumerate(metadata.system_names)
+    }
+    if len(metadata.system_names) == 1:
+        template_system_name = str(preview_record["template_system_name"])
+        target_system_name = str(summary.get("target_system_name") or template_system_name)
+        system_ids[template_system_name] = 0
+        system_ids[target_system_name] = 0
+
+    runtime = UniversalDemoRuntime(
+        model=model,
+        system_ids=system_ids,
+        model_path=str(model_path),
+        config_path=str(config_path),
+    )
+    _JOB_RUNTIME_CACHE[job_id] = runtime
+    return runtime
