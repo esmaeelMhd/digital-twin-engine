@@ -68,7 +68,9 @@ services:
     container_name: dte-frontend
     restart: unless-stopped
     ports:
-      - "3000:80"
+      # Docker Desktop / WSL port forwarding can be flaky on specific host ports.
+      # Override DTE_FRONTEND_PORT when 3000 is unavailable on the host.
+      - "${DTE_FRONTEND_PORT:-3000}:80"
     depends_on:
       api:
         condition: service_healthy
