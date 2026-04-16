@@ -157,7 +157,7 @@ def main() -> int:
         disturbance_sensitivity,
         mismatch_robustness,
     )
-    from dte.models.digital_twin import DigitalTwin
+    from dte.models.unit.digital_twin import DigitalTwin
 
     try:
         # Step 1: measurement correction with a tiny model.

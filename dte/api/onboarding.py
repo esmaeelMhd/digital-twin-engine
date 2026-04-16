@@ -37,7 +37,7 @@ from dte.demo.engine import (
     serialize_demo_definition,
     serialize_system_spec,
 )
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.simulators.base import ProcessUnitSpec
 from dte.simulators.registry import get_system_spec
 

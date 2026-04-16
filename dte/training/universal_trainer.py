@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from dte.data.datasets.universal_unit_dataset import MultiSystemTrajectoryDataset
 from dte.evaluation.universal import normalize_universal_batch
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.physics.constraints import bound_penalty, positivity_penalty
 
 

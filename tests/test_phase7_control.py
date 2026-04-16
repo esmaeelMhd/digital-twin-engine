@@ -11,7 +11,7 @@ from dte.control.mpc_interface import MPCInterfaceConfig, ProcessMPCInterface
 from dte.control.rl_env import ProcessControlEnv, ProcessControlEnvConfig
 from dte.control.state_correction import StateCorrectionConfig, StateCorrectionHook
 from dte.evaluation.control_metrics import disturbance_sensitivity, mismatch_robustness
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.registry import get_simulator, get_system_spec
 from scripts.run_mpc import _build_pid_controller
 

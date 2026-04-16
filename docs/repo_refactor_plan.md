@@ -8,6 +8,15 @@ an exact import-move sequence.
 The intent is to improve package clarity without a big-bang rename or a broken
 intermediate state.
 
+Current status:
+
+- Phase 1 has landed with canonical data import paths and compatibility modules
+  still in place.
+- Phase 2 has landed with canonical model import paths and compatibility modules
+  still in place.
+- The next major move is Phase 3: split `dte/training/` using the same
+  compatibility-first pattern.
+
 ---
 
 ## Refactor Goals

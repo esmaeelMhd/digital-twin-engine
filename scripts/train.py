@@ -13,7 +13,7 @@ import yaml
 import jax
 import json
 
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.physics.registry import get_physics_loss
 from dte.training.config_resolution import resolve_single_system_training_config
 from dte.training.trainer import Trainer

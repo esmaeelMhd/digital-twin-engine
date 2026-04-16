@@ -15,7 +15,7 @@ from dte.data.datasets.universal_unit_dataset import (
     SystemDatasetSource,
 )
 from dte.demo.engine import load_demo_config
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

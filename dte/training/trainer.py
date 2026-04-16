@@ -11,7 +11,7 @@ from jaxtyping import Array, PRNGKeyArray
 from tqdm import tqdm
 import os
 
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.training.losses import LossComputer
 from dte.data.datasets.unit_dataset import TrajectoryDataset
 

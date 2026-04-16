@@ -7,10 +7,10 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 import diffrax
 
-from dte.models.encoder import Encoder
-from dte.models.grouped_encoder import GroupedStateEncoder
-from dte.models.decoder import Decoder
-from dte.models.latent_sde import LatentSDE
+from dte.models.unit.encoder import Encoder
+from dte.models.unit.grouped_encoder import GroupedStateEncoder
+from dte.models.unit.decoder import Decoder
+from dte.models.unit.latent_sde import LatentSDE
 from dte.simulators.base import ProcessSimulator
 from dte.simulators.registry import get_simulator
 

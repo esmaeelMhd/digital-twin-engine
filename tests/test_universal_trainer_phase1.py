@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 
 from dte.data.datasets.universal_unit_dataset import UniversalSystemMetadata
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.training.universal_trainer import UniversalTrainer
 
 

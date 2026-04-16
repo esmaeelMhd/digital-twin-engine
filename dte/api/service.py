@@ -109,7 +109,7 @@ from dte.demo.engine import (
     simulate_open_loop,
     time_axis,
 )
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.base import SystemSpec
 from dte.simulators.registry import get_system_spec, get_simulator
 

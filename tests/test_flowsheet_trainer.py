@@ -8,7 +8,7 @@ from dte.flowsheet.examples import (
     build_reactor_separator_recycle_flowsheet,
 )
 from dte.flowsheet.synthetic import build_synthetic_flowsheet_dataset
-from dte.models.flowsheet_model import FlowsheetModel
+from dte.models.flowsheet.flowsheet_model import FlowsheetModel
 from dte.training.flowsheet_trainer import FlowsheetTrainer
 
 

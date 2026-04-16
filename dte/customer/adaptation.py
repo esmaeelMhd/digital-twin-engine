@@ -25,7 +25,7 @@ from dte.data.datasets.universal_unit_dataset import (
     MultiSystemTrajectoryDataset,
     SystemDatasetSource,
 )
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 
 
 def load_universal_sources(config: dict[str, Any]) -> list[SystemDatasetSource]:

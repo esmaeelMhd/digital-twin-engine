@@ -10,7 +10,7 @@ from dte.evaluation.control_sensitivity import (
 from dte.evaluation.uncertainty import calibration_gap, empirical_coverage, gaussian_nll
 from dte.evaluation.universal import normalize_universal_batch, predict_rollout_samples
 from dte.data.datasets.universal_unit_dataset import UniversalSystemMetadata
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 
 
 def _build_metadata() -> UniversalSystemMetadata:

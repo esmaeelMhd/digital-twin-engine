@@ -45,7 +45,7 @@ import numpy as np
 import optax
 from jaxtyping import Array, PRNGKeyArray
 
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.base import SystemSpec
 
 try:

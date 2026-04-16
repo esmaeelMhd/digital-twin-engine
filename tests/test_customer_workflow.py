@@ -18,7 +18,7 @@ from dte.data.datasets.universal_unit_dataset import (
     MultiSystemTrajectoryDataset,
     SystemDatasetSource,
 )
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.simulators.registry import get_system_spec
 
 

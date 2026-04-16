@@ -21,7 +21,7 @@ from dte.evaluation.flowsheet_metrics import (
     stream_consistency_loss,
     unit_output_consistency_loss,
 )
-from dte.models.flowsheet_model import FlowsheetModel
+from dte.models.flowsheet.flowsheet_model import FlowsheetModel
 
 
 def _non_finite_loss_names(losses: Dict[str, float]) -> list[str]:

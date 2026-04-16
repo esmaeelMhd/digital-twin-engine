@@ -30,6 +30,15 @@ not align cleanly with the current repository in five important ways:
 The right move is an incremental internal cleanup inside `dte/`, not a full
 top-level repo reshape.
 
+Current progress:
+
+- Phase 1 canonical data paths have landed under `dte/data/datasets/`,
+  `dte/data/generators/`, and `dte/data/ingestion/`.
+- Phase 2 canonical model paths have landed under `dte/models/unit/`,
+  `dte/models/universal/`, and `dte/models/flowsheet/`.
+- The older top-level `dte/data/*.py` and `dte/models/*.py` modules still
+  exist as compatibility paths during the transition.
+
 ---
 
 ## Recommended Target Structure

@@ -23,7 +23,7 @@ from dte.evaluation.universal import (
     compute_control_sensitivity_summary,
     compute_uncertainty_summary,
 )
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.training.universal_trainer import UniversalTrainer
 
 

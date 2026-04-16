@@ -18,7 +18,7 @@ from dte.evaluation.uncertainty import (
     gaussian_nll,
     variance_collapse_rate,
 )
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.simulators.registry import get_simulator
 
 if TYPE_CHECKING:

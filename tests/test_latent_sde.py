@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from dte.models.latent_sde import LatentSDE, LatentDrift, LatentDiffusion
+from dte.models.unit.latent_sde import LatentDiffusion, LatentDrift, LatentSDE
 
 
 def test_forward_pass_shape():

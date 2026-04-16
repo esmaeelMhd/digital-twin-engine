@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 import yaml
 
-from dte.models.digital_twin import DigitalTwin
-from dte.models.grouped_encoder import GroupedStateEncoder
+from dte.models.unit.digital_twin import DigitalTwin
+from dte.models.unit.grouped_encoder import GroupedStateEncoder
 from dte.simulators.registry import get_system_spec
 
 

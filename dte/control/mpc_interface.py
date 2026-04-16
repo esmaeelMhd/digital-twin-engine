@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from dte.evaluation.control_metrics import closed_loop_metrics, summarize_constraint_violations
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.base import ProcessSimulator, ProcessUnitSpec
 
 from .state_correction import StateCorrectionHook

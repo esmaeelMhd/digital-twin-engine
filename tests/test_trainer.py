@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import yaml
 
 from dte.data.datasets.unit_dataset import TrajectoryDataset
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.registry import get_system_spec
 from dte.training.losses import LossComputer
 from dte.training.trainer import Trainer, _format_non_finite_reason, _non_finite_loss_names
