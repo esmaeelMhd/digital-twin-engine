@@ -15,6 +15,14 @@ The platform is organized around three major modeling paths:
 Cross-cutting layers provide physics/law integration, customer adaptation,
 state correction, control-facing interfaces, and serving surfaces.
 
+## Documentation Views
+
+Use the companion diagrams with distinct roles:
+
+- [`diagram.mmd`](diagram.mmd): structural architecture map
+- [`data_flow.mmd`](data_flow.mmd): end-to-end offline training, customer
+  deployment, and target-state movement flow
+
 ---
 
 ## Current Platform At A Glance
@@ -193,6 +201,10 @@ The API now exposes more than basic prediction. It includes:
 ---
 
 ## Actual Training And Deployment Flows
+
+The concise lifecycle view is maintained in [`data_flow.mmd`](data_flow.mmd).
+The flows below are the same paths written in text so the document remains
+readable without rendering Mermaid.
 
 ### Single-System Path
 
