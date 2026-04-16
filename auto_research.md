@@ -66,13 +66,6 @@ stochastic `model.latent_sde(...)` call.
 
 ## Current Training Defaults (`configs/training_default.yaml`)
 
-Note: `scripts/train.py` applies a few bootstrap overrides on top of the YAML
-defaults during standard training runs, most notably:
-- `model.initial_diffusion_scale = 1e-4`
-- `optimizer.peak_lr = 5e-4`
-- `optimizer.gradient_clip = 0.5`
-- `loss_weights.kl = 0.0`
-
 ```yaml
 model:
   latent_dim: 32

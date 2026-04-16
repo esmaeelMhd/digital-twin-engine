@@ -43,6 +43,13 @@ multiple repo generations alive, they should be removed instead of preserved.
 During convergence, it is better to rewrite a function, script, or workflow for
 the target architecture than to carry an old path forward beside it.
 
+Surgical cleanup is expected.
+
+If a file, helper, config, test, or script is clearly superseded inside this
+repo, it should be deleted instead of left in place as clutter. If there is any
+real doubt about whether it may still be useful for historical reference, move
+it to `legacy/` rather than keeping it in the active surface.
+
 ## Goal
 
 Build a physics-aware foundation stack for industrial process simulation,
@@ -119,6 +126,9 @@ Preferred behavior:
 
 This includes CLI aliases, saved artifact aliases, fallback config names, and
 compatibility-only resolution modes.
+
+It also includes one-off experiment files, temporary smoke scaffolding, and
+intermediate helpers that only existed to bridge between repo generations.
 
 ### 4. Tests should converge too
 

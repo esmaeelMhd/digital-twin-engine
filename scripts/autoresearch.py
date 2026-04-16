@@ -139,10 +139,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--system_config",
-        "--cstr_config",  # backward-compatible alias
         type=str,
         default=None,
-        dest="system_config",
         help="System config path override (CSTR, heat exchanger, etc.)",
     )
     parser.add_argument(
@@ -210,7 +208,6 @@ def _resolve_single_target(
     system_config_value = (
         args.system_config
         or train_cfg.get("system_config")
-        or train_cfg.get("cstr_config")
         or "configs/cstr_default.yaml"
     )
     system_config = resolve_repo_path(str(system_config_value))
@@ -248,7 +245,7 @@ def resolve_train_targets(
             raise ValueError(f"train.targets[{index}] must be a mapping.")
 
         data_dir_value = raw_target.get("data_dir")
-        system_config_value = raw_target.get("system_config") or raw_target.get("cstr_config")
+        system_config_value = raw_target.get("system_config")
         if not data_dir_value or not system_config_value:
             raise ValueError(
                 f"train.targets[{index}] must define both data_dir and system_config."
