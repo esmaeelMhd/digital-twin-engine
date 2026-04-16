@@ -124,6 +124,9 @@ evaluation:
   per_system_batches: 4
   aggregate_method: geometric_mean
   metric_name: geometric_mean_per_system_total_loss
+  forecast_batches: 2
+  rollout_batches: 2
+  rollout_samples: 4
   uncertainty_samples: 8
   uncertainty_batches: 2
   sensitivity_batches: 2

@@ -37,5 +37,7 @@ def test_unit_foundation_baseline_dry_run_writes_summary(tmp_path: Path):
         "generate_regime_corpus",
         "train_unit_foundation",
         "evaluate_unit_foundation",
+        "transfer_benchmark",
         "control_gate",
     ]
+    assert summary["acceptance"]["phase"] == "phase1_unit_foundation_v1"

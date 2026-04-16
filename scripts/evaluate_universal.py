@@ -20,6 +20,8 @@ from dte.data.datasets.universal_unit_dataset import (
     SystemDatasetSource,
 )
 from dte.evaluation.universal import (
+    compute_forecast_metrics,
+    compute_rollout_metrics,
     compute_control_sensitivity_summary,
     compute_uncertainty_summary,
 )
@@ -125,6 +127,8 @@ def main():
     sensitivity_batches = int(config.get("evaluation", {}).get("sensitivity_batches", 0))
 
     uncertainty_metrics = {}
+    forecast_metrics = {}
+    rollout_metrics = {}
     if uncertainty_batches > 0 and uncertainty_samples > 0:
         for idx, name in enumerate(val_dataset.system_names):
             key_uncertainty, subkey = jax.random.split(key_uncertainty)
@@ -135,6 +139,32 @@ def main():
                 key=subkey,
                 n_batches=uncertainty_batches,
                 n_samples=uncertainty_samples,
+            )
+
+    rollout_batches = int(config.get("evaluation", {}).get("rollout_batches", 0))
+    rollout_samples = int(config.get("evaluation", {}).get("rollout_samples", 0))
+    forecast_batches = int(config.get("evaluation", {}).get("forecast_batches", 0))
+    if forecast_batches > 0:
+        for idx, name in enumerate(val_dataset.system_names):
+            key_mixed, subkey = jax.random.split(key_mixed)
+            forecast_metrics[name] = compute_forecast_metrics(
+                model,
+                trainer,
+                system_idx=idx,
+                key=subkey,
+                n_batches=forecast_batches,
+            )
+
+    if rollout_batches > 0 and rollout_samples > 0:
+        for idx, name in enumerate(val_dataset.system_names):
+            key_systems, subkey = jax.random.split(key_systems)
+            rollout_metrics[name] = compute_rollout_metrics(
+                model,
+                trainer,
+                system_idx=idx,
+                key=subkey,
+                n_batches=rollout_batches,
+                n_samples=rollout_samples,
             )
 
     sensitivity_metrics = {}
@@ -161,6 +191,8 @@ def main():
         "aggregate_metric_name": "geometric_mean_per_system_total_loss",
         "aggregate_metric_value": _json_safe_float(aggregate_total),
         "val_manifest": val_dataset.manifest(),
+        "forecast_metrics": forecast_metrics,
+        "rollout_metrics": rollout_metrics,
         "uncertainty_metrics": uncertainty_metrics,
         "control_sensitivity_metrics": sensitivity_metrics,
     }
@@ -176,6 +208,16 @@ def main():
     print(f"Mixed validation total loss: {mixed_val['total']:.4f}")
     for name, metrics in per_system.items():
         print(f"  {name}: total={metrics['total']:.4f}, traj={metrics['trajectory']:.4f}")
+        if name in forecast_metrics:
+            print(
+                f"    forecast: rmse={forecast_metrics[name]['rmse']:.4f}, "
+                f"mae={forecast_metrics[name]['mae']:.4f}"
+            )
+        if name in rollout_metrics:
+            print(
+                f"    rollout: rmse={rollout_metrics[name]['rmse']:.4f}, "
+                f"max_abs={rollout_metrics[name]['max_abs_error']:.4f}"
+            )
         if name in uncertainty_metrics:
             print(
                 f"    uncertainty: cov@2sigma={uncertainty_metrics[name]['coverage_2sigma']:.3f}, "
