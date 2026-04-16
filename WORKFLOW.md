@@ -13,7 +13,7 @@ This file replaces the earlier workflow that assumed only the older single-syste
 - demo website and demo API
 - generic MPC / RL-readiness interfaces
 
-Phase 8 from `plan.md` is still not implemented. Everything else through Phase 7 is now present in some usable form.
+Phase 8 from `legacy/docs/plan.md` is still not implemented. Everything else through Phase 7 is now present in some usable form.
 
 ---
 
@@ -40,12 +40,12 @@ Use this file as an entry-point selector.
 The repo now has seven practical layers:
 
 1. **Unit model path**
-   - `dte/models/digital_twin.py`
+   - `dte/models/unit/digital_twin.py`
    - `scripts/train.py`
    - `scripts/evaluate.py`
 
 2. **Universal foundation path**
-   - `dte/models/universal_digital_twin.py`
+   - `dte/models/universal/digital_twin.py`
    - `scripts/train_universal.py`
    - `scripts/evaluate_universal.py`
 
@@ -55,8 +55,8 @@ The repo now has seven practical layers:
 
 4. **Flowsheet graph path**
    - `dte/flowsheet/*`
-   - `dte/models/flowsheet_model.py`
-   - `dte/training/flowsheet_trainer.py`
+   - `dte/models/flowsheet/flowsheet_model.py`
+   - `dte/training/flowsheet/trainer.py`
 
 5. **Law-layer path**
    - `dte/laws/*`
@@ -347,7 +347,7 @@ The intended path is:
 
 1. build an example flowsheet from `dte/flowsheet/examples.py`
 2. build a synthetic dataset from `dte/flowsheet/synthetic.py`
-3. train with `dte/training/flowsheet_trainer.py`
+3. train with `dte/training/flowsheet/trainer.py`
 
 See [docs/phases/phase3_flowsheet_graph_modeling.md](docs/phases/phase3_flowsheet_graph_modeling.md) for the working example.
 
@@ -659,7 +659,7 @@ If you are validating the full roadmap rather than one feature, run:
 ## 17. Additional References
 
 - `README.md`
-- `QUICK_START.md`
+- `legacy/docs/QUICK_START.md`
 - `AGENTS.md`
 - `legacy/docs/repo_audit.md`
 - `legacy/docs/implementation_mapping.md`

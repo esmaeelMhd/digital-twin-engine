@@ -22,9 +22,9 @@ Use the companion diagrams with distinct roles:
 - [`diagram.mmd`](diagram.mmd): structural architecture map
 - [`data_flow.mmd`](data_flow.mmd): end-to-end offline training, customer
   deployment, and target-state movement flow
-- [`repo_structure_target.md`](repo_structure_target.md): repo-aligned package
+- [`legacy/docs/repo_structure_target.md`](../legacy/docs/repo_structure_target.md): repo-aligned package
   structure target and migration map
-- [`repo_refactor_plan.md`](repo_refactor_plan.md): phased execution plan for
+- [`legacy/docs/repo_refactor_plan.md`](../legacy/docs/repo_refactor_plan.md): phased execution plan for
   moving from the current layout to the target package structure
 
 ---
