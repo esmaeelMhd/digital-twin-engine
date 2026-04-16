@@ -36,8 +36,15 @@ Current progress:
   `dte/data/generators/`, and `dte/data/ingestion/`.
 - Phase 2 canonical model paths have landed under `dte/models/unit/`,
   `dte/models/universal/`, and `dte/models/flowsheet/`.
+- Phase 3 canonical training paths have landed under `dte/training/unit/`,
+  `dte/training/universal/`, `dte/training/flowsheet/`, and
+  `dte/training/shared/`.
+- Phase 4 import normalization has landed across runtime code, docs examples,
+  and install verification.
 - The older top-level `dte/data/*.py` and `dte/models/*.py` modules still
   exist as compatibility paths during the transition.
+- The older top-level `dte/training/*.py` modules also still exist as
+  compatibility paths during the transition.
 
 ---
 

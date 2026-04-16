@@ -22,7 +22,7 @@ from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.simulators.registry import get_simulator
 
 if TYPE_CHECKING:
-    from dte.training.universal_trainer import UniversalTrainer
+    from dte.training.universal.trainer import UniversalTrainer
 
 
 def _masked_mean(values: Array, mask: Array) -> float:

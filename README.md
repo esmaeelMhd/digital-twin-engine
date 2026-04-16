@@ -357,7 +357,7 @@ for obs in plant_stream:
 ### Transfer Learning
 
 ```python
-from dte.training.transfer import FewShotAdapter, zero_shot_eval
+from dte.training.shared.transfer import FewShotAdapter, zero_shot_eval
 
 # Zero-shot baseline
 metrics = zero_shot_eval(pretrained_model, new_unit_dataset)

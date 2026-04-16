@@ -131,7 +131,7 @@ class GenericDataGenerator:
     2. Finding the initial steady state for each trajectory's nominal inputs.
     3. Simulating the ODE forward from that steady state.
     4. Saving everything to an HDF5 file in the same format expected by
-       :class:`~dte.data.dataset.TrajectoryDataset`.
+       :class:`~dte.data.datasets.unit_dataset.TrajectoryDataset`.
     """
 
     def __init__(

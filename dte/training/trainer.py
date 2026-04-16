@@ -12,7 +12,7 @@ from tqdm import tqdm
 import os
 
 from dte.models.unit.digital_twin import DigitalTwin
-from dte.training.losses import LossComputer
+from dte.training.shared.losses import LossComputer
 from dte.data.datasets.unit_dataset import TrajectoryDataset
 
 

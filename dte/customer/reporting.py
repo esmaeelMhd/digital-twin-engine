@@ -17,7 +17,7 @@ from dte.evaluation.universal import (
     predict_rollout_samples,
 )
 from dte.models.universal.digital_twin import UniversalDigitalTwin
-from dte.training.universal_trainer import UniversalTrainer
+from dte.training.universal.trainer import UniversalTrainer
 
 
 def generate_customer_validation_report(

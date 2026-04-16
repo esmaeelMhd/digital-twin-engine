@@ -24,7 +24,7 @@ from dte.evaluation.universal import (
     compute_uncertainty_summary,
 )
 from dte.models.universal.digital_twin import UniversalDigitalTwin
-from dte.training.universal_trainer import UniversalTrainer
+from dte.training.universal.trainer import UniversalTrainer
 
 
 def _json_safe_float(value):

@@ -20,7 +20,7 @@ from dte.data.datasets.universal_unit_dataset import (
     SystemDatasetSource,
 )
 from dte.models.universal.digital_twin import UniversalDigitalTwin
-from dte.training.universal_trainer import UniversalTrainer
+from dte.training.universal.trainer import UniversalTrainer
 
 
 def _json_safe_float(value):

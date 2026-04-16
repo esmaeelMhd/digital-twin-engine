@@ -15,9 +15,9 @@ import json
 
 from dte.models.unit.digital_twin import DigitalTwin
 from dte.physics.registry import get_physics_loss
-from dte.training.config_resolution import resolve_single_system_training_config
-from dte.training.trainer import Trainer
-from dte.training.losses import LossComputer
+from dte.training.shared.config_resolution import resolve_single_system_training_config
+from dte.training.unit.trainer import Trainer
+from dte.training.shared.losses import LossComputer
 from dte.data.datasets.unit_dataset import TrajectoryDataset
 from dte.simulators.registry import get_system_spec
 
@@ -248,7 +248,7 @@ def main():
     print("\nInitializing model...")
     is_finetune = args.finetune is not None
     if is_finetune:
-        from dte.training.transfer import apply_finetune_mask
+        from dte.training.shared.transfer import apply_finetune_mask
         print(f"Fine-tune mode: loading checkpoint from {args.finetune}")
         model = DigitalTwin.load(
             args.finetune,

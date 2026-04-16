@@ -1,7 +1,7 @@
 """Real-world data ingestion pipeline.
 
 Handles loading time-series data from CSV/Parquet files and converting it into
-the format expected by :class:`~dte.data.dataset.TrajectoryDataset`.
+the format expected by :class:`~dte.data.datasets.unit_dataset.TrajectoryDataset`.
 
 Typical use-case: a CSV exported from a historian / DCS with irregular
 timestamps, potential missing values, and sensor noise.

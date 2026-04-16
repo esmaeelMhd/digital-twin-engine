@@ -292,7 +292,7 @@ def main() -> int:
     )
     from dte.flowsheet.synthetic import build_synthetic_flowsheet_dataset
     from dte.models.flowsheet.flowsheet_model import FlowsheetModel
-    from dte.training.flowsheet_trainer import FlowsheetTrainer
+    from dte.training.flowsheet.trainer import FlowsheetTrainer
 
     flowsheet_builders = {
         "exchanger_reactor_tank": build_exchanger_reactor_tank_flowsheet,

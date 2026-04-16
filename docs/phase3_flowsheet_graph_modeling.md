@@ -69,8 +69,8 @@ from dte.flowsheet import (
     build_reactor_separator_recycle_flowsheet,
     build_synthetic_flowsheet_dataset,
 )
-from dte.models.flowsheet_model import FlowsheetModel
-from dte.training.flowsheet_trainer import FlowsheetTrainer
+from dte.models.flowsheet.flowsheet_model import FlowsheetModel
+from dte.training.flowsheet.trainer import FlowsheetTrainer
 
 flowsheet = build_reactor_separator_recycle_flowsheet()
 dataset = build_synthetic_flowsheet_dataset(

@@ -14,7 +14,7 @@ from dte.data.datasets.universal_unit_dataset import (
     UniversalSystemMetadata,
 )
 from dte.models.universal.digital_twin import UniversalDigitalTwin
-from dte.training.universal_trainer import UniversalTrainer
+from dte.training.universal.trainer import UniversalTrainer
 
 
 def _trainable_parameter_count(model, filter_spec) -> int:

@@ -17,7 +17,7 @@ import yaml
 from plotly.subplots import make_subplots
 
 from dte.control.mpc import SamplingMPC
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.registry import get_system_spec, get_simulator
 
 from app._theme import inject_theme

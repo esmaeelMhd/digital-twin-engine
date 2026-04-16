@@ -156,7 +156,7 @@ def main() -> int:
         build_cstr_law_example_config,
     )
     from dte.physics.registry import get_physics_diagnostic_fn, get_physics_loss
-    from dte.training.losses import LossComputer
+    from dte.training.shared.losses import LossComputer
 
     def load_example_configs() -> dict[str, dict[str, Any]]:
         return {

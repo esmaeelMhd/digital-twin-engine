@@ -14,8 +14,12 @@ Current status:
   still in place.
 - Phase 2 has landed with canonical model import paths and compatibility modules
   still in place.
-- The next major move is Phase 3: split `dte/training/` using the same
-  compatibility-first pattern.
+- Phase 3 has landed with canonical training import paths and compatibility
+  modules still in place.
+- Phase 4 has landed: runtime code, public examples, and install checks now use
+  canonical import paths.
+- The next major move is Phase 5/6: let the compatibility layout sit for a
+  stable cycle, then decide whether to keep or remove the shim modules.
 
 ---
 

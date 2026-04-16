@@ -1,6 +1,6 @@
 """Tests for explicit single-system training config resolution."""
 
-from dte.training.config_resolution import resolve_single_system_training_config
+from dte.training.shared.config_resolution import resolve_single_system_training_config
 
 
 def test_strict_config_mode_keeps_loaded_values():

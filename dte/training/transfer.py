@@ -13,7 +13,7 @@ Typical workflow
 ----------------
 ::
 
-    from dte.training.transfer import FewShotAdapter, zero_shot_eval
+    from dte.training.shared.transfer import FewShotAdapter, zero_shot_eval
 
     # 1. Zero-shot baseline
     zs_metrics = zero_shot_eval(pretrained_model, new_unit_dataset, n_batches=20)
@@ -151,7 +151,7 @@ def zero_shot_eval(
     model:
         Model to evaluate (pre-trained or fine-tuned).
     dataset:
-        :class:`~dte.data.dataset.TrajectoryDataset` for the target unit.
+        :class:`~dte.data.datasets.unit_dataset.TrajectoryDataset` for the target unit.
     n_batches:
         Number of random batches to evaluate.
     batch_size:
@@ -281,7 +281,7 @@ class FewShotAdapter:
         Parameters
         ----------
         dataset:
-            :class:`~dte.data.dataset.TrajectoryDataset` for the new unit.
+            :class:`~dte.data.datasets.unit_dataset.TrajectoryDataset` for the new unit.
         n_steps:
             Number of gradient steps.
         batch_size:

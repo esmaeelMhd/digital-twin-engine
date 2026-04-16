@@ -9,7 +9,7 @@ from dte.flowsheet.examples import (
 )
 from dte.flowsheet.synthetic import build_synthetic_flowsheet_dataset
 from dte.models.flowsheet.flowsheet_model import FlowsheetModel
-from dte.training.flowsheet_trainer import FlowsheetTrainer
+from dte.training.flowsheet.trainer import FlowsheetTrainer
 
 
 def _build_config() -> dict:
