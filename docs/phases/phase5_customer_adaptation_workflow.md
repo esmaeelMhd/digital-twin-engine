@@ -114,23 +114,23 @@ The test slice includes:
 
 Reusable end-to-end smoke coverage for this phase now lives in:
 
-- `scripts/smoke_phase5.py`
+- `scripts/phases/smoke_phase5.py`
 
 Default usage:
 
 ```bash
 source .venv/bin/activate
-python scripts/smoke_phase5.py
+python scripts/phases/smoke_phase5.py
 ```
 
 Useful variants:
 
 ```bash
-python scripts/smoke_phase5.py --dry_run
-python scripts/smoke_phase5.py --workspace_dir outputs/phase5_smoke/manual_run
-python scripts/smoke_phase5.py --target_base_system heat_exchanger --target_system_name customer_hx_variant
-python scripts/smoke_phase5.py --skip_data_generation
-python scripts/smoke_phase5.py --jax_platform gpu
+python scripts/phases/smoke_phase5.py --dry_run
+python scripts/phases/smoke_phase5.py --workspace_dir outputs/phase5_smoke/manual_run
+python scripts/phases/smoke_phase5.py --target_base_system heat_exchanger --target_system_name customer_hx_variant
+python scripts/phases/smoke_phase5.py --skip_data_generation
+python scripts/phases/smoke_phase5.py --jax_platform gpu
 ```
 
 The smoke runner forces `JAX_PLATFORMS=cpu` by default so the small universal pretrain and customer adaptation path stay quiet and reproducible on ordinary dev machines.

@@ -16,7 +16,7 @@ from typing import Any, Callable
 import yaml
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FLOWSHEETS = ("exchanger_reactor_tank", "reactor_separator_recycle")
 
 

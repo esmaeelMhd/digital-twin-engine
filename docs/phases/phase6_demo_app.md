@@ -145,7 +145,7 @@ The route tests explicitly cover both the no-checkpoint fallback and the univers
 
 Phase 6 now includes a reusable smoke runner:
 
-- `scripts/smoke_phase6.py`
+- `scripts/phases/smoke_phase6.py`
 
 It starts the real FastAPI service and the real Streamlit app, waits for health checks, exercises the demo API surface, fetches the Streamlit root HTML, and writes logs plus a workspace `summary.json`.
 
@@ -153,16 +153,16 @@ Default usage:
 
 ```bash
 source .venv/bin/activate
-python scripts/smoke_phase6.py
+python scripts/phases/smoke_phase6.py
 ```
 
 Useful variants:
 
 ```bash
-python scripts/smoke_phase6.py --dry_run
-python scripts/smoke_phase6.py --workspace_dir outputs/phase6_smoke/manual_run
-python scripts/smoke_phase6.py --skip_streamlit
-python scripts/smoke_phase6.py --skip_api
+python scripts/phases/smoke_phase6.py --dry_run
+python scripts/phases/smoke_phase6.py --workspace_dir outputs/phase6_smoke/manual_run
+python scripts/phases/smoke_phase6.py --skip_streamlit
+python scripts/phases/smoke_phase6.py --skip_api
 ```
 
 The runner defaults subprocesses to `JAX_PLATFORMS=cpu` so smoke runs stay reproducible and do not depend on GPU availability.

@@ -10,9 +10,9 @@
   - `aggregate_relative_best_val_loss = 0.8759446184791675`
 
 Relevant artifacts:
-- Baseline metadata: [outputs/autoresearch_foundation_moonshot/baseline/metadata.json](outputs/autoresearch_foundation_moonshot/baseline/metadata.json)
-- Winning run summary: [outputs/autoresearch_foundation_moonshot/runs/20260406-111717-neural-cde-drift-manual/summary.json](outputs/autoresearch_foundation_moonshot/runs/20260406-111717-neural-cde-drift-manual/summary.json)
-- Campaign ledger: [outputs/autoresearch_foundation_moonshot/results.tsv](outputs/autoresearch_foundation_moonshot/results.tsv)
+- Baseline metadata: [legacy/outputs/autoresearch_foundation_moonshot/baseline/metadata.json](../outputs/autoresearch_foundation_moonshot/baseline/metadata.json)
+- Winning run summary: [legacy/outputs/autoresearch_foundation_moonshot/runs/20260406-111717-neural-cde-drift-manual/summary.json](../outputs/autoresearch_foundation_moonshot/runs/20260406-111717-neural-cde-drift-manual/summary.json)
+- Campaign ledger: [legacy/outputs/autoresearch_foundation_moonshot/results.tsv](../outputs/autoresearch_foundation_moonshot/results.tsv)
 
 ## Next Moonshot Round
 
@@ -26,10 +26,10 @@ Round 2 should start from the promoted Neural CDE baseline, not from the pre-moo
    git switch -c autoresearch/foundation-cgg-round2
    ```
 
-2. Create a fresh workspace config from [configs/autoresearch_foundation_moonshot.yaml](configs/autoresearch_foundation_moonshot.yaml).
+2. Create a fresh workspace config from [legacy/configs/autoresearch_foundation_moonshot.yaml](../configs/autoresearch_foundation_moonshot.yaml).
    ```bash
-   cp configs/autoresearch_foundation_moonshot.yaml \
-      configs/autoresearch_foundation_moonshot_round2.yaml
+   cp legacy/configs/autoresearch_foundation_moonshot.yaml \
+      legacy/configs/autoresearch_foundation_moonshot_round2.yaml
    ```
 
 3. In the new config, change only:
@@ -40,7 +40,7 @@ Round 2 should start from the promoted Neural CDE baseline, not from the pre-moo
    ```bash
    source .venv/bin/activate
    python scripts/autoresearch.py \
-     --config configs/autoresearch_foundation_moonshot_round2.yaml \
+     --config legacy/configs/autoresearch_foundation_moonshot_round2.yaml \
      --description baseline
    ```
 
@@ -128,7 +128,7 @@ Build a shared-checkpoint universal training path:
 Before the broader universal ideas above, run a local search around the new grouped
 shared backbone:
 
-- [configs/training_universal_round1.yaml](configs/training_universal_round1.yaml)
+- [legacy/configs/training_universal_round1.yaml](../configs/training_universal_round1.yaml)
 - [configs/archive/autoresearch/autoresearch_universal_grouped_round1.yaml](configs/archive/autoresearch/autoresearch_universal_grouped_round1.yaml)
 - [docs/archive/autoresearch/auto_research_universal_grouped_round1_ideas.yaml](docs/archive/autoresearch/auto_research_universal_grouped_round1_ideas.yaml)
 - [docs/archive/autoresearch/UNIVERSAL_GROUPED_MOONSHOT_ROUND1.md](docs/archive/autoresearch/UNIVERSAL_GROUPED_MOONSHOT_ROUND1.md)

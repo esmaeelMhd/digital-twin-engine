@@ -16,7 +16,7 @@ from typing import Any
 import requests
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SYSTEM_CONFIGS = (
     PROJECT_ROOT / "configs" / "cstr_default.yaml",
     PROJECT_ROOT / "configs" / "heat_exchanger_default.yaml",

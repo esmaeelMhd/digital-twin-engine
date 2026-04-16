@@ -97,7 +97,7 @@ Understand the current codebase thoroughly and write a short audit before implem
 ## Required outputs
 Create a markdown audit note in the repo, for example:
 
-- `docs/repo_audit.md`
+- `legacy/docs/repo_audit.md`
 
 It must contain:
 
@@ -780,7 +780,7 @@ Only later consider:
 - `customer/onboarding_schema.py`
 - `control/mpc_interface.py`
 - `control/rl_env.py`
-- `docs/repo_audit.md`
+- `legacy/docs/repo_audit.md`
 
 ---
 
@@ -820,7 +820,7 @@ The project reaches the first major milestone when all of the following are true
 
 The coding agent should start with these exact steps:
 
-1. Read the full repository and create `docs/repo_audit.md`
+1. Read the full repository and create `legacy/docs/repo_audit.md`
 2. Propose the minimum set of abstractions needed for `StateChannel`, `ProcessUnitSpec`, and typed state groups
 3. Refactor current system specs to the richer spec format while keeping backward compatibility
 4. Add grouped/typed encoder support without removing the old path

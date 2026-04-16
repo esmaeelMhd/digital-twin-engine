@@ -5,7 +5,7 @@ This round targets the new shared grouped-state universal backbone only.
 ## Goal
 
 Improve the shared-checkpoint universal baseline trained with:
-- [configs/training_universal_round1.yaml](configs/training_universal_round1.yaml)
+- [legacy/configs/training_universal_round1.yaml](../../../legacy/configs/training_universal_round1.yaml)
 - [scripts/train_universal.py](scripts/train_universal.py)
 - [scripts/evaluate_universal.py](scripts/evaluate_universal.py)
 
@@ -21,19 +21,19 @@ Establish a fresh baseline from current code:
 source .venv/bin/activate
 
 python scripts/train_universal.py \
-  --config configs/training_universal_round1.yaml \
-  --output_dir outputs/autoresearch_universal_grouped_round1/baseline \
+  --config legacy/configs/training_universal_round1.yaml \
+  --output_dir legacy/outputs/autoresearch_universal_grouped_round1/baseline \
   --seed 42
 
 python scripts/evaluate_universal.py \
-  --model_path outputs/autoresearch_universal_grouped_round1/baseline/best_model.eqx \
-  --config outputs/autoresearch_universal_grouped_round1/baseline/config.yaml \
-  --output_dir outputs/autoresearch_universal_grouped_round1/baseline/eval
+  --model_path legacy/outputs/autoresearch_universal_grouped_round1/baseline/best_model.eqx \
+  --config legacy/outputs/autoresearch_universal_grouped_round1/baseline/config.yaml \
+  --output_dir legacy/outputs/autoresearch_universal_grouped_round1/baseline/eval
 ```
 
 Baseline record:
-- save `outputs/autoresearch_universal_grouped_round1/baseline/summary.json`
-- save `outputs/autoresearch_universal_grouped_round1/baseline/eval/summary.json`
+- save `legacy/outputs/autoresearch_universal_grouped_round1/baseline/summary.json`
+- save `legacy/outputs/autoresearch_universal_grouped_round1/baseline/eval/summary.json`
 
 ## Idea Backlog
 
@@ -52,7 +52,7 @@ Suggested execution order:
 
 For each idea:
 1. make the smallest coherent patch
-2. train with `configs/training_universal_round1.yaml`
+2. train with `legacy/configs/training_universal_round1.yaml`
 3. evaluate the resulting checkpoint
 4. compare `aggregate_metric_value` against the current promoted baseline
 5. keep only if it is strictly lower
@@ -63,21 +63,21 @@ For each idea:
 For idea `<idea_id>`:
 
 ```bash
-outputs/autoresearch_universal_grouped_round1/runs/<idea_id>/
+legacy/outputs/autoresearch_universal_grouped_round1/runs/<idea_id>/
 ```
 
 Run command:
 
 ```bash
 python scripts/train_universal.py \
-  --config configs/training_universal_round1.yaml \
-  --output_dir outputs/autoresearch_universal_grouped_round1/runs/<idea_id> \
+  --config legacy/configs/training_universal_round1.yaml \
+  --output_dir legacy/outputs/autoresearch_universal_grouped_round1/runs/<idea_id> \
   --seed 42
 
 python scripts/evaluate_universal.py \
-  --model_path outputs/autoresearch_universal_grouped_round1/runs/<idea_id>/best_model.eqx \
-  --config outputs/autoresearch_universal_grouped_round1/runs/<idea_id>/config.yaml \
-  --output_dir outputs/autoresearch_universal_grouped_round1/runs/<idea_id>/eval
+  --model_path legacy/outputs/autoresearch_universal_grouped_round1/runs/<idea_id>/best_model.eqx \
+  --config legacy/outputs/autoresearch_universal_grouped_round1/runs/<idea_id>/config.yaml \
+  --output_dir legacy/outputs/autoresearch_universal_grouped_round1/runs/<idea_id>/eval
 ```
 
 ## Scope Guardrails
@@ -86,7 +86,7 @@ Allowed surfaces:
 - [dte/models/universal/digital_twin.py](dte/models/universal/digital_twin.py)
 - [dte/training/universal/trainer.py](dte/training/universal/trainer.py)
 - [dte/data/datasets/universal_unit_dataset.py](dte/data/datasets/universal_unit_dataset.py)
-- [configs/training_universal_round1.yaml](configs/training_universal_round1.yaml)
+- [legacy/configs/training_universal_round1.yaml](../../../legacy/configs/training_universal_round1.yaml)
 
 Do not touch in round 1:
 - single-system model path

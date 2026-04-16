@@ -15,7 +15,7 @@ import numpy as np
 import yaml
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class SmokeError(RuntimeError):

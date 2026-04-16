@@ -33,7 +33,7 @@ data:
 
 agent:
   execution_mode: multi_file
-  context_file: auto_research_moonshot.md
+  context_file: docs/autoresearch_ideas/auto_research_moonshot.md
   modifiable_paths:
     - dte
     - configs

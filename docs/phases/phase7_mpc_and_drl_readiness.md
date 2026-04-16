@@ -126,7 +126,7 @@ What is still intentionally thin:
 
 Phase 7 now includes a reusable smoke runner:
 
-- `scripts/smoke_phase7.py`
+- `scripts/phases/smoke_phase7.py`
 
 It executes the new control-facing surfaces directly in one local process and writes a workspace `summary.json` plus per-step artifacts for:
 
@@ -140,15 +140,15 @@ Default usage:
 
 ```bash
 source .venv/bin/activate
-python scripts/smoke_phase7.py
+python scripts/phases/smoke_phase7.py
 ```
 
 Useful variants:
 
 ```bash
-python scripts/smoke_phase7.py --dry_run
-python scripts/smoke_phase7.py --workspace_dir outputs/phase7_smoke/manual_run
-python scripts/smoke_phase7.py --mpc_horizon 12 --mpc_candidates 16
+python scripts/phases/smoke_phase7.py --dry_run
+python scripts/phases/smoke_phase7.py --workspace_dir outputs/phase7_smoke/manual_run
+python scripts/phases/smoke_phase7.py --mpc_horizon 12 --mpc_candidates 16
 ```
 
 The runner defaults to `JAX_PLATFORMS=cpu` so the smoke path stays reproducible and does not depend on GPU availability.

@@ -119,11 +119,11 @@ evaluation:
 
 ## Reusable Smoke Script
 
-Use [scripts/smoke_phase1.py](/home/ismayil/digital-twin-engine/scripts/smoke_phase1.py) to rerun the small end-to-end Phase 1 matrix:
+Use [scripts/phases/smoke_phase1.py](/home/ismayil/digital-twin-engine/scripts/phases/smoke_phase1.py) to rerun the small end-to-end Phase 1 matrix:
 
 ```bash
 source .venv/bin/activate
-python scripts/smoke_phase1.py
+python scripts/phases/smoke_phase1.py
 ```
 
 Useful overrides:

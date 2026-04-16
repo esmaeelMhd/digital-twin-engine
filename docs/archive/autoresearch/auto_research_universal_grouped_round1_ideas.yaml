@@ -9,8 +9,8 @@ ideas:
       encoder and decoder so shared parameters can specialize by system semantics
       without hardcoded branches.
     files:
-      - dte/models/universal_digital_twin.py
-      - configs/training_universal_round1.yaml
+      - dte/models/universal/digital_twin.py
+      - legacy/configs/training_universal_round1.yaml
 
   - id: attention_pool_over_state_groups
     priority: 20
@@ -21,7 +21,7 @@ ideas:
       important at every step. Learned attention pooling is a small architectural
       change that can improve cross-system transfer without rewriting the backbone.
     files:
-      - dte/models/universal_digital_twin.py
+      - dte/models/universal/digital_twin.py
 
   - id: per_group_kind_decoder_heads
     priority: 30
@@ -32,8 +32,8 @@ ideas:
       kind-specific residual head preserves sharing while letting reconstruction
       biases differ where they should.
     files:
-      - dte/models/universal_digital_twin.py
-      - configs/training_universal_round1.yaml
+      - dte/models/universal/digital_twin.py
+      - legacy/configs/training_universal_round1.yaml
 
   - id: control_conditioned_group_gates
     priority: 40
@@ -44,7 +44,7 @@ ideas:
       Gating group tokens with controls is a targeted way to improve operator-like
       conditioning without redesigning the rollout core.
     files:
-      - dte/models/universal_digital_twin.py
+      - dte/models/universal/digital_twin.py
 
   - id: grouped_masked_pretraining
     priority: 50
@@ -55,8 +55,8 @@ ideas:
       missing thermal, concentration, and inventory channels before the harder
       long-horizon mixed-system optimization begins.
     files:
-      - dte/training/universal_trainer.py
-      - configs/training_universal_round1.yaml
+      - dte/training/universal/trainer.py
+      - legacy/configs/training_universal_round1.yaml
 
   - id: contrastive_cross_system_latent_alignment
     priority: 80
@@ -66,8 +66,8 @@ ideas:
       path, but it is riskier than the local grouped-model improvements above. Run
       it only after the simpler grouped universal changes have been tested.
     files:
-      - dte/training/universal_trainer.py
-      - configs/training_universal_round1.yaml
+      - dte/training/universal/trainer.py
+      - legacy/configs/training_universal_round1.yaml
 
 skipped_for_round1:
   - universal_joint_training

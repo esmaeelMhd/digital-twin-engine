@@ -14,7 +14,7 @@ Status legend:
 
 | Phase | Status | Notes |
 | --- | --- | --- |
-| Phase 0. Repository audit | Implemented | Covered by `docs/repo_audit.md` and this file |
+| Phase 0. Repository audit | Implemented | Covered by `legacy/docs/repo_audit.md` and this file |
 | Phase 1. Stabilize/refactor universal unit model | Implemented | Thin-slice implementation landed: typed channel schema, richer unit spec, optional grouped encoder, reusable constraints, multi-horizon universal loss, and new evaluation diagnostics |
 | Phase 2. Adapters and family conditioning | Implemented | Family/subtype/law-tag conditioning, residual adapters, and target-unit calibration now exist in the universal path |
 | Phase 3. Flowsheet graph modeling | Implemented | Thin-slice graph layer landed: flowsheet schema, graph dataset, synthetic demo data, shared flowsheet model, recycle-aware rollout, and plant-level proxy losses |
@@ -41,7 +41,7 @@ Before the phase-by-phase mapping, three plan assumptions are already stale:
 
 ### Planned outputs
 
-- `docs/repo_audit.md`
+- `legacy/docs/repo_audit.md`
 
 ### Current repo state
 

@@ -17,7 +17,7 @@ import yaml
 from dte.simulators.registry import get_system_spec
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SYSTEMS = ("cstr", "heat_exchanger", "two_tank")
 
 

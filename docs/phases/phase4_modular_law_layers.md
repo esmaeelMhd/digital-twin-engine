@@ -136,20 +136,20 @@ These cover:
 
 Reusable smoke coverage for this phase now lives in:
 
-- `scripts/smoke_phase4.py`
+- `scripts/phases/smoke_phase4.py`
 
 Default usage:
 
 ```bash
 source .venv/bin/activate
-python scripts/smoke_phase4.py
+python scripts/phases/smoke_phase4.py
 ```
 
 Useful variants:
 
 ```bash
-python scripts/smoke_phase4.py --dry_run
-python scripts/smoke_phase4.py --workspace_dir outputs/phase4_smoke/manual_run
-python scripts/smoke_phase4.py --examples chemistry
-python scripts/smoke_phase4.py --n_steps 8 --batch_size 3
+python scripts/phases/smoke_phase4.py --dry_run
+python scripts/phases/smoke_phase4.py --workspace_dir outputs/phase4_smoke/manual_run
+python scripts/phases/smoke_phase4.py --examples chemistry
+python scripts/phases/smoke_phase4.py --n_steps 8 --batch_size 3
 ```
