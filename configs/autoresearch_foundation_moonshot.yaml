@@ -50,7 +50,7 @@ agent:
   eval_plot_count: 0
   eval_skip_ensemble: true
   cooldown_between_experiments: 10
-  context_file: auto_research_moonshot.md
+  context_file: docs/autoresearch_ideas/auto_research_moonshot.md
   modifiable_paths:
     - dte
     - configs
@@ -60,5 +60,5 @@ agent:
     - dte/autoresearch
     - scripts/agent.py
     - auto_research.md
-    - auto_research_moonshot.md
+    - docs/autoresearch_ideas/auto_research_moonshot.md
     - program.md

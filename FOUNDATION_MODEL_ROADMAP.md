@@ -47,8 +47,8 @@ Round 2 should start from the promoted Neural CDE baseline, not from the pre-moo
 ### Best Round-2 Search Directions
 
 Keep round 2 focused on local variants of the winning Neural CDE change in:
-- [dte/models/latent_sde.py](dte/models/latent_sde.py)
-- [dte/models/digital_twin.py](dte/models/digital_twin.py)
+- [dte/models/unit/latent_sde.py](dte/models/unit/latent_sde.py)
+- [dte/models/unit/digital_twin.py](dte/models/unit/digital_twin.py)
 - [configs/training_default.yaml](configs/training_default.yaml)
 - [configs/heat_exchanger_training.yaml](configs/heat_exchanger_training.yaml)
 - [configs/two_tank_training.yaml](configs/two_tank_training.yaml)
@@ -67,11 +67,11 @@ Do not spend round 2 on the ideas that already lost unless they are combined wit
 ## Ideas That Need A New Universal Harness
 
 This repo now has the first real shared-checkpoint universal baseline:
-- [dte/data/multi_system_dataset.py](dte/data/multi_system_dataset.py)
+- [dte/data/datasets/universal_unit_dataset.py](dte/data/datasets/universal_unit_dataset.py)
 - [configs/training_universal.yaml](configs/training_universal.yaml)
 - [scripts/train_universal.py](scripts/train_universal.py)
 - [scripts/evaluate_universal.py](scripts/evaluate_universal.py)
-- [dte/models/universal_digital_twin.py](dte/models/universal_digital_twin.py)
+- [dte/models/universal/digital_twin.py](dte/models/universal/digital_twin.py)
 
 The new universal model also includes typed grouped state semantics:
 - `cstr`: concentration + thermal
@@ -92,9 +92,9 @@ Ideas in this bucket:
 
 Build a shared-checkpoint universal training path:
 
-- `dte/data/multi_system_dataset.py`
+- `dte/data/datasets/universal_unit_dataset.py`
 - `configs/training_universal.yaml`
-- `configs/autoresearch_universal.yaml`
+- `configs/archive/autoresearch/autoresearch_universal.yaml`
 - `scripts/train_universal.py`
 - `scripts/evaluate_universal.py`
 
@@ -129,9 +129,9 @@ Before the broader universal ideas above, run a local search around the new grou
 shared backbone:
 
 - [configs/training_universal_round1.yaml](configs/training_universal_round1.yaml)
-- [configs/autoresearch_universal_grouped_round1.yaml](configs/autoresearch_universal_grouped_round1.yaml)
-- [auto_research_universal_grouped_round1_ideas.yaml](auto_research_universal_grouped_round1_ideas.yaml)
-- [UNIVERSAL_GROUPED_MOONSHOT_ROUND1.md](UNIVERSAL_GROUPED_MOONSHOT_ROUND1.md)
+- [configs/archive/autoresearch/autoresearch_universal_grouped_round1.yaml](configs/archive/autoresearch/autoresearch_universal_grouped_round1.yaml)
+- [docs/archive/autoresearch/auto_research_universal_grouped_round1_ideas.yaml](docs/archive/autoresearch/auto_research_universal_grouped_round1_ideas.yaml)
+- [docs/archive/autoresearch/UNIVERSAL_GROUPED_MOONSHOT_ROUND1.md](docs/archive/autoresearch/UNIVERSAL_GROUPED_MOONSHOT_ROUND1.md)
 
 Round-1 focus:
 1. descriptor-conditioned modulation of grouped tokens
@@ -214,7 +214,7 @@ Idea:
 
 This is feasible but should be run as a dedicated longer-budget campaign:
 - add manifold regularization or projection in latent space
-- likely modify [dte/models/latent_sde.py](dte/models/latent_sde.py) and training losses
+- likely modify [dte/models/unit/latent_sde.py](dte/models/unit/latent_sde.py) and training losses
 - evaluate separately after the second Neural CDE-focused moonshot round
 
 ## Recommended Global Order

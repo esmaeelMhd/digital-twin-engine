@@ -4,7 +4,7 @@ ideas:
 
   - id: dimensionless_buckingham_pi_frontend
     priority: 10
-    target_file: dte/models/encoder.py
+    target_file: dte/models/unit/encoder.py
     title: Expand the encoder input with generic dimensionless groups, ratio features, and log-scaled operating quantities derived from SystemSpec normalization so the representation is invariant to units and operating scale.
     rationale: >
       A true foundational model for physical systems should not have to re-learn the
@@ -24,7 +24,7 @@ ideas:
 
   - id: contrastive_cross_system_latent_alignment
     priority: 20
-    target_file: dte/training/losses.py
+    target_file: dte/training/shared/losses.py
     title: Add a contrastive latent alignment loss that pulls similar operating regimes together across systems while repelling genuinely different regimes.
     rationale: >
       Foundational behavior requires a shared latent geometry, not just shared code.
@@ -43,7 +43,7 @@ ideas:
 
   - id: koopman_residual_hybrid_drift
     priority: 30
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Replace the purely nonlinear drift with a Koopman-style linear latent operator plus a small nonlinear residual correction network.
     rationale: >
       Many industrial systems are locally close to linear once expressed in the right
@@ -60,7 +60,7 @@ ideas:
 
   - id: neural_cde_control_integration
     priority: 40
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Treat controls and disturbances as paths and inject them through a Neural CDE-style matrix field instead of only pointwise interpolation.
     rationale: >
       Real plants are driven by piecewise-constant, abrupt, and sometimes irregular
@@ -80,7 +80,7 @@ ideas:
 
   - id: simulator_plus_residual_dynamics
     priority: 50
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Use the registered ProcessSimulator as the base drift prior and let the neural network learn only the sim-to-real residual mismatch.
     rationale: >
       This is one of the cleanest routes to making the repo feel like a foundational
@@ -98,7 +98,7 @@ ideas:
 
   - id: port_hamiltonian_dissipative_latent_drift
     priority: 60
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Restructure the latent drift as a port-Hamiltonian or dissipative system so energy exchange and dissipation are architectural priors instead of only loss penalties.
     rationale: >
       Dissipation is one of the most universal properties in thermodynamic process
@@ -116,7 +116,7 @@ ideas:
 
   - id: cross_system_masked_pretraining
     priority: 70
-    target_file: dte/training/trainer.py
+    target_file: dte/training/unit/trainer.py
     title: Add a masked trajectory pretraining phase across systems so the model learns generic interpolation and recovery dynamics before full rollout training.
     rationale: >
       Large foundational models are usually built in two stages: broad self-supervised
@@ -136,7 +136,7 @@ ideas:
 
   - id: universal_systemspec_conditioned_backbone
     priority: 80
-    target_file: dte/models/digital_twin.py
+    target_file: dte/models/unit/digital_twin.py
     title: Train a single shared backbone conditioned on a rich embedding of the full SystemSpec so new systems require little more than thin adaptation heads.
     rationale: >
       This is the clearest foundational-model bet in the repo. If a shared backbone can
@@ -154,7 +154,7 @@ ideas:
 
   - id: compositional_process_graph_hypernetwork
     priority: 90
-    target_file: dte/models/digital_twin.py
+    target_file: dte/models/unit/digital_twin.py
     title: Generate parts of the model weights from a compositional process graph so the architecture can generalize to unseen physical topologies.
     rationale: >
       A flat SystemSpec may be enough for transfer between small systems, but a real
@@ -172,7 +172,7 @@ ideas:
 
   - id: latent_trajectory_diffusion_foundation_model
     priority: 100
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Replace forward latent SDE rollout with a trajectory diffusion model over full latent sequences conditioned on initial state, controls, disturbances, and parameters.
     rationale: >
       If the repo is ever going to behave like a true generative foundation model for

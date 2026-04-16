@@ -1,7 +1,7 @@
 # Digital Twin Engine — Latent SDE Campaign Context
 
 This file is injected into the autoresearch prompt for the focused
-`dte/models/latent_sde.py` campaign. It is intentionally narrower than the
+`dte/models/unit/latent_sde.py` campaign. It is intentionally narrower than the
 default `auto_research.md`.
 
 ---
@@ -12,7 +12,7 @@ Search for **high-upside latent-dynamics ideas** that could materially improve
 long-horizon rollout quality, stochastic stability, and generalisation.
 
 This campaign is not for routine tuning. It is specifically for trying
-architectural and mathematical ideas inside `dte/models/latent_sde.py`.
+architectural and mathematical ideas inside `dte/models/unit/latent_sde.py`.
 
 The model should move closer to a **general industrial dynamics backbone**, not
 just a narrowly tuned CSTR latent model.
@@ -23,7 +23,7 @@ just a narrowly tuned CSTR latent model.
 
 You may modify only:
 
-- `dte/models/latent_sde.py`
+- `dte/models/unit/latent_sde.py`
 
 One file, one idea, minimal coherent patch.
 
@@ -46,7 +46,7 @@ Do not modify:
 - The architecture must remain generic across systems via `SystemSpec`
 - Do not introduce system-specific branches or hardcoded CSTR assumptions
 - Do not hardcode config-like physical constants, bounds, normalization values,
-  or fixed dimensions into `dte/models/latent_sde.py`
+  or fixed dimensions into `dte/models/unit/latent_sde.py`
 
 The autoresearch metric is still `best_val_loss`, but the intended search style
 for this campaign is **bold latent architecture** rather than small tuning.

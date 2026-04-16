@@ -1,7 +1,7 @@
 # Digital Twin Engine — Losses Campaign Context
 
 This file is injected into the autoresearch prompt for the focused
-`dte/training/losses.py` campaign. It is intended to steer the search toward
+`dte/training/shared/losses.py` campaign. It is intended to steer the search toward
 objective-design ideas rather than routine scalar tuning.
 
 ---
@@ -23,7 +23,7 @@ This campaign is about better objectives, not simply bigger or smaller weights.
 
 You may modify only:
 
-- `dte/training/losses.py`
+- `dte/training/shared/losses.py`
 
 One file, one idea, minimal coherent patch.
 

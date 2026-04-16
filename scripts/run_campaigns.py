@@ -257,7 +257,7 @@ def build_campaign_plan(
     runs_by_name = DEFAULT_STAGE1_RUNS if stage == "stage1" else DEFAULT_STAGE2_RUNS
     plans: list[CampaignPlan] = []
     for name in campaigns:
-        config_path = f"configs/autoresearch_{name}_{stage}.yaml"
+        config_path = f"configs/autoresearch/autoresearch_{name}_{stage}.yaml"
         branch_tag = f"{session_tag}-{name}-{stage}"
         configured_runs = runs_by_name[name]
         plans.append(

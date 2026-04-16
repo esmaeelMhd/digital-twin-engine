@@ -1,7 +1,7 @@
 # Digital Twin Engine — DigitalTwin Campaign Context
 
 This file is injected into the autoresearch prompt for the focused
-`dte/models/digital_twin.py` campaign. It is intended to steer the search toward
+`dte/models/unit/digital_twin.py` campaign. It is intended to steer the search toward
 full-model coupling ideas that can be expressed within `DigitalTwin` itself.
 
 ---
@@ -24,7 +24,7 @@ This campaign is for model-level coupling ideas, not routine tuning.
 
 You may modify only:
 
-- `dte/models/digital_twin.py`
+- `dte/models/unit/digital_twin.py`
 
 One file, one idea, minimal coherent patch.
 

@@ -25,7 +25,7 @@ loss are considered valid. NaN losses or complete divergence are discards.
 ## Ideas Overview
 
 **Tier 1** (priorities 10-40): Single-file changes suitable for the autoresearch harness.
-Focus on `dte/models/latent_sde.py` with config-gated fallbacks.
+Focus on `dte/models/unit/latent_sde.py` with config-gated fallbacks.
 
 **Tier 2** (priorities 50-70): More structural changes, some touching training code.
 
@@ -48,22 +48,22 @@ or external dependencies. Documented for future manual exploration.
 
 ### Tier 1
 
-1. **Universal SystemSpec-conditioned Backbone** (`dte/models/latent_sde.py`)
-2. **Port-Hamiltonian Neural SDE** (`dte/models/latent_sde.py`)
-3. **Trajectory-level Score-Based Diffusion** (`dte/models/latent_sde.py`)
-4. **Differentiable Simulator Residual** (`dte/models/latent_sde.py`)
+1. **Universal SystemSpec-conditioned Backbone** (`dte/models/unit/latent_sde.py`)
+2. **Port-Hamiltonian Neural SDE** (`dte/models/unit/latent_sde.py`)
+3. **Trajectory-level Score-Based Diffusion** (`dte/models/unit/latent_sde.py`)
+4. **Differentiable Simulator Residual** (`dte/models/unit/latent_sde.py`)
 
 ### Tier 2
 
-5. **Manifold-Constrained Latent Space** (`dte/models/latent_sde.py`)
-6. **Neural CDE + Koopman Hybrid** (`dte/models/latent_sde.py`)
-7. **Self-Supervised Masked Pretraining** (`dte/training/trainer.py`)
+5. **Manifold-Constrained Latent Space** (`dte/models/unit/latent_sde.py`)
+6. **Neural CDE + Koopman Hybrid** (`dte/models/unit/latent_sde.py`)
+7. **Self-Supervised Masked Pretraining** (`dte/training/unit/trainer.py`)
 
 ### Tier 3
 
-8. **Multi-Modal Text Grounding** (`dte/models/latent_sde.py`)
-9. **Meta-Learned Adaptive Solver** (`dte/training/trainer.py`)
-10. **LLM-Driven Symbolic Physics Discovery** (`dte/training/trainer.py`)
+8. **Multi-Modal Text Grounding** (`dte/models/unit/latent_sde.py`)
+9. **Meta-Learned Adaptive Solver** (`dte/training/unit/trainer.py`)
+10. **LLM-Driven Symbolic Physics Discovery** (`dte/training/unit/trainer.py`)
 
 ---
 
@@ -71,8 +71,8 @@ or external dependencies. Documented for future manual exploration.
 
 These ideas are meant to be used with:
 - `auto_research_grok_ideas.yaml` (the structured experiment definitions)
-- `configs/autoresearch_grok_stage1.yaml` (conservative hyperparameters)
-- `configs/autoresearch_grok_stage2.yaml` (more aggressive settings)
+- `configs/autoresearch/autoresearch_grok_stage1.yaml` (conservative hyperparameters)
+- `configs/autoresearch/autoresearch_grok_stage2.yaml` (more aggressive settings)
 
 Run experiments using the autoresearch harness, starting with Tier 1 ideas.
 Each experiment should make **one minimal change** to the specified `target_file`.

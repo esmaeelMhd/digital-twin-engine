@@ -83,9 +83,9 @@ python scripts/evaluate_universal.py \
 ## Scope Guardrails
 
 Allowed surfaces:
-- [dte/models/universal_digital_twin.py](dte/models/universal_digital_twin.py)
-- [dte/training/universal_trainer.py](dte/training/universal_trainer.py)
-- [dte/data/multi_system_dataset.py](dte/data/multi_system_dataset.py)
+- [dte/models/universal/digital_twin.py](dte/models/universal/digital_twin.py)
+- [dte/training/universal/trainer.py](dte/training/universal/trainer.py)
+- [dte/data/datasets/universal_unit_dataset.py](dte/data/datasets/universal_unit_dataset.py)
 - [configs/training_universal_round1.yaml](configs/training_universal_round1.yaml)
 
 Do not touch in round 1:

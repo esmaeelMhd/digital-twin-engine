@@ -4,7 +4,7 @@ ideas:
 
   - id: koopman_linear_drift
     priority: 10
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Replace the unstructured MLP drift with a Koopman-style linear map A(u,c)·z + B(u,c)·w so latent dynamics are globally linear at any given operating point.
     rationale: >
       Koopman theory guarantees that any nonlinear dynamical system has a linear
@@ -25,7 +25,7 @@ ideas:
 
   - id: wasserstein_kl_replacement
     priority: 20
-    target_file: dte/training/losses.py
+    target_file: dte/training/shared/losses.py
     title: Replace the KL divergence term with a Sinkhorn divergence on mini-batch aggregate posteriors to prevent posterior collapse and enable sharper multi-modal latent structure.
     rationale: >
       KL(q(z|x) || N(0,I)) causes posterior collapse: the model ignores z and
@@ -47,7 +47,7 @@ ideas:
 
   - id: lagrange_multiplier_physics
     priority: 30
-    target_file: dte/training/losses.py
+    target_file: dte/training/shared/losses.py
     title: Replace fixed physics loss weights with learned dual variables (Lagrange multipliers) that enforce mass and energy residual constraints as soft-hard constraints via primal-dual gradient descent.
     rationale: >
       The current fixed physics weights are a brittle compromise: too low and
@@ -73,7 +73,7 @@ ideas:
 
   - id: port_hamiltonian_drift
     priority: 40
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Restructure LatentDrift as a port-Hamiltonian system dz=(J(z)-R(z))∇H(z)dt + B(z)u dt where J is skew-symmetric (energy coupling) and R is positive-definite (dissipation), guaranteeing passivity by construction.
     rationale: >
       Dissipativity is the single most universal property of thermodynamic
@@ -98,7 +98,7 @@ ideas:
 
   - id: spectral_multiscale_drift
     priority: 50
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Decompose the latent state into slow and fast sub-spaces with separate drift networks operating at different effective timescales, improving long-horizon accuracy by explicitly separating thermal and reaction modes.
     rationale: >
       Industrial processes span 4–6 orders of magnitude in timescale: jacket
@@ -123,7 +123,7 @@ ideas:
 
   - id: neural_cde_drift
     priority: 60
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Replace the linear-interpolation control injection with a proper Neural CDE formulation dz = f_θ(z) dX where X=(t,u,d) is the control path and f_θ outputs a matrix multiplying the path derivative.
     rationale: >
       The current approach linearly interpolates controls and evaluates them as
@@ -152,7 +152,7 @@ ideas:
 
   - id: self_supervised_pretraining
     priority: 70
-    target_file: dte/training/trainer.py
+    target_file: dte/training/unit/trainer.py
     title: Add a self-supervised masked-dynamics pre-training phase before the main SDE training where the encoder+decoder must reconstruct randomly masked timesteps, seeding the representation with physics-consistent interpolation knowledge.
     rationale: >
       Pre-training with masked prediction (analogous to BERT/MAE) teaches the
@@ -176,7 +176,7 @@ ideas:
 
   - id: universal_joint_training
     priority: 80
-    target_file: dte/training/trainer.py
+    target_file: dte/training/unit/trainer.py
     title: Extend the training loop to accept multiple system datasets simultaneously and train a shared latent SDE with system-specific encoder/decoder heads, producing a universal latent dynamics backbone across all registered systems.
     rationale: >
       A model trained jointly on CSTR + heat exchanger data must learn latent
@@ -199,7 +199,7 @@ ideas:
 
   - id: score_based_trajectory_diffusion
     priority: 90
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Replace the forward SDE rollout with a denoising diffusion model over entire latent trajectories, conditioning on initial state and controls to sample physically plausible multi-modal trajectory distributions.
     rationale: >
       Diffusion models are the best generative models known. Applied to latent

@@ -31,9 +31,9 @@ run it, keep or discard, move to the next.**
 The agent may modify only the single file listed in each idea's `target_file`.
 Modifiable files across this campaign are:
 
-- `dte/models/latent_sde.py`
-- `dte/training/losses.py`
-- `dte/training/trainer.py`
+- `dte/models/unit/latent_sde.py`
+- `dte/training/shared/losses.py`
+- `dte/training/unit/trainer.py`
 
 One file, one idea, minimal coherent patch.
 
@@ -67,7 +67,7 @@ These must be preserved regardless of the idea being explored:
 
 ### Tier 1 — Single-file, feasible within the time budget
 
-**1. Koopman Linear Drift** (`dte/models/latent_sde.py`, priority 10)
+**1. Koopman Linear Drift** (`dte/models/unit/latent_sde.py`, priority 10)
 
 Replace the unstructured MLP drift with a Koopman-style linear map
 `A(u,c)·z + B(u,c)·w`. If the encoder learns the right lifted embedding, latent
@@ -78,7 +78,7 @@ faithful Koopman embedding; training may collapse to trivial `A ≈ 0`.
 
 Key constraint: zero-initialise off-diagonal A; start near identity dynamics.
 
-**2. Wasserstein / Sinkhorn KL Replacement** (`dte/training/losses.py`, priority 20)
+**2. Wasserstein / Sinkhorn KL Replacement** (`dte/training/shared/losses.py`, priority 20)
 
 Replace `KL(q(z|x) || N(0,I))` with Sinkhorn divergence on aggregate
 mini-batch posteriors. Prevents posterior collapse, allows sharper multi-modal
@@ -89,7 +89,7 @@ Key constraint: keep KL annealing weight schedule plumbing; apply it to the
 Sinkhorn weight as a drop-in replacement. Fall back to standard KL if the
 `sinkhorn_reg` config key is absent.
 
-**3. Lagrange Multiplier Physics Constraints** (`dte/training/losses.py`, priority 30)
+**3. Lagrange Multiplier Physics Constraints** (`dte/training/shared/losses.py`, priority 30)
 
 Replace fixed physics weights with learned dual variables λ_mass, λ_energy that
 enforce residual constraints via primal-dual gradient ascent/descent. Dual
@@ -102,7 +102,7 @@ weights if `physics_constraints` config block is absent.
 
 ### Tier 2 — Higher reward, higher structural risk
 
-**4. Port-Hamiltonian Drift** (`dte/models/latent_sde.py`, priority 40)
+**4. Port-Hamiltonian Drift** (`dte/models/unit/latent_sde.py`, priority 40)
 
 Structure the drift as `dz = (J(z) - R(z))∇H(z) dt + B(z)u dt` where:
 - `J` is skew-symmetric (energy-conserving coupling between latent modes)
@@ -118,7 +118,7 @@ AD instability and 5–10× slowdown.
 Key constraint: parameterise J via W - Wᵀ (guaranteed skew-symmetric); R via
 LᵀL with jnp.tril (guaranteed PSD). Initialise both small.
 
-**5. Spectral Multi-Scale Drift** (`dte/models/latent_sde.py`, priority 50)
+**5. Spectral Multi-Scale Drift** (`dte/models/unit/latent_sde.py`, priority 50)
 
 Split latent_dim into slow and fast sub-spaces with separate drift networks.
 Slow sub-space is deterministic (zero diffusion); fast sub-space uses the
@@ -130,7 +130,7 @@ networks.
 Key constraint: slow_dim_fraction = 0.5 default; make it configurable under
 `model.slow_dim_fraction`. Diffusion applies to fast sub-space only.
 
-**6. Neural CDE Control Integration** (`dte/models/latent_sde.py`, priority 60)
+**6. Neural CDE Control Integration** (`dte/models/unit/latent_sde.py`, priority 60)
 
 Replace linear-interpolation control injection with proper Neural CDE:
 `dz = f_θ(z) dX` where X = (t, u, d) is the control path and f_θ outputs a
@@ -144,7 +144,7 @@ so the model degrades gracefully when controls are constant.
 
 ### Tier 3 — Transformative; document here, run manually outside harness if needed
 
-**7. Self-Supervised Masked Pre-Training** (`dte/training/trainer.py`, priority 70)
+**7. Self-Supervised Masked Pre-Training** (`dte/training/unit/trainer.py`, priority 70)
 
 Add a BERT/MAE-style pre-training phase: randomly mask 40% of trajectory
 timesteps, train encoder+decoder to reconstruct masked states from unmasked
@@ -152,14 +152,14 @@ context via mean_trajectory rollout. Seeds the representation with physics-
 consistent interpolation knowledge before SDE training begins. Risk: pre-trained
 features may conflict with sequential SDE prediction objective.
 
-**8. Universal Joint Training Across Systems** (`dte/training/trainer.py`, priority 80)
+**8. Universal Joint Training Across Systems** (`dte/training/unit/trainer.py`, priority 80)
 
 Train a shared LatentSDE on CSTR + heat exchanger data simultaneously with
 system-specific encoder/decoder heads. If successful, the latent dynamics
 backbone becomes a physics foundation model. Risk: negative transfer between
 systems with incompatible dynamics could make both worse.
 
-**9. Score-Based Trajectory Diffusion** (`dte/models/latent_sde.py`, priority 90)
+**9. Score-Based Trajectory Diffusion** (`dte/models/unit/latent_sde.py`, priority 90)
 
 Replace forward SDE rollout with DDPM denoising over full latent trajectory
 tensors. Captures multi-modal trajectory distributions; no stiff ODE solve.

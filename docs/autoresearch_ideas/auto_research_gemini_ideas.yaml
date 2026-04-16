@@ -4,7 +4,7 @@ ideas:
 
   - id: differentiable_simulator_in_the_loop
     priority: 10
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Embed the actual JAX-based ProcessSimulator directly inside the Latent SDE's drift function as a hard physical prior, using a neural network only to model the residual unknown dynamics.
     rationale: >
       Instead of dropping the soft PhysicsLoss penalty, embed the actual JAX-based
@@ -20,7 +20,7 @@ ideas:
 
   - id: adversarial_physics_violators
     priority: 20
-    target_file: dte/training/trainer.py
+    target_file: dte/training/unit/trainer.py
     title: Train a secondary "Physics Critic" network that actively searches the latent space for trajectories that violate physical laws, while the SDE generator tries to fool it.
     rationale: >
       Instead of computing a static MSE on the physics residuals, train a secondary
@@ -37,7 +37,7 @@ ideas:
 
   - id: meta_learning_sde_solver
     priority: 30
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Use meta-learning to train a lightweight neural network to be the SDE solver, optimized specifically for the stiff dynamics of industrial processes.
     rationale: >
       Instead of using standard Diffrax solvers (Euler, Milstein, etc.), use meta-learning
@@ -55,7 +55,7 @@ ideas:
 
   - id: universal_cross_system_latent_space
     priority: 40
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Train a single massive Encoder/Decoder/SDE that takes the SystemSpec as a conditioning input, making the latent space a universal representation of physical dynamics.
     rationale: >
       Instead of training one model per SystemSpec, train a single massive Encoder/Decoder/SDE
@@ -69,7 +69,7 @@ ideas:
 
   - id: quantum_inspired_hamiltonian_sde
     priority: 50
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Constrain the latent SDE drift and diffusion terms to strictly obey Hamiltonian or Lagrangian mechanics (symplectic structures), enforcing energy conservation topologically.
     rationale: >
       Constrain the latent SDE drift and diffusion terms to strictly obey Hamiltonian or Lagrangian
@@ -83,7 +83,7 @@ ideas:
 
   - id: topologically_constrained_latent_manifolds
     priority: 60
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Force the latent space to exist on a specific non-Euclidean manifold that naturally encodes the bounded invariants of the physical system.
     rationale: >
       Force the latent space to exist on a specific non-Euclidean manifold (e.g., a hypersphere,
@@ -97,7 +97,7 @@ ideas:
 
   - id: continuous_time_rl_self_correcting
     priority: 70
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Embed an RL agent inside the SDE integration loop to apply a dynamic "correction" vector to the drift to minimize anticipated physics loss.
     rationale: >
       Embed an RL agent inside the SDE integration loop. At each integration step, the RL agent
@@ -113,7 +113,7 @@ ideas:
 
   - id: infinite_dimensional_latent_spaces
     priority: 80
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Replace the finite-dimensional latent vector with a stochastic Fourier Neural Operator (FNO) or PDE-based latent space.
     rationale: >
       Replace the finite-dimensional latent vector with a stochastic Fourier Neural Operator (FNO)
@@ -127,7 +127,7 @@ ideas:
 
   - id: multi_modal_physical_grounding
     priority: 90
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Add a text encoder to the architecture and condition the LatentSDE on textual descriptions of the system state, maintenance logs, or operating procedures.
     rationale: >
       Add a text encoder (e.g., a frozen LLM or CLIP-style model) to the architecture. Condition
@@ -141,7 +141,7 @@ ideas:
 
   - id: llm_driven_symbolic_physics_discovery
     priority: 100
-    target_file: dte/training/trainer.py
+    target_file: dte/training/unit/trainer.py
     title: Periodically pause training and use an LLM or symbolic regression to analyze latent SDE trajectories and extract explicit stochastic differential equations.
     rationale: >
       During the autoresearch loop, periodically pause training and use an LLM (or symbolic regression)

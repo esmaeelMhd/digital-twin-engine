@@ -19,7 +19,7 @@ Usage:
     python scripts/agent.py --resume           # Continue from existing branch
     python scripts/agent.py --tag mar26        # Named branch tag
     python scripts/agent.py --no-dashboard     # Text-only mode
-    python scripts/agent.py --file dte/training/trainer.py  # Restrict to one file
+    python scripts/agent.py --file dte/training/unit/trainer.py  # Restrict to one file
 
 Required environment variables (for the chosen provider):
     none                 -- Codex CLI can use `codex login` / ChatGPT account auth
@@ -2285,12 +2285,12 @@ def _provider_supports_thinking_level(provider: str) -> bool:
 MODIFIABLE_FILES = [
     "configs/training_default.yaml",
     "scripts/train.py",
-    "dte/models/encoder.py",
-    "dte/models/decoder.py",
-    "dte/models/latent_sde.py",
-    "dte/models/digital_twin.py",
-    "dte/training/trainer.py",
-    "dte/training/losses.py",
+    "dte/models/unit/encoder.py",
+    "dte/models/unit/decoder.py",
+    "dte/models/unit/latent_sde.py",
+    "dte/models/unit/digital_twin.py",
+    "dte/training/unit/trainer.py",
+    "dte/training/shared/losses.py",
 ]
 
 RESEARCH_PRIORITIES = """

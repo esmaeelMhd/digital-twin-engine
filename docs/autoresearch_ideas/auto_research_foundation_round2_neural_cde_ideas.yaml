@@ -6,8 +6,8 @@ ideas:
   - id: neural_cde_gain_gate
     priority: 10
     files:
-      - dte/models/latent_sde.py
-      - dte/models/digital_twin.py
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
       - configs/training_default.yaml
       - configs/heat_exchanger_training.yaml
       - configs/two_tank_training.yaml
@@ -20,7 +20,7 @@ ideas:
   - id: neural_cde_separate_width_depth
     priority: 20
     files:
-      - dte/models/latent_sde.py
+      - dte/models/unit/latent_sde.py
       - configs/training_default.yaml
       - configs/heat_exchanger_training.yaml
       - configs/two_tank_training.yaml
@@ -33,8 +33,8 @@ ideas:
   - id: neural_cde_path_derivative_clipping
     priority: 30
     files:
-      - dte/models/latent_sde.py
-      - dte/models/digital_twin.py
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
       - configs/training_default.yaml
       - configs/heat_exchanger_training.yaml
       - configs/two_tank_training.yaml
@@ -47,8 +47,8 @@ ideas:
   - id: neural_cde_dt_scaled_path
     priority: 40
     files:
-      - dte/models/latent_sde.py
-      - dte/models/digital_twin.py
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
     title: Compare the current derivative-based path term with a dt-scaled delta representation.
     rationale: >
       The existing path term uses du/dt and dd/dt. A dt-scaled representation
@@ -58,9 +58,9 @@ ideas:
   - id: neural_cde_warmup_schedule
     priority: 50
     files:
-      - dte/models/latent_sde.py
-      - dte/models/digital_twin.py
-      - dte/training/trainer.py
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
+      - dte/training/unit/trainer.py
       - configs/training_default.yaml
       - configs/heat_exchanger_training.yaml
       - configs/two_tank_training.yaml
@@ -73,8 +73,8 @@ ideas:
   - id: neural_cde_context_gate
     priority: 60
     files:
-      - dte/models/latent_sde.py
-      - dte/models/digital_twin.py
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
     title: Add a learned context gate that modulates the control-path term from latent/control/disturbance context.
     rationale: >
       Some operating regimes need strong path sensitivity and others do not.

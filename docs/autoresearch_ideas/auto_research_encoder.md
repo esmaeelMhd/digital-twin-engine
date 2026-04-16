@@ -1,7 +1,7 @@
 # Digital Twin Engine — Encoder Campaign Context
 
 This file is injected into the autoresearch prompt for the focused
-`dte/models/encoder.py` campaign. It is intended to steer the search toward
+`dte/models/unit/encoder.py` campaign. It is intended to steer the search toward
 representation and posterior-geometry ideas.
 
 ---
@@ -23,7 +23,7 @@ This campaign is not for routine MLP tuning.
 
 You may modify only:
 
-- `dte/models/encoder.py`
+- `dte/models/unit/encoder.py`
 
 One file, one idea, minimal coherent patch.
 

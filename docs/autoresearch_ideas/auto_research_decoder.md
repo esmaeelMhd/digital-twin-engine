@@ -1,7 +1,7 @@
 # Digital Twin Engine — Decoder Campaign Context
 
 This file is injected into the autoresearch prompt for the focused
-`dte/models/decoder.py` campaign. It is intended to steer the search toward
+`dte/models/unit/decoder.py` campaign. It is intended to steer the search toward
 better physical-state reconstruction structure.
 
 ---
@@ -23,7 +23,7 @@ This campaign is not for routine MLP tuning.
 
 You may modify only:
 
-- `dte/models/decoder.py`
+- `dte/models/unit/decoder.py`
 
 One file, one idea, minimal coherent patch.
 

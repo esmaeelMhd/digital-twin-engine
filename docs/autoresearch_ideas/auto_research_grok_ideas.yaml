@@ -4,7 +4,7 @@ ideas:
 
   - id: universal_systemspec_conditioned_backbone
     priority: 10
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Make LatentSDE take tokenized/embedded SystemSpec as conditioning input via cross-attention or FiLM for a universal latent dynamics backbone.
     rationale: >
       Instead of training one model per SystemSpec, make the core LatentSDE (and optionally
@@ -24,7 +24,7 @@ ideas:
 
   - id: port_hamiltonian_neural_sde
     priority: 20
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Restructure LatentDrift as a port-Hamiltonian system dz=(J(z)-R(z))∇H(z)dt + B(z)u dt with learned Hamiltonian.
     rationale: >
       Industrial processes are fundamentally dissipative thermodynamic systems.
@@ -43,7 +43,7 @@ ideas:
 
   - id: trajectory_level_score_based_diffusion
     priority: 30
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Replace forward SDE rollout with denoising diffusion model over full latent trajectories conditioned on initial state and controls.
     rationale: >
       Diffusion models excel at capturing multi-modal distributions. Applied to
@@ -60,7 +60,7 @@ ideas:
 
   - id: differentiable_simulator_residual
     priority: 40
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Embed ProcessSimulator inside LatentDrift as hard physical prior, with neural network modeling only the residual (sim2real gap).
     rationale: >
       Instead of soft PhysicsLoss penalties, directly use the differentiable
@@ -78,7 +78,7 @@ ideas:
 
   - id: manifold_constrained_latent_space
     priority: 50
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Force latent space onto geometry that encodes physical invariants (hypersphere, hyperbolic, etc.).
     rationale: >
       Many physical invariants (mass fractions summing to 1, positivity constraints)
@@ -92,7 +92,7 @@ ideas:
 
   - id: neural_cde_koopman_hybrid
     priority: 60
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Combine Neural CDE for irregular control signals with Koopman-style linear latent dynamics.
     rationale: >
       Plant control signals are often piecewise constant. Neural CDEs provide the
@@ -106,7 +106,7 @@ ideas:
 
   - id: self_supervised_masked_pretraining
     priority: 70
-    target_file: dte/training/trainer.py
+    target_file: dte/training/unit/trainer.py
     title: Add masked dynamics pretraining phase before SDE training across multiple systems.
     rationale: >
       Self-supervised pretraining teaches the encoder/decoder rich causal physical
@@ -122,7 +122,7 @@ ideas:
 
   - id: multi_modal_text_grounding
     priority: 80
-    target_file: dte/models/latent_sde.py
+    target_file: dte/models/unit/latent_sde.py
     title: Add text encoder and condition LatentSDE on natural language descriptions and maintenance logs.
     rationale: >
       Create a true multi-modal foundational model. Operators could provide textual
@@ -136,7 +136,7 @@ ideas:
 
   - id: meta_learned_adaptive_solver
     priority: 90
-    target_file: dte/training/trainer.py
+    target_file: dte/training/unit/trainer.py
     title: Meta-learn an adaptive SDE solver or correction network specialized for industrial stiffness patterns.
     rationale: >
       Instead of fixed Diffrax solvers, learn a neural solver or correction term
@@ -149,7 +149,7 @@ ideas:
 
   - id: llm_symbolic_physics_discovery
     priority: 100
-    target_file: dte/training/trainer.py
+    target_file: dte/training/unit/trainer.py
     title: Periodic LLM-driven symbolic equation discovery from latent trajectories during autoresearch.
     rationale: >
       Use LLMs or symbolic regression to extract human-readable SDEs from the learned

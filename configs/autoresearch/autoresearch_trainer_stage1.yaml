@@ -37,7 +37,7 @@ agent:
   eval_plot_count: 0
   eval_skip_ensemble: true
   cooldown_between_experiments: 10
-  context_file: auto_research_trainer.md
-  ideas_file: auto_research_trainer_ideas.yaml
+  context_file: docs/autoresearch_ideas/auto_research_trainer.md
+  ideas_file: docs/autoresearch_ideas/auto_research_trainer_ideas.yaml
   modifiable_files:
-    - dte/training/trainer.py
+    - dte/training/unit/trainer.py

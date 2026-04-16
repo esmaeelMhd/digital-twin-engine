@@ -157,7 +157,7 @@ This trains one shared checkpoint across `cstr`, `heat_exchanger`, and `two_tank
 using:
 - mixed-system padded batches
 - typed state groups from the system configs
-- a grouped universal backbone in `dte/models/universal_digital_twin.py`
+- a grouped universal backbone in `dte/models/universal/digital_twin.py`
 
 Evaluate that shared checkpoint with:
 

@@ -1,7 +1,7 @@
 # Digital Twin Engine — Trainer Campaign Context
 
 This file is injected into the autoresearch prompt for the focused
-`dte/training/trainer.py` campaign. It is narrower than the default
+`dte/training/unit/trainer.py` campaign. It is narrower than the default
 `auto_research.md` and is meant to steer the search toward training-loop and
 rollout-logic ideas.
 
@@ -25,7 +25,7 @@ This campaign is not for routine optimizer tuning.
 
 You may modify only:
 
-- `dte/training/trainer.py`
+- `dte/training/unit/trainer.py`
 
 One file, one idea, minimal coherent patch.
 
