@@ -394,8 +394,6 @@ def main() -> None:
                         str(outputs_root / "rollout_stability"),
                         "--jax_platform",
                         args.jax_platform,
-                        "--train_config_mode",
-                        "strict",
                         "--systems",
                         *args.compare_systems,
                     ],

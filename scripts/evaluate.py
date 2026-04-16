@@ -98,7 +98,6 @@ def _resolve_evaluation_paths(args: argparse.Namespace) -> dict[str, Path]:
         system_config_path = _pick_first_existing(
             [
                 inferred_run_dir / "system_config.yaml",
-                inferred_run_dir / "cstr_config.yaml",
             ]
         )
     if system_config_path is None or not system_config_path.exists():
@@ -365,10 +364,8 @@ def main():
     )
     parser.add_argument(
         "--system_config",
-        "--cstr_config",
         type=str,
         default=None,
-        dest="system_config",
         help="Path to system config. Defaults to <run_dir>/system_config.yaml when inferable."
     )
     parser.add_argument(

@@ -168,7 +168,22 @@ python scripts/evaluate_universal.py \
   --output_dir outputs/universal_v1/eval/
 ```
 
-### 5. Few-Shot Transfer Learning
+### 5. Run the Canonical Unit-Foundation Baseline
+
+```bash
+python scripts/run_unit_foundation_baseline.py \
+  --generation_config configs/generation_phase1_regime.yaml \
+  --training_config configs/training_universal_phase1_regime.yaml \
+  --workspace_dir outputs/unit_foundation_baseline/
+```
+
+This is the canonical convergence path:
+- regime corpus generation
+- universal unit-foundation training
+- universal evaluation
+- control-readiness gate on representative systems
+
+### 6. Few-Shot Transfer Learning
 
 ```bash
 # Fine-tune only the decoder on 5 new-unit trajectories
@@ -180,7 +195,7 @@ python scripts/train.py \
   --n_epochs 10
 ```
 
-### 6. Evaluate
+### 7. Evaluate
 
 ```bash
 python scripts/evaluate.py \
@@ -200,7 +215,7 @@ python scripts/evaluate_universal.py \
   --output_dir outputs/universal_v1/eval/
 ```
 
-### 7. Run MPC
+### 8. Run MPC
 
 ```bash
 python scripts/run_mpc.py \
@@ -210,7 +225,7 @@ python scripts/run_mpc.py \
   --compare_pid
 ```
 
-### 8. Deploy the REST API
+### 9. Deploy the REST API
 
 ```bash
 # Local

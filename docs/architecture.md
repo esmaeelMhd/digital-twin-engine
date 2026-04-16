@@ -24,6 +24,8 @@ Use the companion diagrams with distinct roles:
   deployment, and target-state movement flow
 - [`config_taxonomy.md`](config_taxonomy.md): active config classes, legacy
   boundary, and future config layout guidance
+- [`full_stack_convergence_program.md`](full_stack_convergence_program.md):
+  aggressive execution program for converging the repo to the target platform
 - [`legacy/docs/repo_structure_target.md`](../legacy/docs/repo_structure_target.md): repo-aligned package
   structure target and migration map
 - [`legacy/docs/repo_refactor_plan.md`](../legacy/docs/repo_refactor_plan.md): phased execution plan for

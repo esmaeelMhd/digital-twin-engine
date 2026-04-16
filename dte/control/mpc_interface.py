@@ -10,8 +10,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from .foundation_adapter import FoundationModel, rollout_model_ensemble
 from dte.evaluation.control_metrics import closed_loop_metrics, summarize_constraint_violations
-from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.base import ProcessSimulator, ProcessUnitSpec
 
 from .state_correction import StateCorrectionHook
@@ -71,7 +71,7 @@ class ProcessMPCInterface:
         self,
         spec: ProcessUnitSpec,
         simulator: ProcessSimulator,
-        model: DigitalTwin | None = None,
+        model: FoundationModel | None = None,
         *,
         params: np.ndarray | None = None,
         config: MPCInterfaceConfig | None = None,
@@ -183,45 +183,17 @@ class ProcessMPCInterface:
         do_model_rollout = bool(self.model is not None) if use_model is None else bool(use_model)
 
         if do_model_rollout and self.model is not None:
-            ts = jnp.linspace(0.0, (horizon - 1) * self.config.dt, horizon, dtype=jnp.float32)
-            sample_count = max(int(n_samples or self.config.rollout_samples), 1)
-            if sample_count > 1:
-                ensemble = self.model.predict_ensemble(
-                    jnp.asarray(initial, dtype=jnp.float32),
-                    jnp.asarray(controls_arr, dtype=jnp.float32),
-                    jnp.asarray(disturbance_arr, dtype=jnp.float32),
-                    jnp.asarray(self.params, dtype=jnp.float32),
-                    ts,
-                    jax.random.PRNGKey(seed),
-                    n_samples=sample_count,
-                )
-                states = np.asarray(ensemble["states_mean"], dtype=np.float32)
-                std = np.asarray(ensemble["states_std"], dtype=np.float32)
-            else:
-                _, z_mean, _ = self.model.encode(
-                    jnp.asarray(initial, dtype=jnp.float32),
-                    jnp.asarray(self.params, dtype=jnp.float32),
-                    jnp.asarray(controls_arr[0], dtype=jnp.float32),
-                    jax.random.PRNGKey(seed),
-                )
-                z_traj = self.model.rollout_latent(
-                    ts,
-                    z_mean,
-                    jnp.asarray(controls_arr, dtype=jnp.float32),
-                    jnp.asarray(self.params, dtype=jnp.float32),
-                    disturbances=jnp.asarray(disturbance_arr, dtype=jnp.float32),
-                    stochastic=False,
-                )
-                decode_fn = jax.vmap(
-                    lambda z, u: self.model.decode(
-                        z,
-                        jnp.asarray(self.params, dtype=jnp.float32),
-                        u,
-                    ),
-                    in_axes=(0, 0),
-                )
-                states = np.asarray(decode_fn(z_traj, jnp.asarray(controls_arr, dtype=jnp.float32)))
-                std = np.zeros_like(states)
+            states, std = rollout_model_ensemble(
+                self.model,
+                self.spec,
+                initial,
+                controls_arr,
+                disturbance_arr,
+                self.params,
+                dt=self.config.dt,
+                n_samples=max(int(n_samples or self.config.rollout_samples), 1),
+                seed=seed,
+            )
             return {
                 "source": "model",
                 "states": states,

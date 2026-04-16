@@ -177,6 +177,7 @@ class UniversalDigitalTwin(eqx.Module):
     adapter_bottleneck_dim: int = eqx.field(static=True)
     channel_conditioning_enabled: bool = eqx.field(static=True)
     law_conditioning_enabled: bool = eqx.field(static=True)
+    system_names: tuple[str, ...] = eqx.field(static=True)
 
     def __init__(
         self,
@@ -225,6 +226,7 @@ class UniversalDigitalTwin(eqx.Module):
         self.law_conditioning_enabled = law_conditioning_enabled
         self.adapters_enabled = adapters_enabled
         self.adapter_bottleneck_dim = adapter_bottleneck_dim
+        self.system_names = tuple(metadata.system_names)
 
         self.state_center_table = metadata.state_center
         self.state_scale_table = metadata.state_scale

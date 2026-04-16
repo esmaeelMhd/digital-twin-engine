@@ -46,10 +46,8 @@ def main():
     )
     parser.add_argument(
         "--system_config",
-        "--cstr_config",  # backwards-compatible alias
         type=str,
         default="configs/cstr_default.yaml",
-        dest="system_config",
         help="Path to system config (CSTR, heat exchanger, etc.)"
     )
     parser.add_argument(
@@ -106,16 +104,6 @@ def main():
         help="Use Weights & Biases logging"
     )
     parser.add_argument(
-        "--config_mode",
-        choices=["strict", "legacy_safe"],
-        default="legacy_safe",
-        help=(
-            "How to resolve the loaded YAML config. "
-            "'strict' respects the YAML as written. "
-            "'legacy_safe' explicitly applies the historical train.py safety overrides."
-        ),
-    )
-    parser.add_argument(
         "--finetune",
         type=str,
         default=None,
@@ -144,10 +132,7 @@ def main():
     # Load configs
     with open(args.config, "r") as f:
         loaded_config = yaml.safe_load(f)
-    config, legacy_overrides_applied = resolve_single_system_training_config(
-        loaded_config,
-        mode=args.config_mode,
-    )
+    config = resolve_single_system_training_config(loaded_config)
 
     with open(args.system_config, "r") as f:
         system_config = yaml.safe_load(f)
@@ -177,9 +162,6 @@ def main():
         yaml.dump(config, f)
     with open(os.path.join(args.output_dir, "system_config.yaml"), "w") as f:
         yaml.dump(system_config, f)
-    # Write legacy alias so existing evaluation scripts still find the file
-    with open(os.path.join(args.output_dir, "cstr_config.yaml"), "w") as f:
-        yaml.dump(system_config, f)
 
     print("\n" + "="*60)
     print("DIGITAL TWIN TRAINING")
@@ -189,13 +171,6 @@ def main():
     print(f"Data directory: {args.data_dir}")
     print(f"Output directory: {args.output_dir}")
     print(f"Seed: {args.seed}")
-    print(f"Config mode: {args.config_mode}")
-    if legacy_overrides_applied:
-        print("Applied legacy-safe overrides:")
-        for override in legacy_overrides_applied:
-            print(
-                f"  {override['path']}: {override['old_value']} -> {override['new_value']}"
-            )
     print(f"Epochs: {config['training']['n_epochs']}")
     print(f"Batch size: {config['training']['batch_size']}")
     if config["training"].get("max_batches_per_epoch") is not None:
@@ -326,8 +301,6 @@ def main():
             _json_safe_float(args.time_budget_minutes * 60.0) if args.time_budget_minutes is not None else None
         ),
         "seed": args.seed,
-        "config_mode": args.config_mode,
-        "legacy_overrides_applied": legacy_overrides_applied,
         "batch_size": config["training"]["batch_size"],
         "max_batches_per_epoch": config["training"].get("max_batches_per_epoch"),
         "max_val_batches": config["checkpointing"].get("max_val_batches"),

@@ -86,10 +86,8 @@ def main():
     )
     parser.add_argument(
         "--system_config",
-        "--cstr_config",
         type=str,
         default="configs/cstr_default.yaml",
-        dest="system_config",
         help="System config"
     )
     parser.add_argument(

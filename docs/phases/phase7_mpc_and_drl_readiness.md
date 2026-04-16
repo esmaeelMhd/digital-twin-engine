@@ -10,7 +10,8 @@ Control runtime:
 
 - `dte/control/mpc_interface.py`
   - `ProcessMPCInterface`
-  - deterministic rollout through the simulator or a loaded `DigitalTwin`
+  - deterministic rollout through the simulator or a loaded foundation model
+  - compatible with both `DigitalTwin` and `UniversalDigitalTwin`
   - current state estimate management
   - measurement assimilation hook integration
   - generic objective and constraint hooks
@@ -31,7 +32,7 @@ State correction:
   - exponential measurement filtering
   - state assimilation against a prior estimate
   - optional clipping to typed state bounds
-  - latent refresh through the `DigitalTwin` encoder when a model is attached
+  - latent refresh through either the unit or universal foundation encoder when a model is attached
   - one-step latent prediction helper
 
 Evaluation metrics:
