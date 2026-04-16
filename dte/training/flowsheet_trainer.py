@@ -13,7 +13,7 @@ import optax
 from jaxtyping import Array, PRNGKeyArray
 from tqdm import tqdm
 
-from dte.data.flowsheet_dataset import FlowsheetTrajectoryDataset
+from dte.data.datasets.flowsheet_dataset import FlowsheetTrajectoryDataset
 from dte.evaluation.flowsheet_metrics import (
     masked_mse,
     plant_balance_proxy_loss,

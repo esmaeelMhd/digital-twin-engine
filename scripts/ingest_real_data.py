@@ -173,7 +173,7 @@ def main():
         disturbance_columns = [f"__zero_disturbance_{i}__" for i in range(spec.disturbance_dim)]
 
     # -- Run ingestion -------------------------------------------------------
-    from dte.data.real_data import RealDataIngestion
+    from dte.data.ingestion.real_data import RealDataIngestion
 
     ingestor = RealDataIngestion(
         spec=spec,

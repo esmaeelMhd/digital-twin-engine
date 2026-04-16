@@ -9,7 +9,10 @@ from typing import Literal
 import equinox as eqx
 import jax
 
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, UniversalSystemMetadata
+from dte.data.datasets.universal_unit_dataset import (
+    MultiSystemTrajectoryDataset,
+    UniversalSystemMetadata,
+)
 from dte.models.universal_digital_twin import UniversalDigitalTwin
 from dte.training.universal_trainer import UniversalTrainer
 

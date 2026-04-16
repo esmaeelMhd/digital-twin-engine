@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import yaml
 
-from dte.data.dataset import TrajectoryDataset
+from dte.data.datasets.unit_dataset import TrajectoryDataset
 from dte.models.digital_twin import DigitalTwin
 from dte.simulators.registry import get_system_spec
 from dte.training.losses import LossComputer

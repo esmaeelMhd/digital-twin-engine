@@ -17,7 +17,10 @@ from typing import Any
 import numpy as np
 import yaml
 
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
+from dte.data.datasets.universal_unit_dataset import (
+    MultiSystemTrajectoryDataset,
+    SystemDatasetSource,
+)
 from dte.customer.onboarding_schema import (
     CustomerMeasurementSpec,
     CustomerOnboardingSpec,
@@ -25,7 +28,7 @@ from dte.customer.onboarding_schema import (
     CustomerUnitSpec,
 )
 from dte.customer.template_matching import REGISTERED_UNIT_CONFIGS
-from dte.data.real_data import RealDataIngestion
+from dte.data.ingestion.real_data import RealDataIngestion
 from dte.demo.engine import (
     UniversalDemoRuntime,
     build_signal_sequence,

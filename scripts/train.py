@@ -18,7 +18,7 @@ from dte.physics.registry import get_physics_loss
 from dte.training.config_resolution import resolve_single_system_training_config
 from dte.training.trainer import Trainer
 from dte.training.losses import LossComputer
-from dte.data.dataset import TrajectoryDataset
+from dte.data.datasets.unit_dataset import TrajectoryDataset
 from dte.simulators.registry import get_system_spec
 
 

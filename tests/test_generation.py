@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from dte.data.generation import load_dataset
-from dte.data.generation_generic import GenericDataGenerator
+from dte.data.generators.generic import GenericDataGenerator
 from dte.simulators.cstr import CSTRParams, CSTRSimulator
 from dte.simulators.registry import get_simulator, get_system_spec
 

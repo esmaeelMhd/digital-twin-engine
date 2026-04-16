@@ -16,7 +16,7 @@ from pathlib import Path
 
 from dte.models.digital_twin import DigitalTwin
 from dte.physics.registry import get_physics_diagnostic_fn, zero_residual
-from dte.data.dataset import TrajectoryDataset
+from dte.data.datasets.unit_dataset import TrajectoryDataset
 from dte.simulators.registry import get_system_spec
 from dte.utils.plotting import (
     plot_trajectory_comparison,

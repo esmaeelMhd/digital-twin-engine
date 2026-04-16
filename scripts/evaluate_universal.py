@@ -15,7 +15,10 @@ configure_runtime_logging()
 import jax
 import yaml
 
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
+from dte.data.datasets.universal_unit_dataset import (
+    MultiSystemTrajectoryDataset,
+    SystemDatasetSource,
+)
 from dte.evaluation.universal import (
     compute_control_sensitivity_summary,
     compute_uncertainty_summary,

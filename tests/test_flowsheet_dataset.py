@@ -3,7 +3,7 @@
 import numpy as np
 import jax
 
-from dte.data.flowsheet_dataset import FlowsheetTrajectoryDataset
+from dte.data.datasets.flowsheet_dataset import FlowsheetTrajectoryDataset
 from dte.flowsheet.examples import build_exchanger_reactor_tank_flowsheet
 from dte.flowsheet.synthetic import (
     build_synthetic_flowsheet_dataset,

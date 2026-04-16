@@ -14,7 +14,10 @@ import jax.numpy as jnp
 import numpy as np
 import yaml
 
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
+from dte.data.datasets.universal_unit_dataset import (
+    MultiSystemTrajectoryDataset,
+    SystemDatasetSource,
+)
 from dte.flowsheet.examples import (
     build_exchanger_reactor_tank_flowsheet,
     build_reactor_separator_recycle_flowsheet,

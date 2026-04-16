@@ -44,7 +44,7 @@ repo/
 │   ├── flowsheet/
 │   ├── data/
 │   │   ├── datasets/
-│   │   ├── generation/
+│   │   ├── generators/
 │   │   └── ingestion/
 │   ├── models/
 │   │   ├── unit/
@@ -180,8 +180,8 @@ Status legend:
 | `dte/data/dataset.py` | `dte/data/datasets/unit_dataset.py` | Move | Clearer name once dataset subpackages exist |
 | `dte/data/multi_system_dataset.py` | `dte/data/datasets/universal_unit_dataset.py` | Move | Aligns with universal path |
 | `dte/data/flowsheet_dataset.py` | `dte/data/datasets/flowsheet_dataset.py` | Move | Aligns with flowsheet path |
-| `dte/data/generation_generic.py` | `dte/data/generation/generic.py` | Move | This is the preferred generator boundary |
-| `dte/data/generation.py` | `dte/data/generation/cstr_legacy.py` | Move | Make legacy CSTR-specific status explicit |
+| `dte/data/generation_generic.py` | `dte/data/generators/generic.py` | Move | This is the preferred generator boundary |
+| `dte/data/generation.py` | `dte/data/generation.py` | Keep | Keep as the stable HDF5 loading / compatibility helper; it blocks a sibling `generation/` package name |
 | `dte/data/real_data.py` | `dte/data/ingestion/real_data.py` | Move | Better matches role |
 
 ### Models
@@ -284,7 +284,7 @@ folders today:
 If the repo ever does a structure cleanup, the lowest-risk order is:
 
 1. Split `dte/models/` into `unit/`, `universal/`, and `flowsheet/`.
-2. Split `dte/data/` into `datasets/`, `generation/`, and `ingestion/`.
+2. Split `dte/data/` into `datasets/`, `generators/`, and `ingestion/`.
 3. Split `dte/training/` into `unit/`, `universal/`, `flowsheet/`, and `shared/`.
 4. Leave `simulators/`, `physics/`, `laws/`, `control/`, `customer/`,
    `calibration/`, `evaluation/`, `api/`, `demo/`, and `autoresearch/` intact.

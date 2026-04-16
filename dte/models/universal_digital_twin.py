@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
-from dte.data.multi_system_dataset import UniversalSystemMetadata
+from dte.data.datasets.universal_unit_dataset import UniversalSystemMetadata
 
 
 def _count_params(module) -> int:

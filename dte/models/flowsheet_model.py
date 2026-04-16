@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
 
-from dte.data.flowsheet_dataset import FlowsheetGraphMetadata
+from dte.data.datasets.flowsheet_dataset import FlowsheetGraphMetadata
 
 
 class ResidualMLP(eqx.Module):

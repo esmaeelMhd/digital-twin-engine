@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from dte.data.flowsheet_dataset import FlowsheetTrajectoryDataset
+from dte.data.datasets.flowsheet_dataset import FlowsheetTrajectoryDataset
 from dte.flowsheet.schema import FlowsheetSpec
 from dte.flowsheet.types import EXTERNAL_SINK, EXTERNAL_SOURCE
 

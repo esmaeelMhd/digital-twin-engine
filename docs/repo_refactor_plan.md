@@ -77,7 +77,7 @@ Create the target subpackage skeleton without changing behavior.
 ### Add
 
 - `dte/data/datasets/__init__.py`
-- `dte/data/generation/__init__.py`
+- `dte/data/generators/__init__.py`
 - `dte/data/ingestion/__init__.py`
 - `dte/models/unit/__init__.py`
 - `dte/models/universal/__init__.py`
@@ -110,6 +110,13 @@ This gives a stable baseline on the main dependency chain.
 Move dataset, generation, and ingestion modules to their canonical subpackages
 while leaving import compatibility in place.
 
+Note:
+
+- the canonical generator package is `dte/data/generators/`, not
+  `dte/data/generation/`
+- `dte/data/generation.py` remains in place as the stable HDF5 loading helper,
+  because that module name already occupies the `generation` namespace
+
 ### Exact Move Order
 
 1. Move generator and ingestion helpers first.
@@ -124,8 +131,7 @@ while leaving import compatibility in place.
 
 | Old path | New path |
 | --- | --- |
-| `dte/data/generation_generic.py` | `dte/data/generation/generic.py` |
-| `dte/data/generation.py` | `dte/data/generation/cstr_legacy.py` |
+| `dte/data/generation_generic.py` | `dte/data/generators/generic.py` |
 | `dte/data/real_data.py` | `dte/data/ingestion/real_data.py` |
 | `dte/data/dataset.py` | `dte/data/datasets/unit_dataset.py` |
 | `dte/data/multi_system_dataset.py` | `dte/data/datasets/universal_unit_dataset.py` |
@@ -134,7 +140,6 @@ while leaving import compatibility in place.
 ### Compatibility Shims To Leave Behind
 
 - `dte/data/generation_generic.py`
-- `dte/data/generation.py`
 - `dte/data/real_data.py`
 - `dte/data/dataset.py`
 - `dte/data/multi_system_dataset.py`
@@ -148,7 +153,7 @@ while leaving import compatibility in place.
 | `from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset` | `from dte.data.datasets.universal_unit_dataset import MultiSystemTrajectoryDataset` |
 | `from dte.data.multi_system_dataset import UniversalSystemMetadata` | `from dte.data.datasets.universal_unit_dataset import UniversalSystemMetadata` |
 | `from dte.data.flowsheet_dataset import FlowsheetTrajectoryDataset` | `from dte.data.datasets.flowsheet_dataset import FlowsheetTrajectoryDataset` |
-| `from dte.data.generation_generic import GenericDataGenerator` | `from dte.data.generation.generic import GenericDataGenerator` |
+| `from dte.data.generation_generic import GenericDataGenerator` | `from dte.data.generators.generic import GenericDataGenerator` |
 | `from dte.data.real_data import RealDataIngestion` | `from dte.data.ingestion.real_data import RealDataIngestion` |
 
 ### Internal Files To Update In This Phase

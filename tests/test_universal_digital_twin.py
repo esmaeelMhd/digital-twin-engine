@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 
-from dte.data.multi_system_dataset import UniversalSystemMetadata
+from dte.data.datasets.universal_unit_dataset import UniversalSystemMetadata
 from dte.models.universal_digital_twin import UniversalDigitalTwin
 
 

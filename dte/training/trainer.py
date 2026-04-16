@@ -13,7 +13,7 @@ import os
 
 from dte.models.digital_twin import DigitalTwin
 from dte.training.losses import LossComputer
-from dte.data.dataset import TrajectoryDataset
+from dte.data.datasets.unit_dataset import TrajectoryDataset
 
 
 def _non_finite_loss_names(losses: Dict[str, float]) -> list[str]:

@@ -20,7 +20,10 @@ from dte.calibration.unit_calibration import (
     UnitCalibrator,
     initialize_target_model_from_pretrained,
 )
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
+from dte.data.datasets.universal_unit_dataset import (
+    MultiSystemTrajectoryDataset,
+    SystemDatasetSource,
+)
 from dte.models.universal_digital_twin import UniversalDigitalTwin
 
 

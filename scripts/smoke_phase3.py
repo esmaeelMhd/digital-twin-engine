@@ -285,7 +285,7 @@ def main() -> int:
     import jax
     import jax.numpy as jnp
 
-    from dte.data.flowsheet_dataset import FlowsheetTrajectoryDataset
+    from dte.data.datasets.flowsheet_dataset import FlowsheetTrajectoryDataset
     from dte.flowsheet.examples import (
         build_exchanger_reactor_tank_flowsheet,
         build_reactor_separator_recycle_flowsheet,

@@ -17,7 +17,7 @@ import numpy as np
 import yaml
 from jaxtyping import Array, PRNGKeyArray
 
-from dte.data.dataset import TrajectoryDataset
+from dte.data.datasets.unit_dataset import TrajectoryDataset
 from dte.laws.integration import build_law_bundle
 from dte.simulators.base import SystemSpec
 from dte.simulators.registry import get_system_spec

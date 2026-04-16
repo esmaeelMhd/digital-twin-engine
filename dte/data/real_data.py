@@ -18,7 +18,7 @@ Example
 -------
 ::
 
-    from dte.data.real_data import RealDataIngestion
+    from dte.data.ingestion.real_data import RealDataIngestion
     from dte.simulators.registry import get_system_spec
     import yaml
 

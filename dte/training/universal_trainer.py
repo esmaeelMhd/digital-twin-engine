@@ -14,7 +14,7 @@ import optax
 from jaxtyping import Array, PRNGKeyArray
 from tqdm import tqdm
 
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset
+from dte.data.datasets.universal_unit_dataset import MultiSystemTrajectoryDataset
 from dte.evaluation.universal import normalize_universal_batch
 from dte.models.universal_digital_twin import UniversalDigitalTwin
 from dte.physics.constraints import bound_penalty, positivity_penalty
