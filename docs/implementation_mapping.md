@@ -97,7 +97,7 @@ Current state:
   - state-group mixer
   - group-kind embeddings
   - descriptor-conditioned FiLM modulation
-- `dte/models/grouped_encoder.py` now adds a grouped typed encoder to the single-system path
+- `dte/models/unit/grouped_encoder.py` now adds a grouped typed encoder to the single-system path
 - `DigitalTwin.from_config` preserves the flat encoder by default and enables the grouped encoder only when configured
 
 Status:
@@ -108,7 +108,7 @@ Status:
 
 Current state:
 
-- generic decoder constraints exist in `dte/models/decoder.py`
+- generic decoder constraints exist in `dte/models/unit/decoder.py`
 - per-system physics residuals exist in `dte/physics/*.py`
 - `dte/physics/constraints.py` now provides reusable positivity, bound, mass-balance, energy-balance, and monotonicity helpers
 - the universal trainer now uses the bound and positivity utilities as optional rollout regularizers
@@ -189,7 +189,7 @@ Current state:
 
 - `ProcessUnitSpec` now exposes `family`, `subtype`, `unit_type`, and `law_tags`
 - the default `cstr`, `heat_exchanger`, and `two_tank` configs now declare this metadata
-- `dte/data/multi_system_dataset.py` now materializes:
+- `dte/data/datasets/universal_unit_dataset.py` now materializes:
   - `family_id`
   - `subtype_id`
   - `law_tag_mask`
@@ -209,7 +209,7 @@ Status:
 
 Current state:
 
-- `dte/models/universal_digital_twin.py` now includes optional residual bottleneck adapters for:
+- `dte/models/universal/digital_twin.py` now includes optional residual bottleneck adapters for:
   - encoder features
   - latent drift / neural-CDE path features
   - decoder group features
@@ -279,13 +279,13 @@ Current state:
 - `dte/flowsheet/examples.py` now provides two initial demo graphs:
   - exchanger -> reactor -> tank
   - reactor -> separator -> recycle -> reactor
-- `dte/data/flowsheet_dataset.py` now provides:
+- `dte/data/datasets/flowsheet_dataset.py` now provides:
   - `FlowsheetGraphMetadata`
   - `FlowsheetTrajectoryDataset`
   - HDF5 save/load support with topology metadata
   - preserved `seq_len` / `stride` roundtrips
 - `dte/flowsheet/synthetic.py` now provides a lightweight synthetic data path so Phase 3 can be trained and tested without adding a full plant simulator stack yet
-- `dte/models/flowsheet_model.py` now provides a first shared graph model with:
+- `dte/models/flowsheet/flowsheet_model.py` now provides a first shared graph model with:
   - shared unit backbone
   - stream-message aggregation
   - graph-level update block
@@ -296,7 +296,7 @@ Current state:
   - unit-output consistency loss
   - plant-balance proxy loss
   - rollout stability penalty
-- `dte/training/flowsheet_trainer.py` now provides a runnable train/validate loop for the graph model
+- `dte/training/flowsheet/trainer.py` now provides a runnable train/validate loop for the graph model
 - targeted Phase 3 tests now cover:
   - schema validation
   - dataset/HDF5 roundtrip

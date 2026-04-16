@@ -40,8 +40,8 @@ The main cleanup needs are now:
 
 - System abstraction: `dte/simulators/base.py`
 - Registry resolution: `dte/simulators/registry.py`
-- Single-system model: `dte/models/digital_twin.py`
-- Trainer: `dte/training/trainer.py`
+- Single-system model: `dte/models/unit/digital_twin.py`
+- Trainer: `dte/training/unit/trainer.py`
 - Evaluation: `scripts/evaluate.py`
 
 `SystemSpec` remains the stable base abstraction, and `ProcessUnitSpec` now extends it with richer metadata without breaking older callers.
@@ -56,9 +56,9 @@ The repo now has channel-level roles, bounds, parameter descriptors, law tags, a
 
 ### 3. Universal shared-checkpoint path
 
-- Dataset: `dte/data/multi_system_dataset.py`
-- Model: `dte/models/universal_digital_twin.py`
-- Trainer: `dte/training/universal_trainer.py`
+- Dataset: `dte/data/datasets/universal_unit_dataset.py`
+- Model: `dte/models/universal/digital_twin.py`
+- Trainer: `dte/training/universal/trainer.py`
 - Train/eval scripts: `scripts/train_universal.py`, `scripts/evaluate_universal.py`
 
 This path is the foundation-style mixed-system route. It uses padding, masks, typed group metadata, and richer conditioning tables.
@@ -76,9 +76,9 @@ Unit adaptation is implemented end to end. Flowsheet adaptation is not yet wired
 ### 5. Flowsheet stack
 
 - Schema/types/examples: `dte/flowsheet/`
-- Dataset: `dte/data/flowsheet_dataset.py`
-- Model: `dte/models/flowsheet_model.py`
-- Trainer: `dte/training/flowsheet_trainer.py`
+- Dataset: `dte/data/datasets/flowsheet_dataset.py`
+- Model: `dte/models/flowsheet/flowsheet_model.py`
+- Trainer: `dte/training/flowsheet/trainer.py`
 
 This is real code, not a placeholder, but it is still a thin slice: synthetic data, small graphs, and smoke-style workflows rather than a production-grade plant stack.
 

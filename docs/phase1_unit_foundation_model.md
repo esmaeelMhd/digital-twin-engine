@@ -9,7 +9,7 @@ This note documents the Phase 1 implementation that turns the current universal/
 - `StateChannel`, `SignalChannel`, `ParameterDescriptor`, and `TopologyPort` schemas in `dte/core/state_schema.py`
 - `ProcessUnitSpec` as a backward-compatible extension of `SystemSpec`
 - typed channel metadata for the default `cstr`, `heat_exchanger`, and `two_tank` configs
-- optional grouped single-system encoder in `dte/models/grouped_encoder.py`
+- optional grouped single-system encoder in `dte/models/unit/grouped_encoder.py`
 - reusable physical constraint utilities in `dte/physics/constraints.py`
 - multi-horizon universal training support (`loss_weights.k_step` + `multi_horizon.k_steps`)
 - universal rollout regularizers for `state_bounds` and `positivity`

@@ -16,14 +16,14 @@ Core modules:
 - `dte/flowsheet/examples.py`
   - exchanger -> reactor -> tank
   - reactor -> separator -> recycle -> reactor
-- `dte/data/flowsheet_dataset.py`
+- `dte/data/datasets/flowsheet_dataset.py`
   - `FlowsheetGraphMetadata`
   - `FlowsheetTrajectoryDataset`
   - HDF5 save/load with topology metadata and preserved `seq_len` / `stride`
 - `dte/flowsheet/synthetic.py`
   - synthetic data generator for the example graphs
   - convenience dataset builder for tests and smoke runs
-- `dte/models/flowsheet_model.py`
+- `dte/models/flowsheet/flowsheet_model.py`
   - shared unit backbone
   - stream message projection
   - graph-level correction block
@@ -33,7 +33,7 @@ Core modules:
   - `unit_output_consistency_loss`
   - `plant_balance_proxy_loss`
   - `rollout_stability_penalty`
-- `dte/training/flowsheet_trainer.py`
+- `dte/training/flowsheet/trainer.py`
   - compute loss
   - train step
   - validate

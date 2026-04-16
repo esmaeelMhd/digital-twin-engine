@@ -104,7 +104,7 @@ Targeted verification for Phase 2:
 
 - `pytest tests/test_universal_digital_twin.py tests/test_universal_trainer_phase1.py tests/test_unit_calibration.py tests/test_simulator_registry.py -q`
 - `pytest tests/test_digital_twin.py tests/test_grouped_encoder.py tests/test_phase1_process_unit_spec.py -q`
-- `python -m py_compile dte/data/multi_system_dataset.py dte/models/universal_digital_twin.py dte/training/universal_trainer.py dte/calibration/unit_calibration.py scripts/calibrate_unit.py`
+- `python -m py_compile dte/data/datasets/universal_unit_dataset.py dte/models/universal/digital_twin.py dte/training/universal/trainer.py dte/calibration/unit_calibration.py scripts/calibrate_unit.py`
 
 ## Reusable Smoke Script
 
@@ -126,5 +126,5 @@ Useful overrides:
 ## Notes
 
 - the single-system `DigitalTwin` path is unchanged
-- the old transfer utilities in `dte/training/transfer.py` still exist for single-system fine-tuning
+- the old transfer utilities in `dte/training/shared/transfer.py` still exist for single-system fine-tuning
 - the new calibration path is universal-model specific

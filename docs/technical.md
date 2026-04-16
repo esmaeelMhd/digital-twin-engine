@@ -147,11 +147,11 @@ system-specific branching in model classes.
 
 Implemented in:
 
-- `dte/models/encoder.py`
-- `dte/models/grouped_encoder.py`
-- `dte/models/decoder.py`
-- `dte/models/latent_sde.py`
-- `dte/models/digital_twin.py`
+- `dte/models/unit/encoder.py`
+- `dte/models/unit/grouped_encoder.py`
+- `dte/models/unit/decoder.py`
+- `dte/models/unit/latent_sde.py`
+- `dte/models/unit/digital_twin.py`
 
 ## 3.1 Encoder Path
 
@@ -228,9 +228,9 @@ class DigitalTwin(eqx.Module):
 
 Implemented in:
 
-- `dte/data/multi_system_dataset.py`
-- `dte/models/universal_digital_twin.py`
-- `dte/training/universal_trainer.py`
+- `dte/data/datasets/universal_unit_dataset.py`
+- `dte/models/universal/digital_twin.py`
+- `dte/training/universal/trainer.py`
 - `dte/calibration/unit_calibration.py`
 
 ## 4.1 Universal Metadata
@@ -364,9 +364,9 @@ Instead, the repo currently supports parallel paths:
 
 Implemented in:
 
-- `dte/data/flowsheet_dataset.py`
-- `dte/models/flowsheet_model.py`
-- `dte/training/flowsheet_trainer.py`
+- `dte/data/datasets/flowsheet_dataset.py`
+- `dte/models/flowsheet/flowsheet_model.py`
+- `dte/training/flowsheet/trainer.py`
 
 This is a real path, but still thin-slice:
 
