@@ -24,6 +24,8 @@ Use the companion diagrams with distinct roles:
   deployment, and target-state movement flow
 - [`repo_structure_target.md`](repo_structure_target.md): repo-aligned package
   structure target and migration map
+- [`repo_refactor_plan.md`](repo_refactor_plan.md): phased execution plan for
+  moving from the current layout to the target package structure
 
 ---
 
