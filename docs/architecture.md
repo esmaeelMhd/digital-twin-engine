@@ -22,6 +22,8 @@ Use the companion diagrams with distinct roles:
 - [`diagram.mmd`](diagram.mmd): structural architecture map
 - [`data_flow.mmd`](data_flow.mmd): end-to-end offline training, customer
   deployment, and target-state movement flow
+- [`config_taxonomy.md`](config_taxonomy.md): active config classes, legacy
+  boundary, and future config layout guidance
 - [`legacy/docs/repo_structure_target.md`](../legacy/docs/repo_structure_target.md): repo-aligned package
   structure target and migration map
 - [`legacy/docs/repo_refactor_plan.md`](../legacy/docs/repo_refactor_plan.md): phased execution plan for
