@@ -10,16 +10,16 @@ intermediate state.
 
 Current status:
 
-- Phase 1 has landed with canonical data import paths and compatibility modules
-  still in place.
-- Phase 2 has landed with canonical model import paths and compatibility modules
-  still in place.
-- Phase 3 has landed with canonical training import paths and compatibility
-  modules still in place.
-- Phase 4 has landed: runtime code, public examples, and install checks now use
+- Phase 1 has landed: canonical data paths are the only remaining runtime data
+  module paths.
+- Phase 2 has landed: canonical model paths are the only remaining runtime
+  model module paths.
+- Phase 3 has landed: canonical training paths are the only remaining runtime
+  training module paths.
+- Phase 4 has landed: runtime code, public examples, and install checks use the
   canonical import paths.
-- The next major move is Phase 5/6: let the compatibility layout sit for a
-  stable cycle, then decide whether to keep or remove the shim modules.
+- Phase 5 remains deferred: the optional late splits are still not warranted.
+- Phase 6 has landed: compatibility shim modules have been removed.
 
 ---
 
@@ -470,9 +470,17 @@ Only do these if there is an actual maintenance reason:
 
 These are not part of the core cleanup.
 
+Current state:
+
+- deferred
+
 ---
 
 ## Phase 6. Remove Compatibility Shims
+
+Current state:
+
+- implemented
 
 ### Preconditions
 
@@ -480,7 +488,8 @@ These are not part of the core cleanup.
 - docs are updated
 - scripts are updated
 - tests are updated
-- at least one stable cycle has passed with the shim layout in place
+- at least one stable cycle has passed with the shim layout in place, or the
+  user has explicitly approved early removal
 
 ### Removal Order
 
@@ -520,7 +529,8 @@ If this work is done as actual code changes, the best execution sequence is:
 7. Patch imports to canonical training paths.
 8. Run targeted tests after each phase.
 9. Run the full test suite after Phase 4 or Phase 6.
-10. Remove shims only after a stable cycle.
+10. Remove shims only after a stable cycle, or after an explicit user-directed
+    cleanup pass.
 
 That sequence minimizes churn, keeps diffs reviewable, and matches the actual
 dependency graph of the current repo.
