@@ -185,16 +185,28 @@ def build_onboarding_templates(
         for item in demo_config.get("demos", [])
         if item.get("system")
     }
-    templates: list[dict[str, Any]] = []
-    for template_id, config_path in REGISTERED_UNIT_CONFIGS.items():
-        system_config = system_configs.get(template_id)
-        if system_config is None and config_path.exists():
-            with config_path.open("r", encoding="utf-8") as handle:
-                system_config = yaml.safe_load(handle) or {}
-        if system_config is None:
-            continue
 
+    available_systems: list[tuple[str, dict[str, Any]]] = []
+    if system_configs:
+        available_systems.extend(
+            (str(name), config)
+            for name, config in system_configs.items()
+        )
+    else:
+        for template_id, config_path in REGISTERED_UNIT_CONFIGS.items():
+            if not config_path.exists():
+                continue
+            with config_path.open("r", encoding="utf-8") as handle:
+                fallback_config = yaml.safe_load(handle) or {}
+            available_systems.append((template_id, fallback_config))
+
+    templates: list[dict[str, Any]] = []
+    seen_specs: set[str] = set()
+    for _system_name, system_config in available_systems:
         spec = get_system_spec(system_config)
+        if spec.name in seen_specs:
+            continue
+        seen_specs.add(spec.name)
         demo = demos_by_system.get(spec.name, {})
         templates.append(
             {
