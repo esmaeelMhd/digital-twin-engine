@@ -123,6 +123,7 @@ Preferred behavior:
 2. move or remove the superseded path in the same change or immediately after
 3. repair references
 4. update tests to only validate the canonical surface
+5. **Strict Artifact Cleanup:** Upon completion of any phase, all temporary configs, debug training scripts, intermediate evaluation harnesses, and ad hoc outputs specifically created for that phase (e.g., `phase0_smoke.yaml`, `train_debug_phase1.py`) must be deleted. They must not remain in the active repository.
 
 This includes CLI aliases, saved artifact aliases, fallback config names, and
 compatibility-only resolution modes.
@@ -159,18 +160,15 @@ They should not sit beside the active architecture as if they were source.
 
 ## Non-Negotiable Architecture Decisions
 
-### 1. Universal becomes primary
+### 1. Universal is Primary; Single-System is Legacy
 
 `UniversalDigitalTwin` is the primary model path.
 
-`DigitalTwin` remains only for:
+`DigitalTwin` and the single-system training paths are **deprecated immediately**. They do not remain for compatibility. They must be moved to `legacy/` during Phase 0 to force all tests and baselines to harden the Universal architecture.
 
-- compatibility
-- local ablations
-- bootstrap comparisons
-- simple unit-only smoke checks
+### 1.b. Residual Physics is the Standard
 
-New platform work should not center the single-system path.
+The Universal decoder must predict *residuals* on top of mechanistic base laws (derived from `dte/laws/`), rather than predicting the full state directly. This ensures strict mass/energy conservation guarantees during inference and prevents unchecked rollout drift.
 
 ### 2. Flowsheet is no longer experimental
 
@@ -237,7 +235,9 @@ The program should run as four parallel workstreams with one integration owner:
 Scope:
 
 - universal data
-- universal model
+- universal model (using MoE or regime-conditioned routing for diverse physics)
+- stiffness-aware ODE/SDE solvers for fast kinetic regimes
+- mechanistic base + residual prediction decoder
 - universal training
 - transfer and adaptation benchmarking
 
@@ -291,6 +291,7 @@ Scope:
 
 - state correction
 - model-backed and simulator-backed MPC-facing runtime
+- uncertainty-quantification (UQ) penalized control cost functions to prevent MPC exploitation
 - RL-facing environment wrapper
 - API and demo cutover to current architecture
 
@@ -325,6 +326,7 @@ Required outputs:
 Acceptance gate:
 
 - there is no ambiguity about which model path, adaptation path, and control path are primary
+- all transitional Phase 0 planning artifacts are removed from the active tree.
 
 ## Phase 1: Unit Foundation V1
 
@@ -354,6 +356,10 @@ Acceptance gate:
 - universal adaptation beats scratch or equal-budget warm starts on target variants
 - rollout stability is acceptable on held-out regime variants
 - control-response fidelity is measured, not assumed
+
+Current execution plan:
+
+- [docs/phase1_completion_plan.md](/home/ismayil/digital-twin-engine/docs/phase1_completion_plan.md:1)
 
 ## Phase 2: Customer Adaptation V1
 
@@ -540,17 +546,20 @@ By the end of the program, the repo should have:
 - one active config taxonomy with no duplicate historical branches in the live surface
 - one active documentation surface with deprecated material moved to `legacy/`
 - one active test surface centered on the canonical platform paths
+- **Zero Phase Artifacts:** All temporary, phase-specific scripts, configs, and outputs (`phase1_debug`, `smoke_phase3.py`, etc.) are completely removed from the repository.
 
 ## Recommended Sequence Of Execution
 
 If there is only one integration owner, the order should be:
 
-1. lock architecture and scorecard
-2. finish unit foundation
+1. lock architecture and scorecard (move single-system to legacy)
+2. finish unit foundation (must clear stiff kinetics and transfer gates)
 3. finish customer adaptation
 4. finish flowsheet composition
 5. finish control readiness
 6. cut over API/demo/docs
+
+**Hard Block:** Do not start Phase 3 (Flowsheet) or Phase 4 (Control) until Phase 1 (Unit Foundation) rollout metrics are strictly met. Scaling unstable nodes leads to exponential error compounding in graphs and catastrophic MPC exploitation.
 
 Do not do flowsheet pretraining before flowsheet composition is stable.
 Do not do autoresearch-first optimization before the scorecard and primary paths are in place.

@@ -20,6 +20,30 @@ def test_phase1_regime_training_config_resolves_all_sources():
     assert all(source.data_dir.startswith("data/phase1_regime/") for source in sources)
 
 
+def test_phase1_regime_training_config_targets_current_rollout_outliers():
+    config = _load_config("configs/training_universal_phase1_regime.yaml")
+    weights = {item["name"]: float(item["weight"]) for item in config["data"]["systems"]}
+    terms = {item["name"]: item for item in config["system_specific_losses"]["role_derivative_terms"]}
+
+    assert float(config["loss_weights"]["k_step"]) == 0.25
+    assert weights["cstr"] == 1.25
+    assert weights["cstr_fast_kinetics"] == 1.75
+    assert weights["separator"] == 1.5
+    assert weights["separator_sharp_split"] == 2.0
+
+    assert terms["reactor_species_dynamics"]["systems"] == ["cstr", "cstr_fast_kinetics"]
+    assert terms["reactor_species_dynamics"]["state_role"] == "concentration"
+    assert float(terms["reactor_species_dynamics"]["weight"]) == 0.35
+
+    assert terms["separator_cut_dynamics"]["systems"] == ["separator", "separator_sharp_split"]
+    assert terms["separator_cut_dynamics"]["state_role"] == "concentration"
+    assert float(terms["separator_cut_dynamics"]["weight"]) == 0.35
+
+    assert terms["separator_thermal_dynamics"]["systems"] == ["separator", "separator_sharp_split"]
+    assert terms["separator_thermal_dynamics"]["state_role"] == "temperature"
+    assert float(terms["separator_thermal_dynamics"]["weight"]) == 0.15
+
+
 def test_phase1_regime_rebalanced_training_config_resolves_all_sources():
     config = _load_config("configs/training_universal_phase1_regime_rebalanced.yaml")
     sources = _load_sources(config)

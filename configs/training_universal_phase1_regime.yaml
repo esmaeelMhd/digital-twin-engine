@@ -27,9 +27,15 @@ model:
     enabled: true
     hidden_dim: 64
     n_layers: 2
+  latent_solver:
+    method: kvaerno5
+    rtol: 1.0e-3
+    atol: 1.0e-4
+    dt0_factor: 1.0
+    max_steps: 8192
 
 training:
-  batch_size: 64
+  batch_size: 32
   seq_len: 48
   stride: 8
   val_split: 0.2
@@ -41,10 +47,25 @@ loss_weights:
   reconstruction: 1.0
   trajectory: 1.0
   one_step: 0.5
-  k_step: 0.0
+  k_step: 0.25
   kl: 0.0001
   state_bounds: 0.0
   positivity: 0.0
+
+system_specific_losses:
+  role_derivative_terms:
+    - name: reactor_species_dynamics
+      systems: [cstr, cstr_fast_kinetics]
+      state_role: concentration
+      weight: 0.35
+    - name: separator_cut_dynamics
+      systems: [separator, separator_sharp_split]
+      state_role: concentration
+      weight: 0.35
+    - name: separator_thermal_dynamics
+      systems: [separator, separator_sharp_split]
+      state_role: temperature
+      weight: 0.15
 
 multi_horizon:
   k_steps: [3, 5]
@@ -66,11 +87,11 @@ data:
     - name: cstr
       system_config: configs/cstr_default.yaml
       data_dir: data/phase1_regime/cstr/
-      weight: 1.0
+      weight: 1.25
     - name: cstr_fast_kinetics
       system_config: configs/cstr_fast_kinetics_hot_feed.yaml
       data_dir: data/phase1_regime/cstr_fast_kinetics/
-      weight: 1.0
+      weight: 1.75
     - name: isothermal_cstr
       system_config: configs/isothermal_cstr_default.yaml
       data_dir: data/phase1_regime/isothermal_cstr/
@@ -106,11 +127,11 @@ data:
     - name: separator
       system_config: configs/separator_default.yaml
       data_dir: data/phase1_regime/separator/
-      weight: 1.0
+      weight: 1.5
     - name: separator_sharp_split
       system_config: configs/separator_sharp_split.yaml
       data_dir: data/phase1_regime/separator_sharp_split/
-      weight: 1.0
+      weight: 2.0
     - name: bioreactor_compartment
       system_config: configs/bioreactor_compartment_default.yaml
       data_dir: data/phase1_regime/bioreactor_compartment/

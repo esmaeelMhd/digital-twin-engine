@@ -34,9 +34,20 @@ def resolve_workspace_dir(raw_workspace: str | None) -> Path:
     return path
 
 
+def _resolve_jax_platform_env(platform: str) -> str:
+    if platform == "gpu":
+        return "cuda,cpu"
+    return platform
+
+
 def load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -134,12 +145,12 @@ def _load_universal_sources(config: dict[str, Any]):
 
 
 def _build_target_only_universal_config(
-    source_config: dict[str, Any],
+    full_catalog_config: dict[str, Any],
     *,
     target_name: str,
     n_epochs: int,
 ) -> dict[str, Any]:
-    config = copy.deepcopy(source_config)
+    config = copy.deepcopy(full_catalog_config)
     systems = config.get("data", {}).get("systems", [])
     target_systems = [item for item in systems if str(item.get("name")) == target_name]
     if len(target_systems) != 1:
@@ -157,7 +168,211 @@ def _build_target_only_universal_config(
     config["evaluation"].setdefault("uncertainty_batches", 0)
     config["evaluation"].setdefault("uncertainty_samples", 0)
     config["evaluation"].setdefault("sensitivity_batches", 0)
+
+    system_specific_losses = config.get("system_specific_losses", {})
+    role_derivative_terms = system_specific_losses.get("role_derivative_terms", [])
+    if role_derivative_terms:
+        filtered_terms: list[dict[str, Any]] = []
+        for term in role_derivative_terms:
+            filtered_term = copy.deepcopy(term)
+            filtered_term["systems"] = [
+                system_name
+                for system_name in filtered_term.get("systems", [])
+                if system_name == target_name
+            ]
+            if filtered_term["systems"]:
+                filtered_terms.append(filtered_term)
+        if filtered_terms:
+            config.setdefault("system_specific_losses", {})["role_derivative_terms"] = filtered_terms
+        else:
+            config.pop("system_specific_losses", None)
     return config
+
+
+def _batches_per_epoch(training_config: dict[str, Any], *, n_train_samples: int) -> int:
+    """Resolve the effective train batches per epoch for a target-only run."""
+
+    batch_size = min(int(training_config["batch_size"]), max(1, int(n_train_samples)))
+    full_batches = max(1, int(n_train_samples) // batch_size)
+    max_batches_per_epoch = training_config.get("max_batches_per_epoch")
+    if max_batches_per_epoch is None:
+        return full_batches
+    return max(1, min(full_batches, int(max_batches_per_epoch)))
+
+
+def _build_transfer_warm_start_config(
+    target_config: dict[str, Any],
+    *,
+    n_train_samples: int,
+    optimizer_variant: str = "default",
+) -> dict[str, Any]:
+    """Retune the optimizer for few-shot warm-start calibration.
+
+    The transfer target runs for a small number of effective steps, so reusing the
+    long pretraining schedule makes warm starts decay too slowly and overshoot.
+    Keep the model/training shape identical, but derive the optimizer schedule from
+    the actual target dataset size.
+    """
+
+    config = copy.deepcopy(target_config)
+    training_cfg = config.setdefault("training", {})
+    optimizer_cfg = config.setdefault("optimizer", {})
+
+    if optimizer_variant == "conservative":
+        training_cfg["n_epochs"] = min(int(training_cfg["n_epochs"]), 2)
+    elif optimizer_variant != "default":
+        raise BaselineError(f"Unsupported transfer optimizer variant: {optimizer_variant}")
+
+    steps_per_epoch = _batches_per_epoch(training_cfg, n_train_samples=n_train_samples)
+    total_steps = max(1, int(training_cfg["n_epochs"]) * steps_per_epoch)
+    if optimizer_variant == "conservative":
+        warmup_steps = max(1, min(4, total_steps - 1))
+        optimizer_cfg["peak_lr"] = min(float(optimizer_cfg["peak_lr"]), 1e-4)
+    else:
+        warmup_steps = max(1, min(8, total_steps // 10))
+        if warmup_steps >= total_steps:
+            warmup_steps = max(1, total_steps - 1)
+        optimizer_cfg["peak_lr"] = min(float(optimizer_cfg["peak_lr"]), 2e-4)
+
+    optimizer_cfg["total_steps"] = total_steps
+    optimizer_cfg["warmup_steps"] = warmup_steps
+    return config
+
+
+def _resolve_config_path(raw_path: str | Path) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def _logical_system_name(system_config: dict[str, Any]) -> str:
+    return str(system_config.get("system", {}).get("name", "")).strip()
+
+
+def _system_family(system_config: dict[str, Any]) -> str:
+    return str(system_config.get("system", {}).get("family", "")).strip()
+
+
+def _parameter_descriptors(system_config: dict[str, Any]) -> list[str]:
+    return [
+        str(descriptor.get("name"))
+        for descriptor in system_config.get("system", {}).get("parameter_descriptors", [])
+        if descriptor.get("name")
+    ]
+
+
+def _parameter_value_map(system_config: dict[str, Any]) -> dict[str, float]:
+    logical_name = _logical_system_name(system_config)
+    values = system_config.get(logical_name, {})
+    return {
+        str(name): float(value)
+        for name, value in values.items()
+        if isinstance(value, (int, float))
+    }
+
+
+def _select_transfer_source_system_config(
+    target_system_config: dict[str, Any],
+    source_sources,
+) -> dict[str, Any] | None:
+    target_logical_name = _logical_system_name(target_system_config)
+    exact_name_match = None
+    logical_name_match = None
+
+    for source in source_sources:
+        source_system_config = load_yaml(_resolve_config_path(source.system_config))
+        if source.name == target_logical_name:
+            exact_name_match = source_system_config
+            break
+        if _logical_system_name(source_system_config) == target_logical_name and logical_name_match is None:
+            logical_name_match = source_system_config
+
+    return exact_name_match or logical_name_match
+
+
+def _shifted_param_indices(
+    target_system_config: dict[str, Any],
+    source_system_config: dict[str, Any] | None,
+) -> tuple[int, ...]:
+    if source_system_config is None:
+        return ()
+
+    target_descriptors = _parameter_descriptors(target_system_config)
+    source_values = _parameter_value_map(source_system_config)
+    target_values = _parameter_value_map(target_system_config)
+    shifted: list[int] = []
+    for idx, name in enumerate(target_descriptors):
+        if name not in source_values or name not in target_values:
+            continue
+        if not np.isclose(source_values[name], target_values[name], rtol=1e-6, atol=1e-9):
+            shifted.append(idx)
+    return tuple(shifted)
+
+
+def _build_transfer_calibration_policy(
+    target_config: dict[str, Any],
+    source_sources,
+) -> dict[str, Any]:
+    target_sources = _load_universal_sources(target_config)
+    if len(target_sources) != 1:
+        raise BaselineError("Target-only transfer config must contain exactly one system.")
+
+    target_name = str(target_sources[0].name)
+    target_system_config = load_yaml(_resolve_config_path(target_sources[0].system_config))
+    target_family = _system_family(target_system_config)
+    source_system_config = _select_transfer_source_system_config(target_system_config, source_sources)
+    active_param_indices = list(_shifted_param_indices(target_system_config, source_system_config))
+
+    if target_name == "cstr_fast_kinetics" or (target_family == "reactor" and active_param_indices):
+        return {
+            "name": "reactor_fresh_dynamics_full",
+            "optimizer_variant": "default",
+            "trainable_mode": "full",
+            "tune_normalization": True,
+            "tune_physics_params": False,
+            "active_param_indices": [],
+            "restart_seed_offsets": [0],
+            "selection_metric": "rollout_rmse",
+            "init_kwargs": {
+                "copy_drift_backbone": False,
+                "copy_cde_backbone": False,
+                "copy_drift_adapter": False,
+            },
+        }
+
+    if target_name == "two_tank_high_throughput" or (target_family == "hydraulic" and active_param_indices):
+        return {
+            "name": "hydraulic_fresh_cde_adapters_norm",
+            "optimizer_variant": "default",
+            "trainable_mode": "adapters",
+            "tune_normalization": True,
+            "tune_physics_params": False,
+            "active_param_indices": [],
+            "restart_seed_offsets": [0],
+            "selection_metric": "rollout_rmse",
+            "init_kwargs": {
+                "copy_drift_backbone": True,
+                "copy_cde_backbone": False,
+                "copy_drift_adapter": True,
+            },
+        }
+
+    return {
+        "name": "full_warm_start",
+        "optimizer_variant": "default",
+        "trainable_mode": "full",
+        "tune_normalization": True,
+        "tune_physics_params": False,
+        "active_param_indices": [],
+        "restart_seed_offsets": [0],
+        "selection_metric": "rollout_rmse",
+        "init_kwargs": {
+            "copy_drift_backbone": True,
+            "copy_cde_backbone": True,
+            "copy_drift_adapter": True,
+        },
+    }
 
 
 def _build_transfer_source_config(
@@ -168,8 +383,9 @@ def _build_transfer_source_config(
 ) -> dict[str, Any]:
     config = copy.deepcopy(training_config)
     original_systems = config.get("data", {}).get("systems", [])
+    transfer_target_set = set(transfer_targets)
     filtered_systems = [
-        item for item in original_systems if str(item.get("name")) not in set(transfer_targets)
+        item for item in original_systems if str(item.get("name")) not in transfer_target_set
     ]
     if not filtered_systems:
         raise BaselineError("Transfer source pretraining would have zero source systems.")
@@ -177,6 +393,25 @@ def _build_transfer_source_config(
     config.setdefault("training", {})["n_epochs"] = int(source_epochs)
     config.setdefault("checkpointing", {})["val_every"] = 1
     config["checkpointing"]["save_every"] = int(source_epochs)
+
+    source_system_names = {str(item["name"]) for item in filtered_systems}
+    system_specific_losses = config.get("system_specific_losses", {})
+    role_derivative_terms = system_specific_losses.get("role_derivative_terms", [])
+    if role_derivative_terms:
+        filtered_terms: list[dict[str, Any]] = []
+        for term in role_derivative_terms:
+            filtered_term = copy.deepcopy(term)
+            filtered_term["systems"] = [
+                system_name
+                for system_name in filtered_term.get("systems", [])
+                if system_name in source_system_names
+            ]
+            if filtered_term["systems"]:
+                filtered_terms.append(filtered_term)
+        if filtered_terms:
+            config.setdefault("system_specific_losses", {})["role_derivative_terms"] = filtered_terms
+        else:
+            config.pop("system_specific_losses", None)
     return config
 
 
@@ -185,6 +420,62 @@ def _resolve_checkpoint(run_dir: Path) -> Path:
         if candidate.exists():
             return candidate
     raise BaselineError(f"No checkpoint found in {run_dir}")
+
+
+def _has_completed_universal_run(run_dir: Path) -> bool:
+    """Return True when a universal training run has a usable checkpoint and summary."""
+
+    return (run_dir / "summary.json").exists() and any(
+        candidate.exists() for candidate in (run_dir / "best_model.eqx", run_dir / "final_model.eqx")
+    )
+
+
+def _same_yaml_payload(path: Path, expected: dict[str, Any]) -> bool:
+    """Return True when a YAML file exists and matches the expected payload."""
+
+    if not path.exists():
+        return False
+    return load_yaml(path) == expected
+
+
+def _same_json_payload(path: Path, expected: dict[str, Any]) -> bool:
+    """Return True when a JSON file exists and matches the expected payload."""
+
+    if not path.exists():
+        return False
+    return load_json(path) == expected
+
+
+def _select_best_transfer_restart(
+    restart_results: list[dict[str, Any]],
+    *,
+    selection_metric: str,
+) -> dict[str, Any]:
+    """Pick the best warm-start restart using a deterministic comparison rule."""
+
+    if not restart_results:
+        raise BaselineError("Expected at least one warm-start restart result.")
+
+    if selection_metric == "rollout_rmse":
+        return min(
+            restart_results,
+            key=lambda item: (
+                float(item["rollout_metrics"]["rmse"]),
+                float(item["train_summary"]["per_system_val_losses"][item["target"]]["total"]),
+                int(item["restart_index"]),
+            ),
+        )
+    if selection_metric == "total_loss":
+        return min(
+            restart_results,
+            key=lambda item: (
+                float(item["train_summary"]["per_system_val_losses"][item["target"]]["total"]),
+                float(item["rollout_metrics"]["rmse"]),
+                int(item["restart_index"]),
+            ),
+        )
+
+    raise BaselineError(f"Unsupported transfer restart selection metric: {selection_metric}")
 
 
 def _state_bounds(spec) -> tuple[np.ndarray, np.ndarray]:
@@ -309,6 +600,7 @@ def _run_control_gate(
 
 def _run_transfer_benchmark(
     *,
+    full_training_config_path: Path,
     source_config_path: Path,
     source_checkpoint_path: Path,
     output_dir: Path,
@@ -329,6 +621,7 @@ def _run_transfer_benchmark(
     from dte.models.universal.digital_twin import UniversalDigitalTwin
     from dte.training.universal.trainer import UniversalTrainer
 
+    full_training_config = load_yaml(full_training_config_path)
     source_config = load_yaml(source_config_path)
     source_sources = _load_universal_sources(source_config)
     source_metadata = MultiSystemTrajectoryDataset.metadata_from_sources(source_sources)
@@ -346,13 +639,20 @@ def _run_transfer_benchmark(
 
     for idx, target_name in enumerate(transfer_targets):
         target_config = _build_target_only_universal_config(
-            source_config,
+            full_training_config,
             target_name=target_name,
             n_epochs=transfer_epochs,
         )
+        calibration_policy = _build_transfer_calibration_policy(
+            target_config,
+            source_sources,
+        )
         target_dir = output_dir / target_name
         target_dir.mkdir(parents=True, exist_ok=True)
-        write_json(target_dir / "target_config.json", target_config)
+        target_config_path = target_dir / "target_config.json"
+        warm_start_config_path = target_dir / "warm_start_config.json"
+        calibration_policy_path = target_dir / "calibration_policy.json"
+        existing_summary_path = target_dir / "summary.json"
 
         target_sources = _load_universal_sources(target_config)
         target_dataset = MultiSystemTrajectoryDataset.from_sources(
@@ -362,45 +662,123 @@ def _run_transfer_benchmark(
         )
         train_dataset, val_dataset = target_dataset.split(float(target_config["training"].get("val_split", 0.2)))
         target_metadata = train_dataset.metadata
+        warm_start_config = _build_transfer_warm_start_config(
+            target_config,
+            n_train_samples=train_dataset.n_samples,
+            optimizer_variant=str(calibration_policy.get("optimizer_variant", "default")),
+        )
+        evaluation_key = jax.random.PRNGKey(seed + 1000 + 10 * idx)
+        per_system_eval_key, forecast_eval_key, rollout_eval_key = jax.random.split(
+            evaluation_key,
+            3,
+        )
 
-        warm_model = initialize_target_model_from_pretrained(
-            source_model,
-            source_metadata,
-            target_metadata,
-            target_config,
-            jax.random.PRNGKey(seed + 10 * idx),
+        can_reuse_target = (
+            existing_summary_path.exists()
+            and _same_json_payload(target_config_path, target_config)
+            and _same_json_payload(warm_start_config_path, warm_start_config)
+            and _same_json_payload(calibration_policy_path, calibration_policy)
         )
-        warm_calibrator = UnitCalibrator(
-            warm_model,
-            target_config,
-            train_dataset,
-            val_dataset,
-            options=CalibrationOptions(
-                trainable_mode=trainable_mode,
-                tune_normalization=True,
-                tune_physics_params=False,
-            ),
-            target_system_id=0,
+        if can_reuse_target:
+            existing_result = load_json(existing_summary_path)
+            improved = bool(
+                existing_result.get("comparison", {}).get("improved_over_scratch", False)
+            )
+            all_improved = all_improved and improved
+            summary["results"][target_name] = _json_safe(existing_result)
+            continue
+
+        write_json(target_config_path, target_config)
+        write_json(warm_start_config_path, warm_start_config)
+        write_json(calibration_policy_path, calibration_policy)
+
+        restart_seed_offsets = [
+            int(offset) for offset in calibration_policy.get("restart_seed_offsets", [0])
+        ]
+        selection_metric = str(calibration_policy.get("selection_metric", "rollout_rmse"))
+        warm_restart_results: list[dict[str, Any]] = []
+        warm_start_root = target_dir / "warm_start"
+
+        for restart_index, restart_offset in enumerate(restart_seed_offsets):
+            restart_dir = (
+                warm_start_root
+                if len(restart_seed_offsets) == 1
+                else warm_start_root / f"restart_{restart_index}"
+            )
+            warm_model = initialize_target_model_from_pretrained(
+                source_model,
+                source_metadata,
+                target_metadata,
+                warm_start_config,
+                jax.random.PRNGKey(seed + 10 * idx + restart_offset),
+                **dict(calibration_policy.get("init_kwargs", {})),
+            )
+            warm_calibrator = UnitCalibrator(
+                warm_model,
+                warm_start_config,
+                train_dataset,
+                val_dataset,
+                options=CalibrationOptions(
+                    trainable_mode=str(calibration_policy["trainable_mode"]),
+                    tune_normalization=bool(calibration_policy["tune_normalization"]),
+                    tune_physics_params=bool(calibration_policy["tune_physics_params"]),
+                    active_param_indices=tuple(int(idx) for idx in calibration_policy["active_param_indices"]),
+                ),
+                target_system_id=0,
+            )
+            warm_summary = warm_calibrator.calibrate(
+                str(restart_dir),
+                key=jax.random.PRNGKey(seed + 10 * idx + restart_offset + 1),
+            )
+            warm_best_model = UniversalDigitalTwin.load(
+                str(_resolve_checkpoint(restart_dir)),
+                warm_start_config,
+                target_metadata,
+            )
+            warm_eval_trainer = UniversalTrainer(
+                warm_best_model,
+                warm_start_config,
+                train_dataset,
+                val_dataset,
+            )
+            warm_per_system = warm_eval_trainer.evaluate_per_system(
+                per_system_eval_key,
+                n_batches=int(warm_start_config.get("evaluation", {}).get("per_system_batches", 2)),
+            )
+            warm_summary["per_system_val_losses"] = warm_per_system
+            warm_forecast = compute_forecast_metrics(
+                warm_eval_trainer.model,
+                warm_eval_trainer,
+                system_idx=0,
+                key=forecast_eval_key,
+                n_batches=int(warm_start_config.get("evaluation", {}).get("forecast_batches", 2)),
+            )
+            warm_rollout = compute_rollout_metrics(
+                warm_eval_trainer.model,
+                warm_eval_trainer,
+                system_idx=0,
+                key=rollout_eval_key,
+                n_batches=int(warm_start_config.get("evaluation", {}).get("rollout_batches", 2)),
+                n_samples=int(warm_start_config.get("evaluation", {}).get("rollout_samples", 4)),
+            )
+            restart_result = {
+                "target": target_name,
+                "restart_index": restart_index,
+                "restart_seed_offset": restart_offset,
+                "train_summary": warm_summary,
+                "forecast_metrics": warm_forecast,
+                "rollout_metrics": warm_rollout,
+            }
+            write_json(restart_dir / "summary.json", _json_safe(restart_result))
+            warm_restart_results.append(restart_result)
+
+        selected_warm = _select_best_transfer_restart(
+            warm_restart_results,
+            selection_metric=selection_metric,
         )
-        warm_summary = warm_calibrator.calibrate(
-            str(target_dir / "warm_start"),
-            key=jax.random.PRNGKey(seed + 10 * idx + 1),
-        )
-        warm_forecast = compute_forecast_metrics(
-            warm_calibrator.model,
-            warm_calibrator.trainer,
-            system_idx=0,
-            key=jax.random.PRNGKey(seed + 10 * idx + 2),
-            n_batches=int(target_config.get("evaluation", {}).get("forecast_batches", 2)),
-        )
-        warm_rollout = compute_rollout_metrics(
-            warm_calibrator.model,
-            warm_calibrator.trainer,
-            system_idx=0,
-            key=jax.random.PRNGKey(seed + 10 * idx + 3),
-            n_batches=int(target_config.get("evaluation", {}).get("rollout_batches", 2)),
-            n_samples=int(target_config.get("evaluation", {}).get("rollout_samples", 4)),
-        )
+        warm_summary = copy.deepcopy(selected_warm["train_summary"])
+        warm_forecast = copy.deepcopy(selected_warm["forecast_metrics"])
+        warm_rollout = copy.deepcopy(selected_warm["rollout_metrics"])
 
         scratch_model = UniversalDigitalTwin.from_config(
             target_config,
@@ -418,22 +796,33 @@ def _run_transfer_benchmark(
             output_dir=str(target_dir / "scratch"),
             key=jax.random.PRNGKey(seed + 10 * idx + 5),
         )
-        scratch_per_system = scratch_trainer.evaluate_per_system(
-            jax.random.PRNGKey(seed + 10 * idx + 6),
+        scratch_best_model = UniversalDigitalTwin.load(
+            str(_resolve_checkpoint(target_dir / "scratch")),
+            target_config,
+            target_metadata,
+        )
+        scratch_eval_trainer = UniversalTrainer(
+            scratch_best_model,
+            target_config,
+            train_dataset,
+            val_dataset,
+        )
+        scratch_per_system = scratch_eval_trainer.evaluate_per_system(
+            per_system_eval_key,
             n_batches=int(target_config.get("evaluation", {}).get("per_system_batches", 2)),
         )
         scratch_forecast = compute_forecast_metrics(
-            scratch_trainer.model,
-            scratch_trainer,
+            scratch_eval_trainer.model,
+            scratch_eval_trainer,
             system_idx=0,
-            key=jax.random.PRNGKey(seed + 10 * idx + 7),
+            key=forecast_eval_key,
             n_batches=int(target_config.get("evaluation", {}).get("forecast_batches", 2)),
         )
         scratch_rollout = compute_rollout_metrics(
-            scratch_trainer.model,
-            scratch_trainer,
+            scratch_eval_trainer.model,
+            scratch_eval_trainer,
             system_idx=0,
-            key=jax.random.PRNGKey(seed + 10 * idx + 8),
+            key=rollout_eval_key,
             n_batches=int(target_config.get("evaluation", {}).get("rollout_batches", 2)),
             n_samples=int(target_config.get("evaluation", {}).get("rollout_samples", 4)),
         )
@@ -446,6 +835,12 @@ def _run_transfer_benchmark(
         result = {
             "target": target_name,
             "warm_start": {
+                "policy": calibration_policy,
+                "selection_metric": selection_metric,
+                "selected_restart_index": int(selected_warm["restart_index"]),
+                "selected_restart_seed_offset": int(selected_warm["restart_seed_offset"]),
+                "restart_summaries": warm_restart_results,
+                "effective_optimizer": warm_start_config["optimizer"],
                 "train_summary": warm_summary,
                 "forecast_metrics": warm_forecast,
                 "rollout_metrics": warm_rollout,
@@ -549,11 +944,6 @@ def main() -> int:
     )
     parser.add_argument("--transfer_epochs", type=int, default=4)
     parser.add_argument("--transfer_source_epochs", type=int, default=6)
-    parser.add_argument(
-        "--transfer_trainable_mode",
-        choices=["adapters", "full"],
-        default="adapters",
-    )
     parser.add_argument("--skip_generation", action="store_true")
     parser.add_argument("--skip_training", action="store_true")
     parser.add_argument("--skip_evaluation", action="store_true")
@@ -588,7 +978,7 @@ def main() -> int:
     write_json(summary_path, summary)
 
     env_updates = {
-        "JAX_PLATFORMS": args.jax_platform,
+        "JAX_PLATFORMS": _resolve_jax_platform_env(args.jax_platform),
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
     }
 
@@ -666,7 +1056,7 @@ def main() -> int:
                         transfer_targets=args.transfer_targets,
                         transfer_epochs=args.transfer_epochs,
                         transfer_source_epochs=args.transfer_source_epochs,
-                        transfer_trainable_mode=args.transfer_trainable_mode,
+                        transfer_trainable_mode="full",
                     )
                 )
             else:
@@ -678,33 +1068,46 @@ def main() -> int:
                 transfer_workspace = transfer_dir / "source_pretrain"
                 transfer_workspace.mkdir(parents=True, exist_ok=True)
                 source_config_path = transfer_workspace / "config.yaml"
-                with source_config_path.open("w", encoding="utf-8") as handle:
-                    yaml.safe_dump(source_config, handle, sort_keys=False)
-
-                step = _run_command(
-                    name="transfer_source_pretrain",
-                    command=[
-                        sys.executable,
-                        "scripts/train_universal.py",
-                        "--config",
-                        str(source_config_path),
-                        "--output_dir",
-                        str(transfer_workspace),
-                        "--seed",
-                        str(args.seed),
-                    ],
-                    log_path=logs_dir / "transfer_source_pretrain.log",
-                    env_updates=env_updates,
-                    dry_run=False,
-                )
+                can_reuse_source_pretrain = _has_completed_universal_run(
+                    transfer_workspace
+                ) and _same_yaml_payload(source_config_path, source_config)
+                if can_reuse_source_pretrain:
+                    step = _step_summary(
+                        "transfer_source_pretrain",
+                        started_at,
+                        True,
+                        reused_existing_artifacts=True,
+                        output_dir=str(transfer_workspace.resolve()),
+                        transfer_trainable_mode="full",
+                    )
+                else:
+                    with source_config_path.open("w", encoding="utf-8") as handle:
+                        yaml.safe_dump(source_config, handle, sort_keys=False)
+                    step = _run_command(
+                        name="transfer_source_pretrain",
+                        command=[
+                            sys.executable,
+                            "scripts/train_universal.py",
+                            "--config",
+                            str(source_config_path),
+                            "--output_dir",
+                            str(transfer_workspace),
+                            "--seed",
+                            str(args.seed),
+                        ],
+                        log_path=logs_dir / "transfer_source_pretrain.log",
+                        env_updates=env_updates,
+                        dry_run=False,
+                    )
                 summary["steps"].append(step)
                 transfer_summary = _run_transfer_benchmark(
+                    full_training_config_path=run_dir / "config.yaml",
                     source_config_path=source_config_path,
                     source_checkpoint_path=_resolve_checkpoint(transfer_workspace),
                     output_dir=transfer_dir,
                     transfer_targets=list(args.transfer_targets),
                     transfer_epochs=int(args.transfer_epochs),
-                    trainable_mode=str(args.transfer_trainable_mode),
+                    trainable_mode="full",
                     seed=int(args.seed),
                 )
                 summary["artifacts"]["transfer_summary"] = str((transfer_dir / "summary.json").resolve())

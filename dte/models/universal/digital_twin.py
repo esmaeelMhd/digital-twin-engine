@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Dict, Literal
 
+import diffrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -172,6 +173,11 @@ class UniversalDigitalTwin(eqx.Module):
     path_dim: int = eqx.field(static=True)
     use_system_spec_embedding: bool = eqx.field(static=True)
     neural_cde_enabled: bool = eqx.field(static=True)
+    latent_solver_method: str = eqx.field(static=True)
+    latent_solver_rtol: float = eqx.field(static=True)
+    latent_solver_atol: float = eqx.field(static=True)
+    latent_solver_dt0_factor: float = eqx.field(static=True)
+    latent_solver_max_steps: int = eqx.field(static=True)
     use_variational_encoder: bool = eqx.field(static=True)
     adapters_enabled: bool = eqx.field(static=True)
     adapter_bottleneck_dim: int = eqx.field(static=True)
@@ -197,6 +203,11 @@ class UniversalDigitalTwin(eqx.Module):
         neural_cde_enabled: bool,
         neural_cde_hidden_dim: int,
         neural_cde_layers: int,
+        latent_solver_method: str,
+        latent_solver_rtol: float,
+        latent_solver_atol: float,
+        latent_solver_dt0_factor: float,
+        latent_solver_max_steps: int,
         use_variational_encoder: bool,
         channel_conditioning_enabled: bool,
         law_conditioning_enabled: bool,
@@ -221,6 +232,11 @@ class UniversalDigitalTwin(eqx.Module):
         self.path_dim = 1 + self.max_control_dim + self.max_disturbance_dim
         self.use_system_spec_embedding = use_system_spec_embedding
         self.neural_cde_enabled = neural_cde_enabled
+        self.latent_solver_method = latent_solver_method
+        self.latent_solver_rtol = latent_solver_rtol
+        self.latent_solver_atol = latent_solver_atol
+        self.latent_solver_dt0_factor = latent_solver_dt0_factor
+        self.latent_solver_max_steps = latent_solver_max_steps
         self.use_variational_encoder = use_variational_encoder
         self.channel_conditioning_enabled = channel_conditioning_enabled
         self.law_conditioning_enabled = law_conditioning_enabled
@@ -575,6 +591,7 @@ class UniversalDigitalTwin(eqx.Module):
     ) -> "UniversalDigitalTwin":
         model_cfg = config.get("model", {})
         neural_cde_cfg = model_cfg.get("neural_cde", {})
+        latent_solver_cfg = model_cfg.get("latent_solver", {})
         channel_conditioning_cfg = model_cfg.get("channel_conditioning", {})
         law_conditioning_cfg = model_cfg.get("law_conditioning", {})
         adapter_cfg = model_cfg.get("adapters", {})
@@ -601,6 +618,11 @@ class UniversalDigitalTwin(eqx.Module):
                 neural_cde_cfg.get("hidden_dim", model_cfg.get("shared_hidden_dim", 128))
             ),
             neural_cde_layers=int(neural_cde_cfg.get("n_layers", 2)),
+            latent_solver_method=str(latent_solver_cfg.get("method", "heun")),
+            latent_solver_rtol=float(latent_solver_cfg.get("rtol", 1e-3)),
+            latent_solver_atol=float(latent_solver_cfg.get("atol", 1e-4)),
+            latent_solver_dt0_factor=float(latent_solver_cfg.get("dt0_factor", 0.5)),
+            latent_solver_max_steps=int(latent_solver_cfg.get("max_steps", 512)),
             use_variational_encoder=bool(model_cfg.get("use_variational_encoder", True)),
             channel_conditioning_enabled=bool(channel_conditioning_cfg.get("enabled", False)),
             law_conditioning_enabled=bool(law_conditioning_cfg.get("enabled", False)),
@@ -1141,6 +1163,165 @@ class UniversalDigitalTwin(eqx.Module):
         matrix = self.cde_matrix(features).reshape(self.latent_dim, self.path_dim)
         return matrix @ path_derivative
 
+    def _latent_solver(self):
+        method = self.latent_solver_method
+        if method == "heun":
+            return None
+        if method == "tsit5":
+            return diffrax.Tsit5()
+        if method == "kvaerno5":
+            return diffrax.Kvaerno5()
+        if method == "implicit_euler":
+            return diffrax.ImplicitEuler()
+        raise ValueError(f"Unsupported universal latent solver '{method}'.")
+
+    def _piecewise_linear_value_and_derivative(
+        self,
+        ts: Array,
+        values: Array,
+        t: Array,
+    ) -> tuple[Array, Array]:
+        idx = jnp.clip(
+            jnp.searchsorted(ts[1:], t, side="right"),
+            0,
+            ts.shape[0] - 2,
+        )
+        t0 = ts[idx]
+        t1 = ts[idx + 1]
+        v0 = values[idx]
+        v1 = values[idx + 1]
+        safe_dt = jnp.maximum(t1 - t0, jnp.asarray(1e-6, dtype=ts.dtype))
+        alpha = jnp.clip((t - t0) / safe_dt, 0.0, 1.0)
+        value = v0 + alpha * (v1 - v0)
+        derivative = (v1 - v0) / safe_dt
+        return value, derivative
+
+    def _latent_drift_at_time(
+        self,
+        t: Array,
+        z: Array,
+        ts: Array,
+        controls_norm: Array,
+        disturbances_norm: Array,
+        params_scaled: Array,
+        control_mask: Array,
+        disturbance_mask: Array,
+        param_mask: Array,
+        system_id: Array,
+    ) -> Array:
+        control_t, control_derivative = self._piecewise_linear_value_and_derivative(
+            ts,
+            controls_norm,
+            t,
+        )
+        disturbance_t, disturbance_derivative = self._piecewise_linear_value_and_derivative(
+            ts,
+            disturbances_norm,
+            t,
+        )
+        path_derivative = None
+        if self.neural_cde_enabled:
+            path_derivative = jnp.concatenate(
+                [
+                    jnp.asarray([1.0], dtype=z.dtype),
+                    control_derivative,
+                    disturbance_derivative,
+                ]
+            )
+        return self.latent_drift(
+            z,
+            control_t,
+            disturbance_t,
+            params_scaled,
+            control_mask,
+            disturbance_mask,
+            param_mask,
+            system_id,
+            path_derivative,
+        )
+
+    def _integrate_latent_interval(
+        self,
+        z_prev: Array,
+        ts: Array,
+        controls_norm: Array,
+        disturbances_norm: Array,
+        params_scaled: Array,
+        control_mask: Array,
+        disturbance_mask: Array,
+        param_mask: Array,
+        system_id: Array,
+    ) -> Array:
+        solver = self._latent_solver()
+        if solver is None:
+            dt = ts[1] - ts[0]
+            safe_dt = jnp.maximum(dt, jnp.asarray(1e-6, dtype=dt.dtype))
+            control_mid = 0.5 * (controls_norm[0] + controls_norm[1])
+            disturbance_mid = 0.5 * (disturbances_norm[0] + disturbances_norm[1])
+            path_derivative = jnp.concatenate(
+                [
+                    jnp.asarray([1.0], dtype=z_prev.dtype),
+                    (controls_norm[1] - controls_norm[0]) / safe_dt,
+                    (disturbances_norm[1] - disturbances_norm[0]) / safe_dt,
+                ]
+            )
+
+            def total_drift(z_curr: Array) -> Array:
+                return self.latent_drift(
+                    z_curr,
+                    control_mid,
+                    disturbance_mid,
+                    params_scaled,
+                    control_mask,
+                    disturbance_mask,
+                    param_mask,
+                    system_id,
+                    path_derivative if self.neural_cde_enabled else None,
+                )
+
+            k1 = total_drift(z_prev)
+            z_euler = z_prev + dt * k1
+            k2 = total_drift(z_euler)
+            return z_prev + 0.5 * dt * (k1 + k2)
+
+        t0 = ts[0]
+        t1 = ts[-1]
+        safe_dt0 = jnp.maximum(
+            jnp.abs(ts[1] - ts[0]) * self.latent_solver_dt0_factor,
+            jnp.asarray(1e-4, dtype=ts.dtype),
+        )
+
+        def drift_fn(t, z, args):
+            del args
+            return self._latent_drift_at_time(
+                t,
+                z,
+                ts,
+                controls_norm,
+                disturbances_norm,
+                params_scaled,
+                control_mask,
+                disturbance_mask,
+                param_mask,
+                system_id,
+            )
+
+        solution = diffrax.diffeqsolve(
+            diffrax.ODETerm(drift_fn),
+            solver,
+            t0=t0,
+            t1=t1,
+            dt0=safe_dt0,
+            y0=z_prev,
+            saveat=diffrax.SaveAt(t1=True),
+            stepsize_controller=diffrax.PIDController(
+                rtol=self.latent_solver_rtol,
+                atol=self.latent_solver_atol,
+            ),
+            max_steps=self.latent_solver_max_steps,
+        )
+        return solution.ys[0]
+
     def latent_drift(
         self,
         z: Array,
@@ -1203,33 +1384,25 @@ class UniversalDigitalTwin(eqx.Module):
         dt: Array,
     ) -> Array:
         safe_dt = jnp.maximum(dt, jnp.asarray(1e-6, dtype=dt.dtype))
-        control_mid = 0.5 * (control_t + control_tp1)
-        disturbance_mid = 0.5 * (disturbance_t + disturbance_tp1)
-        path_derivative = jnp.concatenate(
-            [
-                jnp.array([1.0], dtype=z_prev.dtype),
-                (control_tp1 - control_t) / safe_dt,
-                (disturbance_tp1 - disturbance_t) / safe_dt,
-            ]
-        )
-
-        def total_drift(z_curr: Array) -> Array:
-            return self.latent_drift(
-                z_curr,
-                control_mid,
-                disturbance_mid,
+        local_ts = jnp.asarray([0.0, safe_dt], dtype=dt.dtype)
+        local_controls = jnp.stack([control_t, control_tp1], axis=0)
+        local_disturbances = jnp.stack([disturbance_t, disturbance_tp1], axis=0)
+        return jax.lax.cond(
+            dt <= 0,
+            lambda _: z_prev,
+            lambda _: self._integrate_latent_interval(
+                z_prev,
+                local_ts,
+                local_controls,
+                local_disturbances,
                 params_scaled,
                 control_mask,
                 disturbance_mask,
                 param_mask,
                 system_id,
-                path_derivative if self.neural_cde_enabled else None,
-            )
-
-        k1 = total_drift(z_prev)
-        z_euler = z_prev + dt * k1
-        k2 = total_drift(z_euler)
-        return z_prev + 0.5 * dt * (k1 + k2)
+            ),
+            operand=None,
+        )
 
     def rollout_latent(
         self,
@@ -1243,37 +1416,78 @@ class UniversalDigitalTwin(eqx.Module):
         param_mask: Array,
         system_id: Array,
     ) -> Array:
-        dt_steps = ts[1:] - ts[:-1]
+        if ts.shape[0] <= 1:
+            return z0[None, :]
 
-        def step_fn(z_prev: Array, step_inputs: tuple[Array, ...]):
-            u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
-            z_next = self.latent_step(
-                z_prev,
-                u_t,
-                u_tp1,
-                d_t,
-                d_tp1,
+        if self.latent_solver_method == "heun":
+            dt_steps = ts[1:] - ts[:-1]
+
+            def step_fn(z_prev: Array, step_inputs: tuple[Array, ...]):
+                u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
+                z_next = self.latent_step(
+                    z_prev,
+                    u_t,
+                    u_tp1,
+                    d_t,
+                    d_tp1,
+                    params_scaled,
+                    control_mask,
+                    disturbance_mask,
+                    param_mask,
+                    system_id,
+                    step_dt,
+                )
+                return z_next, z_next
+
+            _, z_hist = jax.lax.scan(
+                step_fn,
+                z0,
+                (
+                    controls_norm[:-1],
+                    controls_norm[1:],
+                    disturbances_norm[:-1],
+                    disturbances_norm[1:],
+                    dt_steps,
+                ),
+            )
+            return jnp.concatenate([z0[None, :], z_hist], axis=0)
+
+        solver = self._latent_solver()
+        safe_dt0 = jnp.maximum(
+            jnp.abs(ts[1] - ts[0]) * self.latent_solver_dt0_factor,
+            jnp.asarray(1e-4, dtype=ts.dtype),
+        )
+
+        def drift_fn(t, z, args):
+            del args
+            return self._latent_drift_at_time(
+                t,
+                z,
+                ts,
+                controls_norm,
+                disturbances_norm,
                 params_scaled,
                 control_mask,
                 disturbance_mask,
                 param_mask,
                 system_id,
-                step_dt,
             )
-            return z_next, z_next
 
-        _, z_hist = jax.lax.scan(
-            step_fn,
-            z0,
-            (
-                controls_norm[:-1],
-                controls_norm[1:],
-                disturbances_norm[:-1],
-                disturbances_norm[1:],
-                dt_steps,
+        solution = diffrax.diffeqsolve(
+            diffrax.ODETerm(drift_fn),
+            solver,
+            t0=ts[0],
+            t1=ts[-1],
+            dt0=safe_dt0,
+            y0=z0,
+            saveat=diffrax.SaveAt(ts=ts),
+            stepsize_controller=diffrax.PIDController(
+                rtol=self.latent_solver_rtol,
+                atol=self.latent_solver_atol,
             ),
+            max_steps=max(self.latent_solver_max_steps, int(ts.shape[0]) * 16),
         )
-        return jnp.concatenate([z0[None, :], z_hist], axis=0)
+        return solution.ys
 
     def get_parameter_count(self) -> Dict[str, int]:
         return {

@@ -29,6 +29,12 @@ model:
     enabled: true
     hidden_dim: 64
     n_layers: 2
+  latent_solver:
+    method: kvaerno5
+    rtol: 1.0e-3
+    atol: 1.0e-4
+    dt0_factor: 0.5
+    max_steps: 1024
 
 training:
   batch_size: 128

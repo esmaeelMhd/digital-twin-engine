@@ -249,6 +249,68 @@ def test_universal_model_supports_channel_and_law_conditioning_tables():
     assert z.shape == (16,)
 
 
+def test_universal_model_supports_stiff_aware_latent_solver_rollout():
+    metadata = _build_metadata()
+    config = _build_config()
+    config["model"]["latent_solver"] = {
+        "method": "kvaerno5",
+        "rtol": 1e-3,
+        "atol": 1e-4,
+        "dt0_factor": 0.5,
+        "max_steps": 256,
+    }
+    model = UniversalDigitalTwin.from_config(config, metadata, jax.random.PRNGKey(6))
+
+    z0 = jnp.zeros((16,), dtype=jnp.float32)
+    ts = jnp.asarray([0.0, 0.05, 0.1], dtype=jnp.float32)
+    controls = jnp.asarray(
+        [[0.0, 0.0], [0.1, -0.1], [0.15, -0.05]],
+        dtype=jnp.float32,
+    )
+    disturbances = jnp.asarray(
+        [[0.0, 0.0], [0.05, 0.0], [0.05, 0.02]],
+        dtype=jnp.float32,
+    )
+    params_scaled = jnp.ones((6,), dtype=jnp.float32)
+    control_mask = jnp.ones((2,), dtype=jnp.float32)
+    disturbance_mask = jnp.ones((2,), dtype=jnp.float32)
+    param_mask = jnp.ones((6,), dtype=jnp.float32)
+    system_id = jnp.asarray(0, dtype=jnp.int32)
+
+    z_traj = model.rollout_latent(
+        ts,
+        z0,
+        controls,
+        disturbances,
+        params_scaled,
+        control_mask,
+        disturbance_mask,
+        param_mask,
+        system_id,
+    )
+
+    assert model.latent_solver_method == "kvaerno5"
+    assert z_traj.shape == (3, 16)
+    assert jnp.all(jnp.isfinite(z_traj))
+
+    z_next = model.latent_step(
+        z0,
+        controls[0],
+        controls[1],
+        disturbances[0],
+        disturbances[1],
+        params_scaled,
+        control_mask,
+        disturbance_mask,
+        param_mask,
+        system_id,
+        ts[1] - ts[0],
+    )
+
+    assert z_next.shape == (16,)
+    assert jnp.all(jnp.isfinite(z_next))
+
+
 def test_universal_model_adapter_filter_is_smaller_than_full_filter():
     metadata = _build_metadata()
     model = UniversalDigitalTwin.from_config(_build_config(), metadata, jax.random.PRNGKey(3))

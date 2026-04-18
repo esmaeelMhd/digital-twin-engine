@@ -41,12 +41,154 @@ def _copy_rows_by_name(
     return result
 
 
+def _system_family_name(metadata: UniversalSystemMetadata, system_idx: int) -> str | None:
+    """Return the family name for one system index when available."""
+
+    if not metadata.family_names or metadata.family_id.size == 0:
+        return None
+    family_idx = int(metadata.family_id[system_idx])
+    if family_idx < 0 or family_idx >= len(metadata.family_names):
+        return None
+    return metadata.family_names[family_idx]
+
+
+def _system_subtype_name(metadata: UniversalSystemMetadata, system_idx: int) -> str | None:
+    """Return the subtype name for one system index when available."""
+
+    if not metadata.subtype_names or metadata.subtype_id.size == 0:
+        return None
+    subtype_idx = int(metadata.subtype_id[system_idx])
+    if subtype_idx < 0 or subtype_idx >= len(metadata.subtype_names):
+        return None
+    return metadata.subtype_names[subtype_idx]
+
+
+def _name_similarity_score(source_name: str, target_name: str) -> int:
+    """Score symbolic similarity between source and target system names."""
+
+    source_tokens = source_name.split("_")
+    target_tokens = target_name.split("_")
+    prefix = 0
+    while (
+        prefix < len(source_tokens)
+        and prefix < len(target_tokens)
+        and source_tokens[prefix] == target_tokens[prefix]
+    ):
+        prefix += 1
+    overlap = len(set(source_tokens) & set(target_tokens))
+    return prefix * 10 + overlap
+
+
+def _closest_source_system_index(
+    source_metadata: UniversalSystemMetadata,
+    target_metadata: UniversalSystemMetadata,
+    target_idx: int,
+) -> int | None:
+    """Select the closest source system when the target name is new."""
+
+    target_name = target_metadata.system_names[target_idx]
+    source_name_to_idx = {name: idx for idx, name in enumerate(source_metadata.system_names)}
+    exact_idx = source_name_to_idx.get(target_name)
+    if exact_idx is not None:
+        return exact_idx
+
+    target_family = _system_family_name(target_metadata, target_idx)
+    target_subtype = _system_subtype_name(target_metadata, target_idx)
+    best_idx: int | None = None
+    best_score = -1
+
+    for source_idx, source_name in enumerate(source_metadata.system_names):
+        score = _name_similarity_score(source_name, target_name)
+        if target_family is not None and _system_family_name(source_metadata, source_idx) == target_family:
+            score += 1000
+        if target_subtype is not None and _system_subtype_name(source_metadata, source_idx) == target_subtype:
+            score += 100
+        if score > best_score:
+            best_score = score
+            best_idx = source_idx
+
+    return best_idx if best_score > 0 else None
+
+
+def _copy_system_rows_with_fallback(
+    target_table,
+    source_table,
+    source_metadata: UniversalSystemMetadata,
+    target_metadata: UniversalSystemMetadata,
+):
+    """Copy exact-name rows, then fall back to the closest source system row."""
+
+    if source_table.shape[1:] != target_table.shape[1:]:
+        return target_table
+
+    result = target_table
+    source_index = {name: idx for idx, name in enumerate(source_metadata.system_names)}
+    for target_idx, target_name in enumerate(target_metadata.system_names):
+        source_idx = source_index.get(target_name)
+        if source_idx is None:
+            source_idx = _closest_source_system_index(source_metadata, target_metadata, target_idx)
+        if source_idx is not None:
+            result = result.at[target_idx].set(source_table[source_idx])
+    return result
+
+
+def _linear_shapes_match(source_layer, target_layer) -> bool:
+    """Return True when two Equinox linear layers are shape-compatible."""
+
+    if source_layer is None or target_layer is None:
+        return False
+    return (
+        getattr(source_layer, "weight", None) is not None
+        and getattr(target_layer, "weight", None) is not None
+        and source_layer.weight.shape == target_layer.weight.shape
+        and (
+            (source_layer.bias is None and target_layer.bias is None)
+            or (
+                source_layer.bias is not None
+                and target_layer.bias is not None
+                and source_layer.bias.shape == target_layer.bias.shape
+            )
+        )
+    )
+
+
+def _adapter_shapes_match(source_adapter, target_adapter) -> bool:
+    """Return True when two bottleneck adapters are shape-compatible."""
+
+    if source_adapter is None or target_adapter is None:
+        return False
+    return _linear_shapes_match(source_adapter.down, target_adapter.down) and _linear_shapes_match(
+        source_adapter.up, target_adapter.up
+    )
+
+
+def _residual_mlp_shapes_match(source_mlp, target_mlp) -> bool:
+    """Return True when two ResidualMLP modules are layer-shape compatible."""
+
+    if source_mlp is None or target_mlp is None:
+        return False
+    if len(source_mlp.layers) != len(target_mlp.layers):
+        return False
+    return all(
+        _linear_shapes_match(source_layer, target_layer)
+        for source_layer, target_layer in zip(source_mlp.layers, target_mlp.layers)
+    ) and _linear_shapes_match(source_mlp.output_layer, target_mlp.output_layer)
+
+
 def initialize_target_model_from_pretrained(
     pretrained_model: UniversalDigitalTwin,
     source_metadata: UniversalSystemMetadata,
     target_metadata: UniversalSystemMetadata,
     config: dict,
     key,
+    *,
+    copy_system_embedding_rows: bool = True,
+    copy_calibration_rows: bool = True,
+    copy_param_bias_rows: bool = True,
+    copy_dynamics_backbone: bool = True,
+    copy_drift_backbone: bool | None = None,
+    copy_cde_backbone: bool | None = None,
+    copy_drift_adapter: bool = True,
 ) -> UniversalDigitalTwin:
     """Initialize a target-only calibration model from a pretrained checkpoint.
 
@@ -57,59 +199,165 @@ def initialize_target_model_from_pretrained(
 
     model = UniversalDigitalTwin.from_config(config, target_metadata, key)
 
-    model = eqx.tree_at(
-        lambda m: (
-            m.state_group_encoder,
-            m.state_group_mixer,
-            m.group_token_film_scale,
-            m.group_token_film_shift,
-            m.group_mixer_film_scale,
-            m.group_mixer_film_shift,
-            m.decoder_film_scale,
-            m.decoder_film_shift,
-            m.encoder_mean,
-            m.encoder_logvar,
-            m.decoder,
-            m.drift,
-        ),
-        model,
-        replace=(
+    if _residual_mlp_shapes_match(pretrained_model.state_group_encoder, model.state_group_encoder):
+        model = eqx.tree_at(
+            lambda m: m.state_group_encoder,
+            model,
             pretrained_model.state_group_encoder,
+        )
+    if _residual_mlp_shapes_match(pretrained_model.state_group_mixer, model.state_group_mixer):
+        model = eqx.tree_at(
+            lambda m: m.state_group_mixer,
+            model,
             pretrained_model.state_group_mixer,
-            pretrained_model.group_token_film_scale,
-            pretrained_model.group_token_film_shift,
-            pretrained_model.group_mixer_film_scale,
-            pretrained_model.group_mixer_film_shift,
-            pretrained_model.decoder_film_scale,
-            pretrained_model.decoder_film_shift,
+        )
+    if _residual_mlp_shapes_match(pretrained_model.encoder_mean, model.encoder_mean):
+        model = eqx.tree_at(
+            lambda m: m.encoder_mean,
+            model,
             pretrained_model.encoder_mean,
+        )
+    if _residual_mlp_shapes_match(pretrained_model.encoder_logvar, model.encoder_logvar):
+        model = eqx.tree_at(
+            lambda m: m.encoder_logvar,
+            model,
             pretrained_model.encoder_logvar,
+        )
+    if _residual_mlp_shapes_match(pretrained_model.decoder, model.decoder):
+        model = eqx.tree_at(
+            lambda m: m.decoder,
+            model,
             pretrained_model.decoder,
-            pretrained_model.drift,
-        ),
-    )
+        )
+    use_drift_backbone = copy_dynamics_backbone if copy_drift_backbone is None else copy_drift_backbone
+    use_cde_backbone = copy_dynamics_backbone if copy_cde_backbone is None else copy_cde_backbone
 
-    if pretrained_model.cde_matrix is not None and model.cde_matrix is not None:
+    if use_drift_backbone and _residual_mlp_shapes_match(pretrained_model.drift, model.drift):
+        model = eqx.tree_at(
+            lambda m: m.drift,
+            model,
+            pretrained_model.drift,
+        )
+
+    if use_cde_backbone and _residual_mlp_shapes_match(pretrained_model.cde_matrix, model.cde_matrix):
         model = eqx.tree_at(lambda m: m.cde_matrix, model, pretrained_model.cde_matrix)
-    if pretrained_model.descriptor_proj is not None and model.descriptor_proj is not None:
+    if _linear_shapes_match(pretrained_model.descriptor_proj, model.descriptor_proj):
         model = eqx.tree_at(lambda m: m.descriptor_proj, model, pretrained_model.descriptor_proj)
-    if pretrained_model.encoder_adapter is not None and model.encoder_adapter is not None:
+    if _linear_shapes_match(pretrained_model.group_token_film_scale, model.group_token_film_scale):
+        model = eqx.tree_at(
+            lambda m: m.group_token_film_scale,
+            model,
+            pretrained_model.group_token_film_scale,
+        )
+    if _linear_shapes_match(pretrained_model.group_token_film_shift, model.group_token_film_shift):
+        model = eqx.tree_at(
+            lambda m: m.group_token_film_shift,
+            model,
+            pretrained_model.group_token_film_shift,
+        )
+    if _linear_shapes_match(pretrained_model.group_mixer_film_scale, model.group_mixer_film_scale):
+        model = eqx.tree_at(
+            lambda m: m.group_mixer_film_scale,
+            model,
+            pretrained_model.group_mixer_film_scale,
+        )
+    if _linear_shapes_match(pretrained_model.group_mixer_film_shift, model.group_mixer_film_shift):
+        model = eqx.tree_at(
+            lambda m: m.group_mixer_film_shift,
+            model,
+            pretrained_model.group_mixer_film_shift,
+        )
+    if _linear_shapes_match(pretrained_model.decoder_film_scale, model.decoder_film_scale):
+        model = eqx.tree_at(
+            lambda m: m.decoder_film_scale,
+            model,
+            pretrained_model.decoder_film_scale,
+        )
+    if _linear_shapes_match(pretrained_model.decoder_film_shift, model.decoder_film_shift):
+        model = eqx.tree_at(
+            lambda m: m.decoder_film_shift,
+            model,
+            pretrained_model.decoder_film_shift,
+        )
+    if _adapter_shapes_match(pretrained_model.encoder_adapter, model.encoder_adapter):
         model = eqx.tree_at(lambda m: m.encoder_adapter, model, pretrained_model.encoder_adapter)
-    if pretrained_model.drift_adapter is not None and model.drift_adapter is not None:
+    if copy_drift_adapter and _adapter_shapes_match(pretrained_model.drift_adapter, model.drift_adapter):
         model = eqx.tree_at(lambda m: m.drift_adapter, model, pretrained_model.drift_adapter)
-    if pretrained_model.decoder_adapter is not None and model.decoder_adapter is not None:
+    if _adapter_shapes_match(pretrained_model.decoder_adapter, model.decoder_adapter):
         model = eqx.tree_at(lambda m: m.decoder_adapter, model, pretrained_model.decoder_adapter)
 
-    model = eqx.tree_at(
-        lambda m: m.system_embedding_table,
-        model,
-        _copy_rows_by_name(
-            model.system_embedding_table,
-            pretrained_model.system_embedding_table,
-            source_metadata.system_names,
-            target_metadata.system_names,
-        ),
-    )
+    if copy_system_embedding_rows:
+        model = eqx.tree_at(
+            lambda m: m.system_embedding_table,
+            model,
+            _copy_system_rows_with_fallback(
+                model.system_embedding_table,
+                pretrained_model.system_embedding_table,
+                source_metadata,
+                target_metadata,
+            ),
+        )
+    if copy_calibration_rows:
+        model = eqx.tree_at(
+            lambda m: (
+                m.state_center_delta_table,
+                m.state_scale_log_delta_table,
+                m.control_center_delta_table,
+                m.control_scale_log_delta_table,
+                m.disturbance_center_delta_table,
+                m.disturbance_scale_log_delta_table,
+            ),
+            model,
+            (
+                _copy_system_rows_with_fallback(
+                    model.state_center_delta_table,
+                    pretrained_model.state_center_delta_table,
+                    source_metadata,
+                    target_metadata,
+                ),
+                _copy_system_rows_with_fallback(
+                    model.state_scale_log_delta_table,
+                    pretrained_model.state_scale_log_delta_table,
+                    source_metadata,
+                    target_metadata,
+                ),
+                _copy_system_rows_with_fallback(
+                    model.control_center_delta_table,
+                    pretrained_model.control_center_delta_table,
+                    source_metadata,
+                    target_metadata,
+                ),
+                _copy_system_rows_with_fallback(
+                    model.control_scale_log_delta_table,
+                    pretrained_model.control_scale_log_delta_table,
+                    source_metadata,
+                    target_metadata,
+                ),
+                _copy_system_rows_with_fallback(
+                    model.disturbance_center_delta_table,
+                    pretrained_model.disturbance_center_delta_table,
+                    source_metadata,
+                    target_metadata,
+                ),
+                _copy_system_rows_with_fallback(
+                    model.disturbance_scale_log_delta_table,
+                    pretrained_model.disturbance_scale_log_delta_table,
+                    source_metadata,
+                    target_metadata,
+                ),
+            ),
+        )
+    if copy_param_bias_rows:
+        model = eqx.tree_at(
+            lambda m: m.param_bias_table,
+            model,
+            _copy_system_rows_with_fallback(
+                model.param_bias_table,
+                pretrained_model.param_bias_table,
+                source_metadata,
+                target_metadata,
+            ),
+        )
     model = eqx.tree_at(
         lambda m: m.family_embedding_table,
         model,
