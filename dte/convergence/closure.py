@@ -131,6 +131,55 @@ def _gate_false(gate_name: str) -> Callable[[PhaseRunStatus], bool]:
     return _predicate
 
 
+def _read_text_tail(path: Path, max_chars: int = 16000) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def _phase1_enrich_failed_status(status: PhaseRunStatus, workspace_dir: Path) -> PhaseRunStatus:
+    if status.phase_id != "phase1_unit_foundation_v1" or status.status != "failed":
+        return status
+
+    error_text = (status.error or "").lower()
+    if "out of memory" in error_text or "maximum number of solver steps" in error_text:
+        return status
+
+    logs_dir = workspace_dir / "logs"
+    candidate_logs = (
+        logs_dir / "train_unit_foundation.log",
+        logs_dir / "evaluate_unit_foundation.log",
+        logs_dir / "transfer_source_pretrain.log",
+        logs_dir / "control_gate.log",
+    )
+    tail = "\n".join(_read_text_tail(path) for path in candidate_logs if path.exists()).lower()
+    if not tail:
+        return status
+
+    inferred_error = status.error
+    if "out of memory" in tail or "resource_exhausted" in tail:
+        inferred_error = "resource exhausted: out of memory"
+    elif "maximum number of solver steps" in tail:
+        inferred_error = "maximum number of solver steps was reached"
+    elif "pure_callback failed to find a local cpu device" in tail:
+        inferred_error = "pure_callback failed to find a local cpu device"
+
+    if inferred_error == status.error:
+        return status
+
+    return PhaseRunStatus(
+        phase_id=status.phase_id,
+        summary_path=status.summary_path,
+        status=status.status,
+        accepted=status.accepted,
+        error=inferred_error,
+        gates=status.gates,
+    )
+
+
 def _phase1_strategies() -> tuple[ClosureStrategy, ...]:
     return (
         ClosureStrategy(
@@ -279,6 +328,7 @@ def run_phase_once(
         sys.stderr.buffer.flush()
     returncode = process.wait()
     status = read_phase_status(spec.phase_id, workspace_dir=workspace_dir)
+    status = _phase1_enrich_failed_status(status, workspace_dir)
     return command, returncode, status
 
 
@@ -311,6 +361,7 @@ def auto_close_phase(
     base_run_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current_status = read_phase_status(spec.phase_id, workspace_dir=workspace_dir)
+    current_status = _phase1_enrich_failed_status(current_status, workspace_dir)
     state = load_state(workspace_dir)
     attempts: list[dict[str, Any]] = list(state.get("attempts", []))
 
@@ -349,6 +400,7 @@ def auto_close_phase(
 
     while len(attempts) < max_attempts:
         status_before = read_phase_status(spec.phase_id, workspace_dir=workspace_dir)
+        status_before = _phase1_enrich_failed_status(status_before, workspace_dir)
         attempt_index = len(attempts) + 1
         snapshots: list[FileSnapshot] = []
         strategy_id = "__baseline__"
@@ -383,6 +435,7 @@ def auto_close_phase(
         if not kept and snapshots:
             restore_snapshots(snapshots)
             status_restored = read_phase_status(spec.phase_id, workspace_dir=workspace_dir)
+            status_restored = _phase1_enrich_failed_status(status_restored, workspace_dir)
         else:
             status_restored = status_after
 
@@ -428,6 +481,7 @@ def auto_close_phase(
             continue
 
     final_status = read_phase_status(spec.phase_id, workspace_dir=workspace_dir)
+    final_status = _phase1_enrich_failed_status(final_status, workspace_dir)
     return {
         "phase_id": spec.phase_id,
         "workspace_dir": str(workspace_dir),

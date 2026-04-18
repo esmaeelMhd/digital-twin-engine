@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from dte.convergence.closure import (
+    _phase1_enrich_failed_status,
     apply_strategy,
     auto_close_phase,
     choose_strategy,
@@ -244,6 +245,60 @@ def test_choose_strategy_prefers_max_steps_fix_for_matching_failure(tmp_path: Pa
 
     assert strategy is not None
     assert strategy.strategy_id == "phase1_solver_max_steps_16384"
+
+
+def test_phase1_enrich_failed_status_reads_workspace_logs_for_generic_wrapper_error(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "phase1_failed"
+    logs_dir = workspace_dir / "logs"
+    logs_dir.mkdir(parents=True)
+    (workspace_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "failed",
+                "error": "step 'train_unit_foundation' failed with exit code 1",
+                "acceptance": {"accepted": False, "gates": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (logs_dir / "train_unit_foundation.log").write_text(
+        "jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.51GiB.\n",
+        encoding="utf-8",
+    )
+
+    status = read_phase_status("phase1_unit_foundation_v1", workspace_dir=workspace_dir)
+    enriched = _phase1_enrich_failed_status(status, workspace_dir)
+
+    assert enriched.status == "failed"
+    assert enriched.error == "resource exhausted: out of memory"
+
+
+def test_choose_strategy_uses_enriched_workspace_error_for_oom_failures(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "phase1_failed_oom"
+    logs_dir = workspace_dir / "logs"
+    logs_dir.mkdir(parents=True)
+    (workspace_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "failed",
+                "error": "step 'train_unit_foundation' failed with exit code 1",
+                "acceptance": {"accepted": False, "gates": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (logs_dir / "train_unit_foundation.log").write_text(
+        "jax.errors.JaxRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 5.51GiB.\n",
+        encoding="utf-8",
+    )
+
+    spec = get_phase_spec("phase1_unit_foundation_v1")
+    raw_status = read_phase_status(spec.phase_id, workspace_dir=workspace_dir)
+    status = _phase1_enrich_failed_status(raw_status, workspace_dir)
+    strategy = choose_strategy(spec=spec, status=status, attempted_strategy_ids=set())
+
+    assert strategy is not None
+    assert strategy.strategy_id == "phase1_batch_size_16"
 
 
 def test_apply_strategy_and_restore_round_trips_phase1_yaml() -> None:
