@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from dte.convergence.closure import (
+    _build_phase1_probe_config_payload,
     _phase1_enrich_failed_status,
     apply_strategy,
     auto_close_phase,
@@ -325,6 +326,54 @@ def test_apply_strategy_and_restore_round_trips_phase1_yaml() -> None:
     assert mutated != before
     restore_snapshots(snapshots)
     assert target_path.read_text(encoding="utf-8") == before
+
+
+def test_build_phase1_probe_config_payload_caps_runtime_without_overwriting_user_shape() -> None:
+    config = {
+        "training": {
+            "batch_size": 64,
+            "n_epochs": 10,
+            "max_batches_per_epoch": 64,
+        },
+        "checkpointing": {
+            "val_every": 4,
+            "save_every": 5,
+            "max_val_batches": 4,
+        },
+        "evaluation": {
+            "per_system_batches": 4,
+            "forecast_batches": 2,
+            "rollout_batches": 2,
+            "rollout_samples": 4,
+            "uncertainty_batches": 2,
+            "uncertainty_samples": 8,
+            "sensitivity_batches": 2,
+        },
+        "model": {
+            "latent_solver": {
+                "method": "heun",
+            }
+        },
+    }
+
+    probe = _build_phase1_probe_config_payload(config)
+
+    assert probe["training"]["batch_size"] == 64
+    assert probe["training"]["n_epochs"] == 2
+    assert probe["training"]["max_batches_per_epoch"] == 8
+    assert probe["checkpointing"]["val_every"] == 1
+    assert probe["checkpointing"]["save_every"] == 1
+    assert probe["checkpointing"]["max_val_batches"] == 2
+    assert probe["evaluation"]["per_system_batches"] == 2
+    assert probe["evaluation"]["forecast_batches"] == 1
+    assert probe["evaluation"]["rollout_batches"] == 1
+    assert probe["evaluation"]["rollout_samples"] == 2
+    assert probe["evaluation"]["uncertainty_batches"] == 0
+    assert probe["evaluation"]["uncertainty_samples"] == 0
+    assert probe["evaluation"]["sensitivity_batches"] == 0
+    assert probe["model"]["latent_solver"]["method"] == "heun"
+    assert config["training"]["n_epochs"] == 10
+    assert config["checkpointing"]["val_every"] == 4
 
 
 def test_auto_close_phase_runs_dry_run_baseline_and_records_attempt(tmp_path: Path) -> None:

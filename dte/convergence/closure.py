@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 import time
@@ -32,6 +33,21 @@ class ClosureStrategy:
     run_overrides: dict[str, Any]
     applies: Callable[[PhaseRunStatus], bool]
     mutator: Callable[[Path], None]
+
+
+@dataclass(frozen=True)
+class ProbeRunResult:
+    succeeded: bool
+    config_path: Path
+    run_dir: Path
+    log_dir: Path
+    train_summary_path: Path
+    eval_summary_path: Path
+    error: str | None
+    train_aggregate_metric: float | None
+    eval_aggregate_metric: float | None
+    rollout_rmse_max: float | None
+    duration_seconds: float
 
 
 def _relative_path(path: Path) -> str:
@@ -113,6 +129,12 @@ def _yaml_update_mutator(relpath: str, updates: dict[str, Any]) -> Callable[[Pat
 
 def _always(_status: PhaseRunStatus) -> bool:
     return True
+
+
+def _resolve_jax_platform_env(platform: str) -> str:
+    if platform == "gpu":
+        return "cuda,cpu"
+    return platform
 
 
 def _failed_with(substr: str) -> Callable[[PhaseRunStatus], bool]:
@@ -244,6 +266,209 @@ def _phase1_strategies() -> tuple[ClosureStrategy, ...]:
 _STRATEGIES: dict[str, tuple[ClosureStrategy, ...]] = {
     "phase1_unit_foundation_v1": _phase1_strategies(),
 }
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _run_logged_command(
+    *,
+    command: list[str],
+    log_path: Path,
+    env_updates: dict[str, str],
+) -> int:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.update(env_updates)
+    env["PYTHONUNBUFFERED"] = "1"
+    process = subprocess.Popen(
+        command,
+        cwd=PROJECT_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=False,
+        env=env,
+    )
+    assert process.stdout is not None
+    with log_path.open("wb") as handle:
+        while True:
+            chunk = process.stdout.read(8192)
+            if not chunk:
+                break
+            sys.stderr.buffer.write(chunk)
+            sys.stderr.buffer.flush()
+            handle.write(chunk)
+    return process.wait()
+
+
+def _phase1_probe_root(workspace_dir: Path, strategy_id: str, attempt_index: int) -> Path:
+    return workspace_dir / ".convergence_agent" / "probes" / f"{attempt_index:02d}_{strategy_id}"
+
+
+def _setdefault_nested(mapping: dict[str, Any], keypath: str, value: Any) -> None:
+    cursor: dict[str, Any] = mapping
+    parts = keypath.split(".")
+    for key in parts[:-1]:
+        next_item = cursor.get(key)
+        if not isinstance(next_item, dict):
+            next_item = {}
+            cursor[key] = next_item
+        cursor = next_item
+    cursor.setdefault(parts[-1], value)
+
+
+def _build_phase1_probe_config_payload(config: dict[str, Any]) -> dict[str, Any]:
+    probe = copy.deepcopy(config)
+    training_cfg = probe.setdefault("training", {})
+    training_cfg["n_epochs"] = min(int(training_cfg.get("n_epochs", 2)), 2)
+    training_cfg["max_batches_per_epoch"] = min(int(training_cfg.get("max_batches_per_epoch", 8)), 8)
+
+    checkpointing = probe.setdefault("checkpointing", {})
+    checkpointing["val_every"] = 1
+    checkpointing["save_every"] = 1
+    checkpointing["max_val_batches"] = min(int(checkpointing.get("max_val_batches", 2)), 2)
+
+    evaluation = probe.setdefault("evaluation", {})
+    evaluation["per_system_batches"] = min(int(evaluation.get("per_system_batches", 2)), 2)
+    evaluation["forecast_batches"] = min(int(evaluation.get("forecast_batches", 1)), 1)
+    evaluation["rollout_batches"] = min(int(evaluation.get("rollout_batches", 1)), 1)
+    evaluation["rollout_samples"] = min(int(evaluation.get("rollout_samples", 2)), 2)
+    evaluation["uncertainty_batches"] = 0
+    evaluation["uncertainty_samples"] = 0
+    evaluation["sensitivity_batches"] = 0
+    return probe
+
+
+def _extract_rollout_rmse_max(eval_summary: dict[str, Any]) -> float | None:
+    rollout_metrics = eval_summary.get("rollout_metrics", {})
+    if not isinstance(rollout_metrics, dict) or not rollout_metrics:
+        return None
+    values: list[float] = []
+    for metrics in rollout_metrics.values():
+        if not isinstance(metrics, dict):
+            continue
+        value = metrics.get("rmse")
+        if isinstance(value, (float, int)):
+            values.append(float(value))
+    if not values:
+        return None
+    return max(values)
+
+
+def _run_phase1_probe(
+    *,
+    workspace_dir: Path,
+    attempt_index: int,
+    strategy_id: str,
+    jax_platform: str,
+    seed: int = 42,
+) -> ProbeRunResult:
+    started_at = time.time()
+    probe_root = _phase1_probe_root(workspace_dir, strategy_id, attempt_index)
+    probe_root.mkdir(parents=True, exist_ok=True)
+    run_dir = probe_root / "run"
+    eval_dir = probe_root / "eval"
+    logs_dir = probe_root / "logs"
+    config_path = probe_root / "config.yaml"
+    train_summary_path = run_dir / "summary.json"
+    eval_summary_path = eval_dir / "summary.json"
+
+    base_config = _load_yaml(PROJECT_ROOT / "configs" / "training_universal_phase1_regime.yaml")
+    probe_config = _build_phase1_probe_config_payload(base_config)
+    _write_yaml(config_path, probe_config)
+
+    env_updates = {
+        "JAX_PLATFORMS": _resolve_jax_platform_env(jax_platform),
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+    }
+
+    train_command = [
+        sys.executable,
+        "scripts/train_universal.py",
+        "--config",
+        str(config_path),
+        "--output_dir",
+        str(run_dir),
+        "--seed",
+        str(seed),
+    ]
+    train_returncode = _run_logged_command(
+        command=train_command,
+        log_path=logs_dir / "train_probe.log",
+        env_updates=env_updates,
+    )
+    if train_returncode != 0 or not train_summary_path.exists() or not (run_dir / "best_model.eqx").exists():
+        train_error = _read_text_tail(logs_dir / "train_probe.log", max_chars=8000)
+        error = "probe train failed"
+        lower = train_error.lower()
+        if "out of memory" in lower or "resource_exhausted" in lower:
+            error = "resource exhausted: out of memory"
+        elif "maximum number of solver steps" in lower:
+            error = "maximum number of solver steps was reached"
+        return ProbeRunResult(
+            succeeded=False,
+            config_path=config_path,
+            run_dir=run_dir,
+            log_dir=logs_dir,
+            train_summary_path=train_summary_path,
+            eval_summary_path=eval_summary_path,
+            error=error,
+            train_aggregate_metric=None,
+            eval_aggregate_metric=None,
+            rollout_rmse_max=None,
+            duration_seconds=time.time() - started_at,
+        )
+
+    train_summary = _read_json(train_summary_path)
+    eval_command = [
+        sys.executable,
+        "scripts/evaluate_universal.py",
+        "--model_path",
+        str(run_dir / "best_model.eqx"),
+        "--config",
+        str(run_dir / "config.yaml"),
+        "--output_dir",
+        str(eval_dir),
+        "--seed",
+        str(seed),
+    ]
+    eval_returncode = _run_logged_command(
+        command=eval_command,
+        log_path=logs_dir / "evaluate_probe.log",
+        env_updates=env_updates,
+    )
+    if eval_returncode != 0 or not eval_summary_path.exists():
+        eval_error = _read_text_tail(logs_dir / "evaluate_probe.log", max_chars=8000)
+        return ProbeRunResult(
+            succeeded=False,
+            config_path=config_path,
+            run_dir=run_dir,
+            log_dir=logs_dir,
+            train_summary_path=train_summary_path,
+            eval_summary_path=eval_summary_path,
+            error=eval_error or "probe evaluation failed",
+            train_aggregate_metric=train_summary.get("aggregate_metric_value"),
+            eval_aggregate_metric=None,
+            rollout_rmse_max=None,
+            duration_seconds=time.time() - started_at,
+        )
+
+    eval_summary = _read_json(eval_summary_path)
+    return ProbeRunResult(
+        succeeded=True,
+        config_path=config_path,
+        run_dir=run_dir,
+        log_dir=logs_dir,
+        train_summary_path=train_summary_path,
+        eval_summary_path=eval_summary_path,
+        error=None,
+        train_aggregate_metric=train_summary.get("aggregate_metric_value"),
+        eval_aggregate_metric=eval_summary.get("aggregate_metric_value"),
+        rollout_rmse_max=_extract_rollout_rmse_max(eval_summary),
+        duration_seconds=time.time() - started_at,
+    )
 
 
 def status_score(status: PhaseRunStatus) -> tuple[int, int, int]:
@@ -406,6 +631,7 @@ def auto_close_phase(
         strategy_id = "__baseline__"
         description = "run canonical phase without a patch"
         run_overrides: dict[str, Any] = {}
+        probe: ProbeRunResult | None = None
 
         if status_before.status != "missing":
             strategy = choose_strategy(
@@ -421,14 +647,51 @@ def auto_close_phase(
             snapshots = apply_strategy(spec, strategy)
 
         started_at = time.time()
-        command, returncode, status_after = run_phase_once(
-            spec=spec,
-            workspace_dir=workspace_dir,
-            jax_platform=jax_platform,
-            dry_run=dry_run,
-            base_run_kwargs=base_run_kwargs,
-            run_overrides=run_overrides,
-        )
+        if dry_run:
+            command, returncode, status_after = run_phase_once(
+                spec=spec,
+                workspace_dir=workspace_dir,
+                jax_platform=jax_platform,
+                dry_run=True,
+                base_run_kwargs=base_run_kwargs,
+                run_overrides=run_overrides,
+            )
+        else:
+            probe = _run_phase1_probe(
+                workspace_dir=workspace_dir,
+                attempt_index=attempt_index,
+                strategy_id=strategy_id,
+                jax_platform=jax_platform,
+            )
+            if probe.succeeded:
+                command, returncode, status_after = run_phase_once(
+                    spec=spec,
+                    workspace_dir=workspace_dir,
+                    jax_platform=jax_platform,
+                    dry_run=False,
+                    base_run_kwargs=base_run_kwargs,
+                    run_overrides=run_overrides,
+                )
+            else:
+                command = [
+                    sys.executable,
+                    "scripts/train_universal.py",
+                    "--config",
+                    str(probe.config_path),
+                    "--output_dir",
+                    str(probe.run_dir),
+                    "--seed",
+                    "42",
+                ]
+                returncode = 1
+                status_after = PhaseRunStatus(
+                    phase_id=spec.phase_id,
+                    summary_path=spec.summary_path_for_workspace(workspace_dir),
+                    status="failed",
+                    accepted=False,
+                    error=probe.error,
+                    gates=status_before.gates,
+                )
 
         improved = status_score(status_after) > status_score(status_before)
         kept = strategy_id == "__baseline__" or improved
@@ -447,6 +710,21 @@ def auto_close_phase(
             "duration_seconds": time.time() - started_at,
             "command": command,
             "returncode": returncode,
+            "probe": None
+            if probe is None
+            else {
+                "succeeded": probe.succeeded,
+                "config_path": str(probe.config_path),
+                "run_dir": str(probe.run_dir),
+                "log_dir": str(probe.log_dir),
+                "train_summary_path": str(probe.train_summary_path),
+                "eval_summary_path": str(probe.eval_summary_path),
+                "error": probe.error,
+                "train_aggregate_metric": probe.train_aggregate_metric,
+                "eval_aggregate_metric": probe.eval_aggregate_metric,
+                "rollout_rmse_max": probe.rollout_rmse_max,
+                "duration_seconds": probe.duration_seconds,
+            },
             "status_before": status_before.status,
             "accepted_before": status_before.accepted,
             "gates_before": status_before.gates,
