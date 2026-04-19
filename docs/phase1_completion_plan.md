@@ -9,7 +9,7 @@ It is based on the current canonical run, not on hypothetical failure modes.
 
 Canonical workspace:
 
-- [outputs/unit_foundation_phase1_run/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run/summary.json:1)
+- [outputs/unit_foundation_phase1_run_v11/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run_v11/summary.json:1)
 
 Current gate state:
 
@@ -21,16 +21,15 @@ Current gate state:
 
 Current red metrics:
 
-- rollout outlier: `cstr_fast_kinetics` rollout RMSE `18.1964`
-- rollout outlier: `separator_sharp_split` rollout RMSE `10.0837`
-- transfer fail: `cstr_fast_kinetics` warm-start rollout RMSE `18.6586` vs scratch `13.8418`
-- transfer fail: `two_tank_high_throughput` warm-start rollout RMSE `0.1926` vs scratch `0.1203`
+- rollout outlier: `cstr_fast_kinetics` rollout RMSE `20.4004`
+- rollout outlier: `heat_exchanger` rollout RMSE `10.1438`
+- transfer fail: `two_tank_high_throughput` warm-start rollout RMSE `0.8689` vs scratch `0.1274`
 
 Primary evidence:
 
-- [eval/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run/outputs/unit_foundation/eval/summary.json:1)
-- [transfer_benchmark/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run/outputs/unit_foundation/transfer_benchmark/summary.json:1)
-- [control_gate/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run/outputs/unit_foundation/control_gate/summary.json:1)
+- [eval/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/eval/summary.json:1)
+- [transfer_benchmark/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/transfer_benchmark/summary.json:1)
+- [control_gate/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/control_gate/summary.json:1)
 
 ## Definition Of Done
 
@@ -55,7 +54,7 @@ should be introduced to close this phase.
 The foundation checkpoint is still weak on:
 
 - `cstr_fast_kinetics`
-- `separator_sharp_split`
+- `heat_exchanger`
 
 That means the repo is not only failing transfer. It is also failing the
 foundation-quality gate on the main checkpoint itself.
@@ -78,7 +77,7 @@ Allowed levers:
 Immediate target:
 
 - reduce `cstr_fast_kinetics` rollout RMSE below `10`
-- reduce `separator_sharp_split` rollout RMSE below `10`
+- reduce `heat_exchanger` rollout RMSE below `10`
 
 Implementation rule:
 
@@ -111,7 +110,6 @@ Required policy dimensions:
 
 Targets that must be solved:
 
-- `cstr_fast_kinetics`
 - `two_tank_high_throughput`
 
 Success rule per target:
@@ -147,6 +145,19 @@ For transfer closure:
 
 This keeps the iteration loop fast without introducing a second active workflow.
 
+Current canonical closure rule:
+
+- rollout-targeted attempts should use:
+  - `--skip_generation`
+  - `--skip_transfer`
+  - `--skip_control`
+- transfer-targeted attempts should use:
+  - `--skip_generation`
+  - `--skip_training`
+  - `--skip_evaluation`
+  - `--skip_control`
+  - `--transfer_targets two_tank_high_throughput`
+
 ### 4. Re-run The Full Canonical Baseline Once The Outliers Are Closed
 
 After the rollout gate and transfer gate pass in targeted reruns:
@@ -180,7 +191,7 @@ Files:
 
 Steps:
 
-1. identify the minimal training changes that improve `cstr_fast_kinetics` and `separator_sharp_split`
+1. identify the minimal training changes that improve `cstr_fast_kinetics` and `heat_exchanger`
 2. retrain the shared checkpoint on the canonical regime corpus
 3. re-evaluate rollout metrics on the canonical evaluation path
 4. stop only when both outliers clear the current gate
@@ -197,7 +208,7 @@ Files:
 Steps:
 
 1. add explicit target-family transfer policy selection
-2. solve `cstr_fast_kinetics`
+2. keep `cstr_fast_kinetics` and `heat_exchanger_high_ua` green
 3. solve `two_tank_high_throughput`
 4. codify the winning policy in the canonical benchmark
 5. add regressions so those targets cannot silently fall back again
@@ -224,4 +235,3 @@ Before marking Phase 1 complete, all of the following must be true:
 - canonical control gate still passes
 - no temporary debug configs or scripts remain in the active repo surface
 - the final accepted behavior is documented in the canonical docs, not in chat logs
-

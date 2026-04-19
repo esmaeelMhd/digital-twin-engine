@@ -312,14 +312,15 @@ def test_apply_strategy_and_restore_round_trips_phase1_yaml() -> None:
         status=type(status)(
             phase_id=status.phase_id,
             summary_path=status.summary_path,
-            status="not_accepted",
+            status="failed",
             accepted=False,
-            error=None,
-            gates={"rollout_stability_on_held_out_variants": False},
+            error="The maximum number of solver steps was reached.",
+            gates={},
         ),
         attempted_strategy_ids=set(),
     )
     assert strategy is not None
+    assert strategy.strategy_id == "phase1_solver_max_steps_16384"
 
     target_path = PROJECT_ROOT / "configs" / "training_universal_phase1_regime.yaml"
     before = target_path.read_text(encoding="utf-8")
@@ -446,7 +447,7 @@ def test_find_prior_kept_strategy_id_reads_latest_matching_phase_workspace(tmp_p
                 "attempts": [
                     {"strategy_id": "__baseline__", "kept": True, "improved": True},
                     {"strategy_id": "phase1_batch_size_16", "kept": True, "improved": True},
-                    {"strategy_id": "phase1_solver_relaxed_tolerances", "kept": False, "improved": False},
+                    {"strategy_id": "phase1_rollout_only_rerun", "kept": False, "improved": False},
                 ]
             }
         ),
@@ -625,8 +626,6 @@ def test_auto_close_phase_does_not_repeat_non_improving_strategy_in_same_run(
         return _FakeProbe(strategy_id=strategy_id, succeeded=True)
 
     statuses = [
-        # attempt 1 baseline failure
-        ("failed", False, "resource exhausted: out of memory", {}),
         # attempt 2 improves to not_accepted
         (
             "not_accepted",
@@ -699,11 +698,13 @@ def test_auto_close_phase_does_not_repeat_non_improving_strategy_in_same_run(
     )
 
     strategy_ids = [attempt["strategy_id"] for attempt in payload["attempts"]]
-    assert strategy_ids[:2] == [
+    assert strategy_ids == [
         "__baseline__",
         "phase1_batch_size_16",
+        "phase1_rollout_only_rerun",
+        "phase1_transfer_two_tank_only_rerun",
     ]
-    assert probe_calls[:2] == strategy_ids[:2]
+    assert probe_calls == strategy_ids
 
 
 def test_convergence_agent_auto_close_dry_run_returns_nonzero_until_phase_is_accepted(tmp_path: Path) -> None:
