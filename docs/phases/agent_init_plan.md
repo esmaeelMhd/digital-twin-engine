@@ -79,18 +79,31 @@ Now, you will write the core mathematical engine for the new architecture.
    * `X`: Float array of shape `(N_nodes, D_extensive)` representing extensive capacities (mass, energy).
    * `P`: Float array of shape `(N_nodes, D_intensive)` representing intensive potentials (pressure, temperature).
    * `M`: Boolean or Float array of shape `(N_nodes, N_nodes)` representing the physical adjacency matrix (edges/pipes).
-   * `edge_features`: Float array of shape `(N_nodes, N_nodes, D_edge)` for valve states/pipe resistances.
+   * `edge_controls`: Float array of shape `(N_nodes, N_nodes, D_edge)` for valve states/pipe resistances.
+   * `node_controls`: Float array of shape `(N_nodes, D_node)` for heaters, agitators, or reagents.
 
 2. **Create `flux/core/attention.py`:**
-   Implement `PortHamiltonianAttention(eqx.Module)`. 
-   * **Inputs:** `graph` (of type `PhysicalGraphTuple`).
+   Implement `PortHamiltonianAttention(eqx.Module)`. This handles **Transport** (inter-node flow).
+   * **Inputs:** `P` (Intensive potentials), `M` (Adjacency), `edge_controls` (Valves).
    * **Mechanism:**
-     * Project edge features into a conductance matrix `C = Softplus(Linear(edge_features))`.
+     * Project `edge_controls` into a conductance matrix `C = Softplus(Linear(edge_controls))`.
      * Calculate potential differences: `DeltaP = P[:, None, :] - P[None, :, :]`.
      * Calculate unnormalized flux: `F = C * M * DeltaP`.
-     * **The Skew-Symmetric Guarantee:** `A = F - F.transpose(0, 1, 2)` (ensure it is perfectly skew-symmetric).
-     * Calculate state update rates: `dX_dt = sum(A, axis=1)`.
-   * **Output:** `dX_dt` (the rate of change for the extensive states).
+     * **The Skew-Symmetric Guarantee:** `A = F - F.transpose(0, 1, 2)`.
+     * Calculate transport rates: `transport_dX_dt = sum(A, axis=1)`.
+   * **Output:** `transport_dX_dt` (shape: `(N_nodes, D_extensive)`).
+
+3. **Create `flux/core/dynamics.py`:**
+   Implement `NodeDynamicsNetwork(eqx.Module)`. This handles **Transformation** (intra-node reactions, microbiology, heating).
+   * **Inputs:** `X` (Extensive states), `P` (Intensive potentials), `node_controls` (Heaters, chillers).
+   * **Mechanism:**
+     * Pass `[X, P, node_controls]` through a localized MLP.
+     * Output must represent the generation/consumption rates of mass/energy within the tank.
+   * **Output:** `source_dX_dt` (shape: `(N_nodes, D_extensive)`).
+
+4. **Create `flux/core/model.py`:**
+   Implement `PlantGraphModel(eqx.Module)` to tie it all together.
+   * **Call Method:** `total_dX_dt = self.attention(...) + self.dynamics(...)`.
 
 ---
 

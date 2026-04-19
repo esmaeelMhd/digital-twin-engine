@@ -30,11 +30,11 @@ We are abandoning the "Universal Padded Backbone" in favor of **Port-Hamiltonian
 *Objective: Build the isolated `PortHamiltonianAttention` layer and mathematically prove 100% conservation.*
 
 *   **Task 1.1:** Initialize the new `flux-attention-engine` repository (JAX, Equinox, Diffrax).
-*   **Task 1.2:** Define the Graph Representation. States are strictly divided into Extensive variables ($X$: mass, energy) and Intensive variables ($P$: pressure, temperature).
-*   **Task 1.3:** Implement the PHA layer.
-    *   Compute the unnormalized conductance $C$.
-    *   Compute the Attention matrix: $A = \sigma(C \odot M \cdot (P_i - P_j) - [C \odot M \cdot (P_i - P_j)]^T)$.
-    *   Assert that $A = -A^T$ (Strict First Law Conservation).
+*   **Task 1.2:** Define the Graph Representation. States are strictly divided into Extensive variables ($X$: mass, energy) and Intensive variables ($P$: pressure, temperature, concentration).
+*   **Task 1.3:** Implement the core architectural split: **Transport vs. Transformation**.
+    *   **The PHA Layer (Transport):** $A = \sigma(C \odot M \cdot (P_i - P_j) - [C \odot M \cdot (P_i - P_j)]^T)$. Computes `transport_dX_dt` (routes flow between nodes, controlled by edge features like valves).
+    *   **The Node Dynamics Layer (Transformation):** An MLP that computes `source_dX_dt` (reactions, microbiological growth, adsorption within a node, controlled by node features like heaters).
+    *   **Total Update:** $\frac{dX}{dt} = \text{transport\_dX\_dt} + \text{source\_dX\_dt}$.
 *   **Task 1.4:** Build the "Hello World" 2-node experiment. Prove fluid routes from Node A to Node B with `0.0%` mass drift over 10,000 steps.
 
 ### Phase 2: Data Generation & Zero-Shot Scale (Weeks 3-4)
