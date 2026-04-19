@@ -16,6 +16,8 @@ from typing import Any
 import numpy as np
 import yaml
 
+from dte.utils.runtime import runtime_env_defaults
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -103,6 +105,7 @@ def _run_command(
         return _step_summary(name, started_at, True, command=command, log_path=log_path)
 
     env = os.environ.copy()
+    env.update(runtime_env_defaults())
     env.update(env_updates)
     env["PYTHONUNBUFFERED"] = "1"
     with log_path.open("wb") as log_handle:
@@ -343,19 +346,40 @@ def _build_transfer_calibration_policy(
 
     if target_name == "two_tank_high_throughput" or (target_family == "hydraulic" and active_param_indices):
         return {
-            "name": "hydraulic_fresh_cde_adapters_norm",
-            "optimizer_variant": "default",
-            "trainable_mode": "adapters",
-            "tune_normalization": True,
-            "tune_physics_params": False,
-            "active_param_indices": [],
-            "restart_seed_offsets": [0],
+            "name": "hydraulic_policy_set",
             "selection_metric": "rollout_rmse",
-            "init_kwargs": {
-                "copy_drift_backbone": True,
-                "copy_cde_backbone": False,
-                "copy_drift_adapter": True,
-            },
+            "candidate_policies": [
+                {
+                    "name": "hydraulic_fresh_cde_adapters_norm",
+                    "optimizer_variant": "default",
+                    "trainable_mode": "adapters",
+                    "tune_normalization": True,
+                    "tune_physics_params": False,
+                    "active_param_indices": [],
+                    "restart_seed_offsets": [0],
+                    "selection_metric": "rollout_rmse",
+                    "init_kwargs": {
+                        "copy_drift_backbone": True,
+                        "copy_cde_backbone": False,
+                        "copy_drift_adapter": True,
+                    },
+                },
+                {
+                    "name": "hydraulic_fresh_cde_full_norm",
+                    "optimizer_variant": "default",
+                    "trainable_mode": "full",
+                    "tune_normalization": True,
+                    "tune_physics_params": False,
+                    "active_param_indices": [],
+                    "restart_seed_offsets": [0],
+                    "selection_metric": "rollout_rmse",
+                    "init_kwargs": {
+                        "copy_drift_backbone": True,
+                        "copy_cde_backbone": False,
+                        "copy_drift_adapter": True,
+                    },
+                },
+            ],
         }
 
     return {
@@ -476,6 +500,42 @@ def _select_best_transfer_restart(
         )
 
     raise BaselineError(f"Unsupported transfer restart selection metric: {selection_metric}")
+
+
+def _select_best_transfer_candidate(
+    candidate_results: list[dict[str, Any]],
+    *,
+    selection_metric: str,
+) -> dict[str, Any]:
+    """Pick the best warm-start candidate policy using the selected restart metrics."""
+
+    if not candidate_results:
+        raise BaselineError("Expected at least one transfer policy candidate result.")
+
+    if selection_metric == "rollout_rmse":
+        return min(
+            candidate_results,
+            key=lambda item: (
+                float(item["selected_restart"]["rollout_metrics"]["rmse"]),
+                float(
+                    item["selected_restart"]["train_summary"]["per_system_val_losses"][item["target"]]["total"]
+                ),
+                int(item["candidate_index"]),
+            ),
+        )
+    if selection_metric == "total_loss":
+        return min(
+            candidate_results,
+            key=lambda item: (
+                float(
+                    item["selected_restart"]["train_summary"]["per_system_val_losses"][item["target"]]["total"]
+                ),
+                float(item["selected_restart"]["rollout_metrics"]["rmse"]),
+                int(item["candidate_index"]),
+            ),
+        )
+
+    raise BaselineError(f"Unsupported transfer candidate selection metric: {selection_metric}")
 
 
 def _state_bounds(spec) -> tuple[np.ndarray, np.ndarray]:
@@ -692,90 +752,112 @@ def _run_transfer_benchmark(
         write_json(warm_start_config_path, warm_start_config)
         write_json(calibration_policy_path, calibration_policy)
 
-        restart_seed_offsets = [
-            int(offset) for offset in calibration_policy.get("restart_seed_offsets", [0])
-        ]
         selection_metric = str(calibration_policy.get("selection_metric", "rollout_rmse"))
-        warm_restart_results: list[dict[str, Any]] = []
-        warm_start_root = target_dir / "warm_start"
+        policy_candidates = calibration_policy.get("candidate_policies", [calibration_policy])
+        candidate_results: list[dict[str, Any]] = []
 
-        for restart_index, restart_offset in enumerate(restart_seed_offsets):
-            restart_dir = (
-                warm_start_root
-                if len(restart_seed_offsets) == 1
-                else warm_start_root / f"restart_{restart_index}"
-            )
-            warm_model = initialize_target_model_from_pretrained(
-                source_model,
-                source_metadata,
-                target_metadata,
-                warm_start_config,
-                jax.random.PRNGKey(seed + 10 * idx + restart_offset),
-                **dict(calibration_policy.get("init_kwargs", {})),
-            )
-            warm_calibrator = UnitCalibrator(
-                warm_model,
-                warm_start_config,
-                train_dataset,
-                val_dataset,
-                options=CalibrationOptions(
-                    trainable_mode=str(calibration_policy["trainable_mode"]),
-                    tune_normalization=bool(calibration_policy["tune_normalization"]),
-                    tune_physics_params=bool(calibration_policy["tune_physics_params"]),
-                    active_param_indices=tuple(int(idx) for idx in calibration_policy["active_param_indices"]),
-                ),
-                target_system_id=0,
-            )
-            warm_summary = warm_calibrator.calibrate(
-                str(restart_dir),
-                key=jax.random.PRNGKey(seed + 10 * idx + restart_offset + 1),
-            )
-            warm_best_model = UniversalDigitalTwin.load(
-                str(_resolve_checkpoint(restart_dir)),
-                warm_start_config,
-                target_metadata,
-            )
-            warm_eval_trainer = UniversalTrainer(
-                warm_best_model,
-                warm_start_config,
-                train_dataset,
-                val_dataset,
-            )
-            warm_per_system = warm_eval_trainer.evaluate_per_system(
-                per_system_eval_key,
-                n_batches=int(warm_start_config.get("evaluation", {}).get("per_system_batches", 2)),
-            )
-            warm_summary["per_system_val_losses"] = warm_per_system
-            warm_forecast = compute_forecast_metrics(
-                warm_eval_trainer.model,
-                warm_eval_trainer,
-                system_idx=0,
-                key=forecast_eval_key,
-                n_batches=int(warm_start_config.get("evaluation", {}).get("forecast_batches", 2)),
-            )
-            warm_rollout = compute_rollout_metrics(
-                warm_eval_trainer.model,
-                warm_eval_trainer,
-                system_idx=0,
-                key=rollout_eval_key,
-                n_batches=int(warm_start_config.get("evaluation", {}).get("rollout_batches", 2)),
-                n_samples=int(warm_start_config.get("evaluation", {}).get("rollout_samples", 4)),
-            )
-            restart_result = {
-                "target": target_name,
-                "restart_index": restart_index,
-                "restart_seed_offset": restart_offset,
-                "train_summary": warm_summary,
-                "forecast_metrics": warm_forecast,
-                "rollout_metrics": warm_rollout,
-            }
-            write_json(restart_dir / "summary.json", _json_safe(restart_result))
-            warm_restart_results.append(restart_result)
+        for candidate_index, candidate_policy in enumerate(policy_candidates):
+            restart_seed_offsets = [
+                int(offset) for offset in candidate_policy.get("restart_seed_offsets", [0])
+            ]
+            warm_restart_results: list[dict[str, Any]] = []
+            warm_start_root = target_dir / "warm_start" / str(candidate_policy["name"])
 
-        selected_warm = _select_best_transfer_restart(
-            warm_restart_results,
+            for restart_index, restart_offset in enumerate(restart_seed_offsets):
+                restart_dir = (
+                    warm_start_root
+                    if len(restart_seed_offsets) == 1
+                    else warm_start_root / f"restart_{restart_index}"
+                )
+                warm_model = initialize_target_model_from_pretrained(
+                    source_model,
+                    source_metadata,
+                    target_metadata,
+                    warm_start_config,
+                    jax.random.PRNGKey(seed + 100 * idx + 10 * candidate_index + restart_offset),
+                    **dict(candidate_policy.get("init_kwargs", {})),
+                )
+                warm_calibrator = UnitCalibrator(
+                    warm_model,
+                    warm_start_config,
+                    train_dataset,
+                    val_dataset,
+                    options=CalibrationOptions(
+                        trainable_mode=str(candidate_policy["trainable_mode"]),
+                        tune_normalization=bool(candidate_policy["tune_normalization"]),
+                        tune_physics_params=bool(candidate_policy["tune_physics_params"]),
+                        active_param_indices=tuple(int(idx) for idx in candidate_policy["active_param_indices"]),
+                    ),
+                    target_system_id=0,
+                )
+                warm_summary = warm_calibrator.calibrate(
+                    str(restart_dir),
+                    key=jax.random.PRNGKey(seed + 100 * idx + 10 * candidate_index + restart_offset + 1),
+                )
+                warm_best_model = UniversalDigitalTwin.load(
+                    str(_resolve_checkpoint(restart_dir)),
+                    warm_start_config,
+                    target_metadata,
+                )
+                warm_eval_trainer = UniversalTrainer(
+                    warm_best_model,
+                    warm_start_config,
+                    train_dataset,
+                    val_dataset,
+                )
+                warm_per_system = warm_eval_trainer.evaluate_per_system(
+                    per_system_eval_key,
+                    n_batches=int(warm_start_config.get("evaluation", {}).get("per_system_batches", 2)),
+                )
+                warm_summary["per_system_val_losses"] = warm_per_system
+                warm_forecast = compute_forecast_metrics(
+                    warm_eval_trainer.model,
+                    warm_eval_trainer,
+                    system_idx=0,
+                    key=forecast_eval_key,
+                    n_batches=int(warm_start_config.get("evaluation", {}).get("forecast_batches", 2)),
+                )
+                warm_rollout = compute_rollout_metrics(
+                    warm_eval_trainer.model,
+                    warm_eval_trainer,
+                    system_idx=0,
+                    key=rollout_eval_key,
+                    n_batches=int(warm_start_config.get("evaluation", {}).get("rollout_batches", 2)),
+                    n_samples=int(warm_start_config.get("evaluation", {}).get("rollout_samples", 4)),
+                )
+                restart_result = {
+                    "target": target_name,
+                    "candidate_index": candidate_index,
+                    "policy_name": str(candidate_policy["name"]),
+                    "restart_index": restart_index,
+                    "restart_seed_offset": restart_offset,
+                    "train_summary": warm_summary,
+                    "forecast_metrics": warm_forecast,
+                    "rollout_metrics": warm_rollout,
+                }
+                write_json(restart_dir / "summary.json", _json_safe(restart_result))
+                warm_restart_results.append(restart_result)
+
+            selected_restart = _select_best_transfer_restart(
+                warm_restart_results,
+                selection_metric=str(candidate_policy.get("selection_metric", selection_metric)),
+            )
+            candidate_results.append(
+                {
+                    "target": target_name,
+                    "candidate_index": candidate_index,
+                    "policy": copy.deepcopy(candidate_policy),
+                    "restart_summaries": warm_restart_results,
+                    "selected_restart": selected_restart,
+                }
+            )
+
+        selected_candidate = _select_best_transfer_candidate(
+            candidate_results,
             selection_metric=selection_metric,
         )
+        selected_policy = copy.deepcopy(selected_candidate["policy"])
+        selected_warm = copy.deepcopy(selected_candidate["selected_restart"])
         warm_summary = copy.deepcopy(selected_warm["train_summary"])
         warm_forecast = copy.deepcopy(selected_warm["forecast_metrics"])
         warm_rollout = copy.deepcopy(selected_warm["rollout_metrics"])
@@ -835,11 +917,13 @@ def _run_transfer_benchmark(
         result = {
             "target": target_name,
             "warm_start": {
-                "policy": calibration_policy,
+                "policy": selected_policy,
+                "candidate_policies": candidate_results,
                 "selection_metric": selection_metric,
+                "selected_candidate_index": int(selected_candidate["candidate_index"]),
+                "selected_policy_name": str(selected_policy["name"]),
                 "selected_restart_index": int(selected_warm["restart_index"]),
                 "selected_restart_seed_offset": int(selected_warm["restart_seed_offset"]),
-                "restart_summaries": warm_restart_results,
                 "effective_optimizer": warm_start_config["optimizer"],
                 "train_summary": warm_summary,
                 "forecast_metrics": warm_forecast,

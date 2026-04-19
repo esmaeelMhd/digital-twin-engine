@@ -241,20 +241,23 @@ def test_build_transfer_calibration_policy_uses_family_specific_initializer_for_
         n_epochs=4,
     )
     two_tank_policy = _build_transfer_calibration_policy(two_tank_target, source_sources)
-    assert two_tank_policy == {
-        "name": "hydraulic_fresh_cde_adapters_norm",
-        "optimizer_variant": "default",
-        "trainable_mode": "adapters",
-        "tune_normalization": True,
-        "tune_physics_params": False,
-        "active_param_indices": [],
-        "restart_seed_offsets": [0],
-        "selection_metric": "rollout_rmse",
-        "init_kwargs": {
-            "copy_drift_backbone": True,
-            "copy_cde_backbone": False,
-            "copy_drift_adapter": True,
-        },
+    assert two_tank_policy["name"] == "hydraulic_policy_set"
+    assert two_tank_policy["selection_metric"] == "rollout_rmse"
+    assert [candidate["name"] for candidate in two_tank_policy["candidate_policies"]] == [
+        "hydraulic_fresh_cde_adapters_norm",
+        "hydraulic_fresh_cde_full_norm",
+    ]
+    assert two_tank_policy["candidate_policies"][0]["trainable_mode"] == "adapters"
+    assert two_tank_policy["candidate_policies"][1]["trainable_mode"] == "full"
+    assert two_tank_policy["candidate_policies"][0]["init_kwargs"] == {
+        "copy_drift_backbone": True,
+        "copy_cde_backbone": False,
+        "copy_drift_adapter": True,
+    }
+    assert two_tank_policy["candidate_policies"][1]["init_kwargs"] == {
+        "copy_drift_backbone": True,
+        "copy_cde_backbone": False,
+        "copy_drift_adapter": True,
     }
 
 

@@ -30,7 +30,7 @@ model:
     dt0_factor: 1.0
     max_steps: 8192
 training:
-  batch_size: 64
+  batch_size: 16
   seq_len: 48
   stride: 8
   val_split: 0.2

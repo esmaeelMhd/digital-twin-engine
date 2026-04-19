@@ -9,10 +9,12 @@ from pathlib import Path
 
 from dte.convergence.closure import (
     _build_phase1_probe_config_payload,
+    _infer_phase1_probe_error,
     _phase1_enrich_failed_status,
     apply_strategy,
     auto_close_phase,
     choose_strategy,
+    find_prior_kept_strategy_id,
     restore_snapshots,
     status_score,
 )
@@ -376,6 +378,28 @@ def test_build_phase1_probe_config_payload_caps_runtime_without_overwriting_user
     assert config["checkpointing"]["val_every"] == 4
 
 
+def test_infer_phase1_probe_error_marks_generic_gpu_startup_failure_as_inferred_oom() -> None:
+    probe_config = {
+        "training": {
+            "batch_size": 64,
+        }
+    }
+    train_error = """
+============================================================
+UNIVERSAL DIGITAL TWIN TRAINING
+============================================================
+Universal Training:   0%|          | 0/8 [00:00<?, ?it/s]
+"""
+
+    error = _infer_phase1_probe_error(
+        train_error=train_error,
+        probe_config=probe_config,
+        jax_platform="gpu",
+    )
+
+    assert error == "resource exhausted: out of memory (inferred)"
+
+
 def test_auto_close_phase_runs_dry_run_baseline_and_records_attempt(tmp_path: Path) -> None:
     spec = get_phase_spec("phase1_unit_foundation_v1")
     workspace_dir = tmp_path / "auto_close"
@@ -395,6 +419,291 @@ def test_auto_close_phase_runs_dry_run_baseline_and_records_attempt(tmp_path: Pa
     assert payload["attempts"][0]["status_after"] == "dry_run"
     state_path = workspace_dir / ".convergence_agent" / "state.json"
     assert state_path.exists()
+
+
+def test_find_prior_kept_strategy_id_reads_latest_matching_phase_workspace(tmp_path: Path) -> None:
+    spec = get_phase_spec("phase1_unit_foundation_v1")
+    prior_workspace = tmp_path / "unit_foundation_phase1_run_prev"
+    prior_workspace.mkdir(parents=True)
+    (prior_workspace / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "acceptance": {
+                    "phase": "phase1_unit_foundation_v1",
+                    "accepted": False,
+                    "gates": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_dir = prior_workspace / ".convergence_agent"
+    state_dir.mkdir(parents=True)
+    (state_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "attempts": [
+                    {"strategy_id": "__baseline__", "kept": True, "improved": True},
+                    {"strategy_id": "phase1_batch_size_16", "kept": True, "improved": True},
+                    {"strategy_id": "phase1_solver_relaxed_tolerances", "kept": False, "improved": False},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    current_workspace = tmp_path / "unit_foundation_phase1_run_next"
+    current_workspace.mkdir(parents=True)
+
+    strategy_id = find_prior_kept_strategy_id(spec, current_workspace)
+
+    assert strategy_id == "phase1_batch_size_16"
+
+
+def test_auto_close_phase_carries_failed_probe_status_forward_instead_of_repeating_missing_baseline(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    spec = get_phase_spec("phase1_unit_foundation_v1")
+    workspace_dir = tmp_path / "carry_forward"
+
+    probe_calls = {"count": 0}
+
+    class _FakeProbe:
+        def __init__(self, config_path: Path, run_dir: Path, log_dir: Path, train_summary_path: Path, eval_summary_path: Path):
+            self.succeeded = False
+            self.config_path = config_path
+            self.run_dir = run_dir
+            self.log_dir = log_dir
+            self.train_summary_path = train_summary_path
+            self.eval_summary_path = eval_summary_path
+            self.error = "resource exhausted: out of memory"
+            self.train_aggregate_metric = None
+            self.eval_aggregate_metric = None
+            self.rollout_rmse_max = None
+            self.duration_seconds = 0.01
+
+    def _fake_probe(*, workspace_dir: Path, attempt_index: int, strategy_id: str, jax_platform: str, seed: int = 42):
+        probe_calls["count"] += 1
+        probe_root = workspace_dir / ".convergence_agent" / "probes" / f"{attempt_index:02d}_{strategy_id}"
+        return _FakeProbe(
+            config_path=probe_root / "config.yaml",
+            run_dir=probe_root / "run",
+            log_dir=probe_root / "logs",
+            train_summary_path=probe_root / "run" / "summary.json",
+            eval_summary_path=probe_root / "eval" / "summary.json",
+        )
+
+    monkeypatch.setattr("dte.convergence.closure._run_phase1_probe", _fake_probe)
+
+    payload = auto_close_phase(
+        spec=spec,
+        workspace_dir=workspace_dir,
+        jax_platform="gpu",
+        dry_run=False,
+        max_attempts=2,
+        base_run_kwargs={"skip_generation": True},
+    )
+
+    assert probe_calls["count"] == 2
+    assert len(payload["attempts"]) == 2
+    assert payload["attempts"][0]["strategy_id"] == "__baseline__"
+    assert payload["attempts"][0]["error_after"] == "resource exhausted: out of memory"
+    assert payload["attempts"][1]["strategy_id"] == "phase1_batch_size_16"
+    assert payload["status"] in {"failed", "missing"}
+
+
+def test_auto_close_phase_bootstraps_from_prior_kept_strategy_on_fresh_workspace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    spec = get_phase_spec("phase1_unit_foundation_v1")
+    prior_workspace = tmp_path / "unit_foundation_phase1_run_prev"
+    prior_workspace.mkdir(parents=True)
+    (prior_workspace / "summary.json").write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "acceptance": {
+                    "phase": "phase1_unit_foundation_v1",
+                    "accepted": False,
+                    "gates": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_dir = prior_workspace / ".convergence_agent"
+    state_dir.mkdir(parents=True)
+    (state_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "attempts": [
+                    {"strategy_id": "phase1_batch_size_16", "kept": True, "improved": True},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    workspace_dir = tmp_path / "unit_foundation_phase1_run_next"
+    probe_calls: list[str] = []
+
+    class _FakeProbe:
+        def __init__(self, strategy_id: str):
+            probe_root = workspace_dir / ".convergence_agent" / "probes" / strategy_id
+            self.succeeded = False
+            self.config_path = probe_root / "config.yaml"
+            self.run_dir = probe_root / "run"
+            self.log_dir = probe_root / "logs"
+            self.train_summary_path = probe_root / "run" / "summary.json"
+            self.eval_summary_path = probe_root / "eval" / "summary.json"
+            self.error = "resource exhausted: out of memory"
+            self.train_aggregate_metric = None
+            self.eval_aggregate_metric = None
+            self.rollout_rmse_max = None
+            self.duration_seconds = 0.01
+
+    def _fake_probe(*, workspace_dir: Path, attempt_index: int, strategy_id: str, jax_platform: str, seed: int = 42):
+        probe_calls.append(strategy_id)
+        return _FakeProbe(strategy_id)
+
+    monkeypatch.setattr("dte.convergence.closure._run_phase1_probe", _fake_probe)
+
+    payload = auto_close_phase(
+        spec=spec,
+        workspace_dir=workspace_dir,
+        jax_platform="gpu",
+        dry_run=False,
+        max_attempts=1,
+        base_run_kwargs={"skip_generation": True},
+    )
+
+    assert probe_calls == ["phase1_batch_size_16"]
+    assert payload["attempts"][0]["strategy_id"] == "phase1_batch_size_16"
+    assert "[bootstrapped from prior kept strategy]" in payload["attempts"][0]["description"]
+
+
+def test_auto_close_phase_does_not_repeat_non_improving_strategy_in_same_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    spec = get_phase_spec("phase1_unit_foundation_v1")
+    workspace_dir = tmp_path / "no_repeat"
+
+    probe_calls: list[str] = []
+
+    class _FakeProbe:
+        def __init__(
+            self,
+            *,
+            strategy_id: str,
+            succeeded: bool,
+            error: str | None = None,
+            train_aggregate_metric: float | None = 0.1,
+            eval_aggregate_metric: float | None = 0.1,
+            rollout_rmse_max: float | None = 50.0,
+        ):
+            probe_root = workspace_dir / ".convergence_agent" / "probes" / strategy_id
+            self.succeeded = succeeded
+            self.config_path = probe_root / "config.yaml"
+            self.run_dir = probe_root / "run"
+            self.log_dir = probe_root / "logs"
+            self.train_summary_path = probe_root / "run" / "summary.json"
+            self.eval_summary_path = probe_root / "eval" / "summary.json"
+            self.error = error
+            self.train_aggregate_metric = train_aggregate_metric
+            self.eval_aggregate_metric = eval_aggregate_metric
+            self.rollout_rmse_max = rollout_rmse_max
+            self.duration_seconds = 0.01
+
+    def _fake_probe(*, workspace_dir: Path, attempt_index: int, strategy_id: str, jax_platform: str, seed: int = 42):
+        probe_calls.append(strategy_id)
+        if strategy_id == "__baseline__":
+            return _FakeProbe(strategy_id=strategy_id, succeeded=False, error="resource exhausted: out of memory")
+        return _FakeProbe(strategy_id=strategy_id, succeeded=True)
+
+    statuses = [
+        # attempt 1 baseline failure
+        ("failed", False, "resource exhausted: out of memory", {}),
+        # attempt 2 improves to not_accepted
+        (
+            "not_accepted",
+            False,
+            None,
+            {
+                "shared_checkpoint_trains_reproducibly": True,
+                "control_response_fidelity_is_measured": True,
+                "control_gate_completed": True,
+                "rollout_stability_on_held_out_variants": False,
+                "transfer_beats_scratch_on_targets": False,
+            },
+        ),
+        # attempt 3 stays not_accepted, so strategy should not repeat
+        (
+            "not_accepted",
+            False,
+            None,
+            {
+                "shared_checkpoint_trains_reproducibly": True,
+                "control_response_fidelity_is_measured": True,
+                "control_gate_completed": True,
+                "rollout_stability_on_held_out_variants": False,
+                "transfer_beats_scratch_on_targets": False,
+            },
+        ),
+        # attempt 4 also not_accepted, but should come from the next strategy
+        (
+            "not_accepted",
+            False,
+            None,
+            {
+                "shared_checkpoint_trains_reproducibly": True,
+                "control_response_fidelity_is_measured": True,
+                "control_gate_completed": True,
+                "rollout_stability_on_held_out_variants": False,
+                "transfer_beats_scratch_on_targets": False,
+            },
+        ),
+    ]
+
+    def _fake_run_phase_once(*, spec, workspace_dir, jax_platform, dry_run, base_run_kwargs=None, run_overrides=None):
+        status_name, accepted, error, gates = statuses.pop(0)
+        from dte.convergence.workflow import PhaseRunStatus
+
+        return (
+            ["python", "scripts/run_unit_foundation_baseline.py"],
+            0,
+            PhaseRunStatus(
+                phase_id=spec.phase_id,
+                summary_path=spec.summary_path_for_workspace(workspace_dir),
+                status=status_name,
+                accepted=accepted,
+                error=error,
+                gates=gates,
+            ),
+        )
+
+    monkeypatch.setattr("dte.convergence.closure._run_phase1_probe", _fake_probe)
+    monkeypatch.setattr("dte.convergence.closure.run_phase_once", _fake_run_phase_once)
+    monkeypatch.setattr("dte.convergence.closure.apply_strategy", lambda spec, strategy: [])
+
+    payload = auto_close_phase(
+        spec=spec,
+        workspace_dir=workspace_dir,
+        jax_platform="gpu",
+        dry_run=False,
+        max_attempts=4,
+        base_run_kwargs={"skip_generation": True},
+    )
+
+    strategy_ids = [attempt["strategy_id"] for attempt in payload["attempts"]]
+    assert strategy_ids[:2] == [
+        "__baseline__",
+        "phase1_batch_size_16",
+    ]
+    assert probe_calls[:2] == strategy_ids[:2]
 
 
 def test_convergence_agent_auto_close_dry_run_returns_nonzero_until_phase_is_accepted(tmp_path: Path) -> None:
