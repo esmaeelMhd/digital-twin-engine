@@ -17,7 +17,7 @@ import yaml
 from plotly.subplots import make_subplots
 
 from dte.control.mpc import SamplingMPC
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.registry import get_system_spec, get_simulator
 
 from app._theme import inject_theme
@@ -25,7 +25,6 @@ from app._theme import inject_theme
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
-DEFAULT_CSTR_CONFIG = PROJECT_ROOT / "configs" / "cstr_default.yaml"
 DEFAULT_MPC_CONFIG = PROJECT_ROOT / "configs" / "mpc_default.yaml"
 
 st.set_page_config(
@@ -167,7 +166,7 @@ def _discover_runs() -> list[dict[str, Any]]:
 
         system_config_path = directory / "system_config.yaml"
         if not system_config_path.exists():
-            system_config_path = directory / "cstr_config.yaml"
+            continue
         summary_path = directory / "training_summary.json"
         history_path = directory / "training_history.json"
         summary = _safe_read_json(summary_path)
@@ -186,7 +185,7 @@ def _discover_runs() -> list[dict[str, Any]]:
                 "directory": directory,
                 "model_path": model_path,
                 "config_path": config_path,
-                "system_config_path": str(system_config_path) if system_config_path.exists() else str(DEFAULT_CSTR_CONFIG),
+                "system_config_path": str(system_config_path),
                 "summary_path": summary_path,
                 "history_path": history_path,
                 "checkpoint_label": checkpoint_label,

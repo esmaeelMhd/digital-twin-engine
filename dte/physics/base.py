@@ -10,7 +10,7 @@ class PhysicsLoss(ABC):
     """Protocol for computing physics-based residual losses.
 
     Each process system implements this class in its own physics module.
-    The :class:`~dte.training.losses.LossComputer` holds a single
+    The :class:`~dte.training.shared.losses.LossComputer` holds a single
     ``PhysicsLoss`` instance and calls :meth:`compute_residuals` without
     needing to know which system it is operating on.
     """
@@ -36,7 +36,7 @@ class PhysicsLoss(ABC):
     def residual_names(self) -> list:
         """Return the residual names this physics module produces.
 
-        Used by :class:`~dte.training.losses.LossComputer` to build the
+        Used by :class:`~dte.training.shared.losses.LossComputer` to build the
         loss weight dictionary dynamically.  Override if your system
         uses non-standard names.
         """

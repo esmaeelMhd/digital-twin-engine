@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from dte.data.real_data import RealDataIngestion
+from dte.data.ingestion.real_data import RealDataIngestion
 from dte.simulators.registry import get_system_spec
 
 

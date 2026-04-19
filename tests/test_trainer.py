@@ -4,11 +4,15 @@ import jax
 import jax.numpy as jnp
 import yaml
 
-from dte.data.dataset import TrajectoryDataset
-from dte.models.digital_twin import DigitalTwin
+from dte.data.datasets.unit_dataset import TrajectoryDataset
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.registry import get_system_spec
-from dte.training.losses import LossComputer
-from dte.training.trainer import Trainer, _format_non_finite_reason, _non_finite_loss_names
+from dte.training.shared.losses import LossComputer
+from dte.training.unit.trainer import (
+    Trainer,
+    _format_non_finite_reason,
+    _non_finite_loss_names,
+)
 from scripts.train import _json_safe_float
 
 

@@ -1,0 +1,63 @@
+ideas:
+  - id: latent_diffusion_floor
+    priority: 10
+    target_file: dte/models/unit/latent_sde.py
+    title: Add a floor to the diffusion output to prevent uncertainty collapse and improve stochastic stability.
+    rationale: Preserve a minimum stochastic signal so the latent SDE does not collapse to nearly deterministic dynamics.
+    instructions:
+      - Keep the change local to diffusion parameterization.
+      - Use a small positive floor and preserve positivity of the final diffusion scale.
+
+  - id: latent_highway_gates
+    priority: 20
+    target_file: dte/models/unit/latent_sde.py
+    title: Introduce gated residual branches (Highway Network style) in LatentDrift and LatentDiffusion to enable regime-switching latent dynamics.
+    rationale: Let the model adaptively interpolate between identity transport and nonlinear update pathways.
+    instructions:
+      - Prefer one small gate per block over a large new subsystem.
+      - Keep the patch one-file and avoid config expansion.
+
+  - id: latent_linear_plus_residual
+    priority: 30
+    target_file: dte/models/unit/latent_sde.py
+    title: Separate LatentDrift into a linear base and a zero-initialized nonlinear residual correction to improve learning stability and provide a strong inductive bias for physical dynamics.
+    rationale: Many process dynamics are close to locally linear with sparse nonlinear corrections.
+    instructions:
+      - Initialize the nonlinear correction conservatively.
+      - Keep the existing conditioning inputs available to both branches.
+
+  - id: latent_moe_drift
+    priority: 40
+    target_file: dte/models/unit/latent_sde.py
+    title: Implement a Mixture-of-Experts (MoE) drift with two experts and a learnable gate to enable regime-switching latent dynamics.
+    rationale: Plants often behave differently near steady state versus transients or disturbances.
+    instructions:
+      - Start with two experts only.
+      - Keep the gate lightweight and condition it on the same inputs as drift.
+
+  - id: latent_diffusion_context_gate
+    priority: 50
+    target_file: dte/models/unit/latent_sde.py
+    title: Add a context-conditioned diffusion gate so uncertainty can expand during transients and contract near steady operation.
+    rationale: Diffusion should depend on regime, not just a single global nonlinear map.
+    instructions:
+      - Keep the output positive and numerically stable.
+      - Bias the new gate toward conservative behavior at initialization.
+
+  - id: latent_shared_regime_gate
+    priority: 60
+    target_file: dte/models/unit/latent_sde.py
+    title: Introduce a shared regime gate that modulates both drift and diffusion blocks with the same operating-mode signal.
+    rationale: A single latent regime indicator can coordinate deterministic and stochastic behavior.
+    instructions:
+      - Reuse one gating pathway if possible.
+      - Avoid large increases in parameter count.
+
+  - id: latent_diffusion_correction_branch
+    priority: 70
+    target_file: dte/models/unit/latent_sde.py
+    title: Add a zero-initialized residual correction branch to LatentDiffusion so stochasticity can learn missing variability without destabilizing the base path.
+    rationale: Let the model add uncertainty only when data supports it.
+    instructions:
+      - Initialize the correction branch near zero.
+      - Keep the base diffusion path intact and easy to reason about.

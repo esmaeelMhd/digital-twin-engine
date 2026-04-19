@@ -1,0 +1,45 @@
+research:
+  workspace_dir: outputs/autoresearch_moonshot_compare
+  metric_name: best_val_loss
+  metric_mode: min
+  time_budget_minutes: 10
+  hard_timeout_buffer_minutes: 5
+  promote_if_improved: true
+
+train:
+  config: configs/training_default.yaml
+  system_config: configs/cstr_default.yaml
+  data_dir: data/cstr/
+  n_epochs: 15
+  batch_size: null
+  val_every: 1
+  seed: 42
+
+agent:
+  default_llm: gemini-3.1-pro-preview-customtools
+  adaptive_temperature: true
+  max_fail_streak_temp: 0.5
+  temperature: 0.1
+  deepseek_temperature: 0.0
+  deepseek_max_tokens: 64000
+  thinking_level: medium
+  apply_llm: gemini-3.1-flash-lite-preview
+  apply_temperature: 0.0
+  apply_thinking_level: low
+  gemini_context_cache: true
+  gemini_context_cache_ttl: 3600s
+  gemini_context_cache_min_tokens: 2048
+  eval_on_keep: true
+  eval_every_n_runs: 0
+  eval_n_trajectories: 8
+  eval_predict_mode: deterministic
+  eval_plot_count: 0
+  eval_skip_ensemble: true
+  cooldown_between_experiments: 10
+  context_file: auto_research.md
+  modifiable_files:
+    - dte/models/unit/encoder.py
+    - dte/models/unit/latent_sde.py
+    - dte/models/unit/digital_twin.py
+    - dte/training/shared/losses.py
+    - dte/training/unit/trainer.py

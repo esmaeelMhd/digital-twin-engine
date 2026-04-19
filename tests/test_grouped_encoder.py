@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 import yaml
 
-from dte.models.digital_twin import DigitalTwin
-from dte.models.grouped_encoder import GroupedStateEncoder
+from dte.models.unit.digital_twin import DigitalTwin
+from dte.models.unit.grouped_encoder import GroupedStateEncoder
 from dte.simulators.registry import get_system_spec
 
 
@@ -19,6 +19,8 @@ def _load_training_config() -> dict:
         "group_encoder_layers": 2,
         "group_mixer_layers": 2,
     }
+    config["model"]["channel_conditioning"] = {"enabled": True}
+    config["model"]["law_conditioning"] = {"enabled": True}
     return config
 
 

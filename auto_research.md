@@ -40,10 +40,10 @@ changes are needed.
 
 `physical state + controls → Encoder → latent z → LatentSDE → latent trajectory → Decoder → predicted states`
 
-- **Encoder** (`dte/models/encoder.py`): encodes `state + params + control` → `z_mean`, `z_logvar`; normalisation loaded from `SystemSpec`
-- **Decoder** (`dte/models/decoder.py`): decodes `latent + params + control`; output constraints are generic (`softplus`, `sigmoid_range`) driven by `SystemSpec.decoder_constraints`
-- **LatentSDE** (`dte/models/latent_sde.py`): separate drift and diffusion MLPs conditioned on `z + control + disturbance + params`; normalisation loaded from `SystemSpec`
-- **DigitalTwin** (`dte/models/digital_twin.py`): composes all components; `from_config(config, key, system_spec)` and `load(path, config, system_spec)` both require a resolved `SystemSpec`
+- **Encoder** (`dte/models/unit/encoder.py`): encodes `state + params + control` → `z_mean`, `z_logvar`; normalisation loaded from `SystemSpec`
+- **Decoder** (`dte/models/unit/decoder.py`): decodes `latent + params + control`; output constraints are generic (`softplus`, `sigmoid_range`) driven by `SystemSpec.decoder_constraints`
+- **LatentSDE** (`dte/models/unit/latent_sde.py`): separate drift and diffusion MLPs conditioned on `z + control + disturbance + params`; normalisation loaded from `SystemSpec`
+- **DigitalTwin** (`dte/models/unit/digital_twin.py`): composes all components; `from_config(config, key, system_spec)` and `load(path, config, system_spec)` both require a resolved `SystemSpec`
 
 All dimensions and normalisation constants come from `SystemSpec` — there are no hardcoded
 CSTR values in the model code.
@@ -58,20 +58,13 @@ CSTR values in the model code.
 | Teacher-forcing annealing | `teacher_forcing.initial_ratio` | Implemented; off by default |
 | KL annealing | `kl_annealing.*` | Always active |
 
-The training loop in `dte/training/trainer.py` uses `model.latent_sde.mean_trajectory(...)`
+The training loop in `dte/training/unit/trainer.py` uses `model.latent_sde.mean_trajectory(...)`
 when `sde_training.enabled` is false (the default). When enabled, it switches to the full
 stochastic `model.latent_sde(...)` call.
 
 ---
 
 ## Current Training Defaults (`configs/training_default.yaml`)
-
-Note: `scripts/train.py` applies a few bootstrap overrides on top of the YAML
-defaults during standard training runs, most notably:
-- `model.initial_diffusion_scale = 1e-4`
-- `optimizer.peak_lr = 5e-4`
-- `optimizer.gradient_clip = 0.5`
-- `loss_weights.kl = 0.0`
 
 ```yaml
 model:
@@ -163,7 +156,7 @@ Advisory context available to the agent:
 - `configs/training_default.yaml` — baseline hyperparameters
 - `configs/autoresearch_default.yaml` — bounded harness settings
 - `scripts/train.py` — training CLI
-- `dte/training/trainer.py` — training loop
+- `dte/training/unit/trainer.py` — training loop
 
 ---
 
@@ -176,8 +169,8 @@ The agent may only modify files listed in
 - `configs/heat_exchanger_training.yaml`
 - `configs/two_tank_training.yaml`
 - `scripts/train.py`
-- `dte/models/encoder.py`, `decoder.py`, `latent_sde.py`, `digital_twin.py`
-- `dte/training/trainer.py`, `losses.py`
+- `dte/models/unit/encoder.py`, `decoder.py`, `latent_sde.py`, `digital_twin.py`
+- `dte/training/unit/trainer.py`, `shared/losses.py`
 
 One file, one idea, minimal patch.
 

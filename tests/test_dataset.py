@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 
-from dte.data.dataset import TrajectoryDataset
+from dte.data.datasets.unit_dataset import TrajectoryDataset
 
 
 def test_split_uses_trajectory_axis_and_keeps_validation_nonempty():

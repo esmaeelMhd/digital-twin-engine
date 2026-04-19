@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import equinox as eqx
 import pytest
 
-from dte.models.encoder import Encoder
-from dte.models.decoder import Decoder
+from dte.models.unit.encoder import Encoder
+from dte.models.unit.decoder import Decoder
 
 
 def test_encoder_output_shapes():

@@ -13,7 +13,7 @@ This file replaces the earlier workflow that assumed only the older single-syste
 - demo website and demo API
 - generic MPC / RL-readiness interfaces
 
-Phase 8 from `plan.md` is still not implemented. Everything else through Phase 7 is now present in some usable form.
+Phase 8 from `legacy/docs/plan.md` is still not implemented. Everything else through Phase 7 is now present in some usable form.
 
 ---
 
@@ -40,12 +40,12 @@ Use this file as an entry-point selector.
 The repo now has seven practical layers:
 
 1. **Unit model path**
-   - `dte/models/digital_twin.py`
+   - `dte/models/unit/digital_twin.py`
    - `scripts/train.py`
    - `scripts/evaluate.py`
 
 2. **Universal foundation path**
-   - `dte/models/universal_digital_twin.py`
+   - `dte/models/universal/digital_twin.py`
    - `scripts/train_universal.py`
    - `scripts/evaluate_universal.py`
 
@@ -55,8 +55,8 @@ The repo now has seven practical layers:
 
 4. **Flowsheet graph path**
    - `dte/flowsheet/*`
-   - `dte/models/flowsheet_model.py`
-   - `dte/training/flowsheet_trainer.py`
+   - `dte/models/flowsheet/flowsheet_model.py`
+   - `dte/training/flowsheet/trainer.py`
 
 5. **Law-layer path**
    - `dte/laws/*`
@@ -73,15 +73,15 @@ The repo now has seven practical layers:
 
 Recommended reading if you need phase-specific detail:
 
-- [docs/repo_audit.md](docs/repo_audit.md)
-- [docs/implementation_mapping.md](docs/implementation_mapping.md)
-- [docs/phase1_unit_foundation_model.md](docs/phase1_unit_foundation_model.md)
-- [docs/phase2_adapters_and_calibration.md](docs/phase2_adapters_and_calibration.md)
-- [docs/phase3_flowsheet_graph_modeling.md](docs/phase3_flowsheet_graph_modeling.md)
-- [docs/phase4_modular_law_layers.md](docs/phase4_modular_law_layers.md)
-- [docs/phase5_customer_adaptation_workflow.md](docs/phase5_customer_adaptation_workflow.md)
-- [docs/phase6_demo_app.md](docs/phase6_demo_app.md)
-- [docs/phase7_mpc_and_drl_readiness.md](docs/phase7_mpc_and_drl_readiness.md)
+- [legacy/docs/repo_audit.md](legacy/docs/repo_audit.md)
+- [legacy/docs/implementation_mapping.md](legacy/docs/implementation_mapping.md)
+- [docs/phases/phase1_unit_foundation_model.md](docs/phases/phase1_unit_foundation_model.md)
+- [docs/phases/phase2_adapters_and_calibration.md](docs/phases/phase2_adapters_and_calibration.md)
+- [docs/phases/phase3_flowsheet_graph_modeling.md](docs/phases/phase3_flowsheet_graph_modeling.md)
+- [docs/phases/phase4_modular_law_layers.md](docs/phases/phase4_modular_law_layers.md)
+- [docs/phases/phase5_customer_adaptation_workflow.md](docs/phases/phase5_customer_adaptation_workflow.md)
+- [docs/phases/phase6_demo_app.md](docs/phases/phase6_demo_app.md)
+- [docs/phases/phase7_mpc_and_drl_readiness.md](docs/phases/phase7_mpc_and_drl_readiness.md)
 
 ---
 
@@ -336,7 +336,7 @@ Phase 3 added a small flowsheet graph stack. It is usable, but still a thin slic
 ### 8.1 Best Entry Point: The Smoke Runner
 
 ```bash
-python scripts/smoke_phase3.py
+python scripts/phases/smoke_phase3.py
 ```
 
 This is currently the most practical end-to-end way to validate the flowsheet path because there is not yet a dedicated Phase 3 CLI beyond the synthetic/smoke tooling.
@@ -347,9 +347,9 @@ The intended path is:
 
 1. build an example flowsheet from `dte/flowsheet/examples.py`
 2. build a synthetic dataset from `dte/flowsheet/synthetic.py`
-3. train with `dte/training/flowsheet_trainer.py`
+3. train with `dte/training/flowsheet/trainer.py`
 
-See [docs/phase3_flowsheet_graph_modeling.md](docs/phase3_flowsheet_graph_modeling.md) for the working example.
+See [docs/phases/phase3_flowsheet_graph_modeling.md](docs/phases/phase3_flowsheet_graph_modeling.md) for the working example.
 
 Current scope:
 
@@ -373,7 +373,7 @@ Phase 4 adds reusable chemistry, thermo, and biology law bundles that can augmen
 ### 9.1 Exercise The Law Layer
 
 ```bash
-python scripts/smoke_phase4.py
+python scripts/phases/smoke_phase4.py
 ```
 
 ### 9.2 Use Example Configs
@@ -442,7 +442,7 @@ The API now serves both the original inference routes and the demo routes:
 ### 10.4 Full Demo Smoke
 
 ```bash
-python scripts/smoke_phase6.py
+python scripts/phases/smoke_phase6.py
 ```
 
 Important scope note:
@@ -502,7 +502,7 @@ update = hook.correct(
 ### 11.5 Full Control Smoke
 
 ```bash
-python scripts/smoke_phase7.py
+python scripts/phases/smoke_phase7.py
 ```
 
 Current scope:
@@ -519,13 +519,13 @@ Use these to validate one phase quickly.
 
 | Phase | Smoke runner | Purpose |
 | --- | --- | --- |
-| 1 | `scripts/smoke_phase1.py` | typed unit spec, grouped encoder, universal loss/eval additions |
-| 2 | `scripts/smoke_phase2.py` | family conditioning, adapters, calibration |
-| 3 | `scripts/smoke_phase3.py` | flowsheet graph synthetic train/eval path |
-| 4 | `scripts/smoke_phase4.py` | modular law bundles and law-augmented physics |
-| 5 | `scripts/smoke_phase5.py` | customer adaptation end to end |
-| 6 | `scripts/smoke_phase6.py` | demo API + demo frontend |
-| 7 | `scripts/smoke_phase7.py` | MPC runtime, RL env, correction hooks, control metrics |
+| 1 | `scripts/phases/smoke_phase1.py` | typed unit spec, grouped encoder, universal loss/eval additions |
+| 2 | `scripts/phases/smoke_phase2.py` | family conditioning, adapters, calibration |
+| 3 | `scripts/phases/smoke_phase3.py` | flowsheet graph synthetic train/eval path |
+| 4 | `scripts/phases/smoke_phase4.py` | modular law bundles and law-augmented physics |
+| 5 | `scripts/phases/smoke_phase5.py` | customer adaptation end to end |
+| 6 | `scripts/phases/smoke_phase6.py` | demo API + demo frontend |
+| 7 | `scripts/phases/smoke_phase7.py` | MPC runtime, RL env, correction hooks, control metrics |
 
 Default pattern:
 
@@ -636,32 +636,32 @@ If you are new to the repo, the lowest-friction path is:
 2. Generate one single-system dataset
 3. Train one single-system model
 4. Evaluate it
-5. Run `scripts/smoke_phase6.py` to see the demo/API surface
-6. Run `scripts/smoke_phase7.py` to see the control surface
+5. Run `scripts/phases/smoke_phase6.py` to see the demo/API surface
+6. Run `scripts/phases/smoke_phase7.py` to see the control surface
 7. Move to universal training and customer adaptation only after the single-system path is familiar
 
 If you are validating the full roadmap rather than one feature, run:
 
-1. `scripts/smoke_phase1.py`
-2. `scripts/smoke_phase2.py`
-3. `scripts/smoke_phase3.py`
-4. `scripts/smoke_phase4.py`
-5. `scripts/smoke_phase5.py`
-6. `scripts/smoke_phase6.py`
-7. `scripts/smoke_phase7.py`
+1. `scripts/phases/smoke_phase1.py`
+2. `scripts/phases/smoke_phase2.py`
+3. `scripts/phases/smoke_phase3.py`
+4. `scripts/phases/smoke_phase4.py`
+5. `scripts/phases/smoke_phase5.py`
+6. `scripts/phases/smoke_phase6.py`
+7. `scripts/phases/smoke_phase7.py`
 8. `scripts/run_v1_milestone.py`
-5. `scripts/smoke_phase5.py`
-6. `scripts/smoke_phase6.py`
-7. `scripts/smoke_phase7.py`
+5. `scripts/phases/smoke_phase5.py`
+6. `scripts/phases/smoke_phase6.py`
+7. `scripts/phases/smoke_phase7.py`
 
 ---
 
 ## 17. Additional References
 
 - `README.md`
-- `QUICK_START.md`
+- `legacy/docs/QUICK_START.md`
 - `AGENTS.md`
-- `docs/repo_audit.md`
-- `docs/implementation_mapping.md`
+- `legacy/docs/repo_audit.md`
+- `legacy/docs/implementation_mapping.md`
 - `program.md`
 - `tests/`

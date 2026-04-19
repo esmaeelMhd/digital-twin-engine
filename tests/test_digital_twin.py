@@ -8,7 +8,7 @@ import yaml
 import tempfile
 import os
 
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.registry import get_system_spec
 
 

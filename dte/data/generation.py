@@ -10,7 +10,7 @@ from jaxtyping import Array
 def load_dataset(path: str) -> Dict[str, Array]:
     """Load a generated HDF5 dataset.
 
-    The generation pipeline now lives in ``dte.data.generation_generic``. This
+    The generation pipeline now lives in ``dte.data.generators.generic``. This
     module remains only as a stable import path for HDF5 dataset loading.
     """
     with h5py.File(path, "r") as f:

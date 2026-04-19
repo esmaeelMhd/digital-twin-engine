@@ -8,7 +8,7 @@ research:
 
 train:
   config: configs/training_default.yaml
-  cstr_config: configs/cstr_default.yaml
+  system_config: configs/cstr_default.yaml
   data_dir: data/cstr/
   n_epochs: 15
   batch_size: null
@@ -40,9 +40,9 @@ agent:
   modifiable_files:
     - configs/training_default.yaml
     - scripts/train.py
-    - dte/models/encoder.py
-    - dte/models/decoder.py
-    - dte/models/latent_sde.py
-    - dte/models/digital_twin.py
-    - dte/training/trainer.py
-    - dte/training/losses.py
+    - dte/models/unit/encoder.py
+    - dte/models/unit/decoder.py
+    - dte/models/unit/latent_sde.py
+    - dte/models/unit/digital_twin.py
+    - dte/training/unit/trainer.py
+    - dte/training/shared/losses.py

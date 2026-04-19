@@ -39,9 +39,9 @@ agent:
   eval_plot_count: 2
   eval_skip_ensemble: false
   cooldown_between_experiments: 10
-  context_file: autoresearch_ideas_gemini.md
-  ideas_file: autoresearch_ideas_gemini.yaml
+  context_file: docs/autoresearch_ideas/auto_research_gemini.md
+  ideas_file: docs/autoresearch_ideas/auto_research_gemini_ideas.yaml
   modifiable_files:
-    - dte/models/latent_sde.py
-    - dte/training/losses.py
-    - dte/training/trainer.py
+    - dte/models/unit/latent_sde.py
+    - dte/training/shared/losses.py
+    - dte/training/unit/trainer.py

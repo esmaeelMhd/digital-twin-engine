@@ -14,8 +14,11 @@ from dte.calibration.unit_calibration import CalibrationOptions
 from dte.customer.adaptation import run_customer_adaptation
 from dte.customer.onboarding_schema import load_onboarding_spec
 from dte.customer.template_matching import match_customer_templates
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.data.datasets.universal_unit_dataset import (
+    MultiSystemTrajectoryDataset,
+    SystemDatasetSource,
+)
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.simulators.registry import get_system_spec
 
 

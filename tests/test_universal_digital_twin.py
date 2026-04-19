@@ -1,11 +1,13 @@
 """Tests for the grouped universal digital twin path."""
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import equinox as eqx
 
-from dte.data.multi_system_dataset import UniversalSystemMetadata
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.data.datasets.universal_unit_dataset import UniversalSystemMetadata
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 
 
 def _build_metadata() -> UniversalSystemMetadata:
@@ -209,6 +211,104 @@ def test_universal_model_respects_inactive_state_dimensions():
 
     assert decoded.shape == (4,)
     assert jnp.allclose(decoded[2:], 0.0)
+
+
+def test_universal_model_supports_channel_and_law_conditioning_tables():
+    metadata = replace(
+        _build_metadata(),
+        control_role_names=("flow", "temperature"),
+        control_role_id=jnp.asarray([[0, 1], [0, 0]], dtype=jnp.int32),
+        disturbance_role_names=("concentration", "temperature"),
+        disturbance_role_id=jnp.asarray([[0, 1], [1, 1]], dtype=jnp.int32),
+        channel_name_names=("generic", "Ca", "Cb", "T", "Tc", "F_in", "Tc_in", "Ca_in", "T_in"),
+        state_name_id=jnp.asarray([[1, 2, 3, 4], [3, 4, 0, 0]], dtype=jnp.int32),
+        control_name_id=jnp.asarray([[5, 6], [5, 5]], dtype=jnp.int32),
+        disturbance_name_id=jnp.asarray([[7, 8], [8, 8]], dtype=jnp.int32),
+        law_feature_names=("law_tag::mass_balance", "law_tag::energy_balance"),
+        law_feature_defaults=jnp.asarray(
+            [[1.0, 1.0], [0.0, 1.0]],
+            dtype=jnp.float32,
+        ),
+    )
+    config = _build_config()
+    config["model"]["channel_conditioning"] = {"enabled": True}
+    config["model"]["law_conditioning"] = {"enabled": True}
+    model = UniversalDigitalTwin.from_config(config, metadata, jax.random.PRNGKey(4))
+
+    z, _, _ = model.encode(
+        jnp.array([0.2, -0.1, 0.1, 0.3], dtype=jnp.float32),
+        jnp.ones((6,), dtype=jnp.float32),
+        jnp.array([0.1, -0.2], dtype=jnp.float32),
+        jnp.ones((4,), dtype=jnp.float32),
+        jnp.ones((2,), dtype=jnp.float32),
+        jnp.ones((6,), dtype=jnp.float32),
+        jnp.asarray(0, dtype=jnp.int32),
+        jax.random.PRNGKey(5),
+    )
+
+    assert z.shape == (16,)
+
+
+def test_universal_model_supports_stiff_aware_latent_solver_rollout():
+    metadata = _build_metadata()
+    config = _build_config()
+    config["model"]["latent_solver"] = {
+        "method": "kvaerno5",
+        "rtol": 1e-3,
+        "atol": 1e-4,
+        "dt0_factor": 0.5,
+        "max_steps": 256,
+    }
+    model = UniversalDigitalTwin.from_config(config, metadata, jax.random.PRNGKey(6))
+
+    z0 = jnp.zeros((16,), dtype=jnp.float32)
+    ts = jnp.asarray([0.0, 0.05, 0.1], dtype=jnp.float32)
+    controls = jnp.asarray(
+        [[0.0, 0.0], [0.1, -0.1], [0.15, -0.05]],
+        dtype=jnp.float32,
+    )
+    disturbances = jnp.asarray(
+        [[0.0, 0.0], [0.05, 0.0], [0.05, 0.02]],
+        dtype=jnp.float32,
+    )
+    params_scaled = jnp.ones((6,), dtype=jnp.float32)
+    control_mask = jnp.ones((2,), dtype=jnp.float32)
+    disturbance_mask = jnp.ones((2,), dtype=jnp.float32)
+    param_mask = jnp.ones((6,), dtype=jnp.float32)
+    system_id = jnp.asarray(0, dtype=jnp.int32)
+
+    z_traj = model.rollout_latent(
+        ts,
+        z0,
+        controls,
+        disturbances,
+        params_scaled,
+        control_mask,
+        disturbance_mask,
+        param_mask,
+        system_id,
+    )
+
+    assert model.latent_solver_method == "kvaerno5"
+    assert z_traj.shape == (3, 16)
+    assert jnp.all(jnp.isfinite(z_traj))
+
+    z_next = model.latent_step(
+        z0,
+        controls[0],
+        controls[1],
+        disturbances[0],
+        disturbances[1],
+        params_scaled,
+        control_mask,
+        disturbance_mask,
+        param_mask,
+        system_id,
+        ts[1] - ts[0],
+    )
+
+    assert z_next.shape == (16,)
+    assert jnp.all(jnp.isfinite(z_next))
 
 
 def test_universal_model_adapter_filter_is_smaller_than_full_filter():

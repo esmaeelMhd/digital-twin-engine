@@ -14,13 +14,16 @@ import jax.numpy as jnp
 import numpy as np
 import yaml
 
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
+from dte.data.datasets.universal_unit_dataset import (
+    MultiSystemTrajectoryDataset,
+    SystemDatasetSource,
+)
 from dte.flowsheet.examples import (
     build_exchanger_reactor_tank_flowsheet,
     build_reactor_separator_recycle_flowsheet,
 )
-from dte.models.digital_twin import DigitalTwin
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.simulators.base import ProcessSimulator, ProcessUnitSpec
 from dte.simulators.registry import get_system_spec
 

@@ -14,9 +14,9 @@ import jax.numpy as jnp
 import numpy as np
 from pathlib import Path
 
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.physics.registry import get_physics_diagnostic_fn, zero_residual
-from dte.data.dataset import TrajectoryDataset
+from dte.data.datasets.unit_dataset import TrajectoryDataset
 from dte.simulators.registry import get_system_spec
 from dte.utils.plotting import (
     plot_trajectory_comparison,
@@ -98,7 +98,6 @@ def _resolve_evaluation_paths(args: argparse.Namespace) -> dict[str, Path]:
         system_config_path = _pick_first_existing(
             [
                 inferred_run_dir / "system_config.yaml",
-                inferred_run_dir / "cstr_config.yaml",
             ]
         )
     if system_config_path is None or not system_config_path.exists():
@@ -365,10 +364,8 @@ def main():
     )
     parser.add_argument(
         "--system_config",
-        "--cstr_config",
         type=str,
         default=None,
-        dest="system_config",
         help="Path to system config. Defaults to <run_dir>/system_config.yaml when inferable."
     )
     parser.add_argument(

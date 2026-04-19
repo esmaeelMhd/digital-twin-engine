@@ -9,7 +9,7 @@ from dte.flowsheet.examples import (
     build_reactor_separator_recycle_flowsheet,
 )
 from dte.flowsheet.synthetic import build_synthetic_flowsheet_dataset
-from dte.models.flowsheet_model import FlowsheetModel
+from dte.models.flowsheet.flowsheet_model import FlowsheetModel
 
 
 def _build_config() -> dict:
@@ -21,6 +21,8 @@ def _build_config() -> dict:
             "n_layers": 2,
             "graph_layers": 2,
             "message_passing_steps": 2,
+            "channel_conditioning": {"enabled": True},
+            "law_conditioning": {"enabled": True},
         }
     }
 

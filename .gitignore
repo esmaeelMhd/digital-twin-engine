@@ -36,6 +36,7 @@ env/
 
 # Data files
 data/*.h5
+data/**/phase1_corpus_manifest.json
 *.h5
 
 # Outputs

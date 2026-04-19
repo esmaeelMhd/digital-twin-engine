@@ -1,0 +1,82 @@
+ideas:
+  # Manual round-2 backlog around the promoted Neural CDE winner.
+  # Scope is intentionally narrow: keep the shared winning structure and search
+  # local variants that may improve stability or cross-system transfer.
+
+  - id: neural_cde_gain_gate
+    priority: 10
+    files:
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
+      - configs/training_default.yaml
+      - configs/heat_exchanger_training.yaml
+      - configs/two_tank_training.yaml
+    title: Add a learnable or config-driven scalar gain on the Neural CDE control-path term, initialized near zero.
+    rationale: >
+      The current winner adds the full control-path term immediately. A small
+      gain may preserve the inductive benefit while reducing early over-correction,
+      especially on two_tank where the winning run slightly regressed.
+
+  - id: neural_cde_separate_width_depth
+    priority: 20
+    files:
+      - dte/models/unit/latent_sde.py
+      - configs/training_default.yaml
+      - configs/heat_exchanger_training.yaml
+      - configs/two_tank_training.yaml
+    title: Decouple Neural CDE hidden width and depth from the base drift MLP.
+    rationale: >
+      The current implementation ties the CDE term to drift-layer settings.
+      A smaller or differently shaped control-path network may keep the benefit
+      on heat_exchanger while reducing unnecessary capacity on the other systems.
+
+  - id: neural_cde_path_derivative_clipping
+    priority: 30
+    files:
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
+      - configs/training_default.yaml
+      - configs/heat_exchanger_training.yaml
+      - configs/two_tank_training.yaml
+    title: Clip or squash the path derivative before the matrix-field multiplication.
+    rationale: >
+      Abrupt control or disturbance changes can produce large derivative spikes.
+      Bounding the path derivative may stabilize the latent update without
+      removing path information entirely.
+
+  - id: neural_cde_dt_scaled_path
+    priority: 40
+    files:
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
+    title: Compare the current derivative-based path term with a dt-scaled delta representation.
+    rationale: >
+      The existing path term uses du/dt and dd/dt. A dt-scaled representation
+      can reduce sensitivity to very small step sizes and may be a better match
+      for piecewise-constant control trajectories.
+
+  - id: neural_cde_warmup_schedule
+    priority: 50
+    files:
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
+      - dte/training/unit/trainer.py
+      - configs/training_default.yaml
+      - configs/heat_exchanger_training.yaml
+      - configs/two_tank_training.yaml
+    title: Delay or ramp the Neural CDE contribution during early training.
+    rationale: >
+      The current winner helps overall, but the two_tank leg regressed slightly.
+      A warmup schedule can let the base latent dynamics settle before injecting
+      the full path-conditioned correction.
+
+  - id: neural_cde_context_gate
+    priority: 60
+    files:
+      - dte/models/unit/latent_sde.py
+      - dte/models/unit/digital_twin.py
+    title: Add a learned context gate that modulates the control-path term from latent/control/disturbance context.
+    rationale: >
+      Some operating regimes need strong path sensitivity and others do not.
+      A context-dependent gate can keep the current winner’s flexibility while
+      reducing unnecessary CDE influence in steady regimes.

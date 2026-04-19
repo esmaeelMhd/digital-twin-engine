@@ -45,11 +45,11 @@ import numpy as np
 import optax
 from jaxtyping import Array, PRNGKeyArray
 
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.base import SystemSpec
 
 try:
-    from dte.training.losses import LossComputer  # optional, for type hints only
+    from dte.training.shared.losses import LossComputer  # optional, for type hints only
 except ImportError:
     LossComputer = None  # type: ignore
 
@@ -267,7 +267,7 @@ class OnlineAdapter:
     Parameters
     ----------
     model:
-        Pre-trained :class:`~dte.models.digital_twin.DigitalTwin`.
+        Pre-trained :class:`~dte.models.unit.digital_twin.DigitalTwin`.
     system_spec:
         :class:`~dte.simulators.base.SystemSpec` for the system.
     config:

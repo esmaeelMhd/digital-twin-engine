@@ -28,6 +28,10 @@ model:
     group_kind_dim: 8
     group_encoder_layers: 2
     group_mixer_layers: 2
+  channel_conditioning:
+    enabled: false
+  law_conditioning:
+    enabled: false
   state_dim: 4
   param_dim: 6
   control_dim: 2

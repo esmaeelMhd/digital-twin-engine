@@ -10,9 +10,12 @@ import yaml
 from fastapi.testclient import TestClient
 
 from dte.api import service
-from dte.data.multi_system_dataset import MultiSystemTrajectoryDataset, SystemDatasetSource
+from dte.data.datasets.universal_unit_dataset import (
+    MultiSystemTrajectoryDataset,
+    SystemDatasetSource,
+)
 from dte.demo.engine import load_demo_config
-from dte.models.universal_digital_twin import UniversalDigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

@@ -5,13 +5,16 @@ from __future__ import annotations
 import numpy as np
 import yaml
 import jax
+import jax.numpy as jnp
 import pytest
 
 from dte.control.mpc_interface import MPCInterfaceConfig, ProcessMPCInterface
 from dte.control.rl_env import ProcessControlEnv, ProcessControlEnvConfig
 from dte.control.state_correction import StateCorrectionConfig, StateCorrectionHook
+from dte.data.datasets.universal_unit_dataset import UniversalSystemMetadata
 from dte.evaluation.control_metrics import disturbance_sensitivity, mismatch_robustness
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
+from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.simulators.registry import get_simulator, get_system_spec
 from scripts.run_mpc import _build_pid_controller
 
@@ -39,6 +42,60 @@ def _tiny_model_config() -> dict:
             "self_correcting_policy": {"enabled": False},
             "neural_cde": {"enabled": False},
             "grouped_encoder": {"enabled": False},
+        }
+    }
+
+
+def _tiny_universal_metadata() -> UniversalSystemMetadata:
+    return UniversalSystemMetadata(
+        system_names=("cstr",),
+        state_center=jnp.zeros((1, 4), dtype=jnp.float32),
+        state_scale=jnp.ones((1, 4), dtype=jnp.float32),
+        control_center=jnp.zeros((1, 2), dtype=jnp.float32),
+        control_scale=jnp.ones((1, 2), dtype=jnp.float32),
+        disturbance_center=jnp.zeros((1, 2), dtype=jnp.float32),
+        disturbance_scale=jnp.ones((1, 2), dtype=jnp.float32),
+        param_scale=jnp.ones((1, 6), dtype=jnp.float32),
+        state_mask=jnp.ones((1, 4), dtype=jnp.float32),
+        control_mask=jnp.ones((1, 2), dtype=jnp.float32),
+        disturbance_mask=jnp.ones((1, 2), dtype=jnp.float32),
+        param_mask=jnp.ones((1, 6), dtype=jnp.float32),
+        state_dim=jnp.asarray([4], dtype=jnp.int32),
+        control_dim=jnp.asarray([2], dtype=jnp.int32),
+        disturbance_dim=jnp.asarray([2], dtype=jnp.int32),
+        param_dim=jnp.asarray([6], dtype=jnp.int32),
+        system_descriptor=jnp.zeros((1, 25), dtype=jnp.float32),
+        state_group_kind_names=("concentration", "temperature"),
+        state_group_mask=jnp.asarray(
+            [[[1, 1, 0, 0], [0, 0, 1, 1]]],
+            dtype=jnp.float32,
+        ),
+        state_group_active=jnp.asarray([[1, 1]], dtype=jnp.float32),
+        state_group_kind_id=jnp.asarray([[0, 1]], dtype=jnp.int32),
+        state_role_names=("concentration", "temperature"),
+        state_role_id=jnp.asarray([[0, 0, 1, 1]], dtype=jnp.int32),
+        state_lower_bound=jnp.asarray([[0.0, 0.0, 250.0, 250.0]], dtype=jnp.float32),
+        state_upper_bound=jnp.asarray([[jnp.inf, jnp.inf, 400.0, 400.0]], dtype=jnp.float32),
+    )
+
+
+def _tiny_universal_model_config() -> dict:
+    return {
+        "model": {
+            "family": "universal_backbone",
+            "latent_dim": 8,
+            "shared_hidden_dim": 16,
+            "system_embedding_dim": 8,
+            "state_group_token_dim": 12,
+            "state_group_kind_dim": 6,
+            "state_group_encoder_layers": 1,
+            "state_group_coupling_layers": 1,
+            "encoder_layers": 1,
+            "decoder_layers": 1,
+            "drift_layers": 1,
+            "use_system_spec_embedding": True,
+            "use_variational_encoder": True,
+            "neural_cde": {"enabled": False},
         }
     }
 
@@ -73,6 +130,50 @@ def test_state_correction_hook_updates_latent_estimate():
     assert result.latent_logvar is not None
     assert result.latent_mean.shape == (8,)
     assert np.linalg.norm(result.corrected_state - measurement) < np.linalg.norm(prior - measurement)
+
+    predicted = hook.predict(
+        control=control,
+        disturbance=np.asarray(spec.default_nominal_disturbance, dtype=np.float32),
+        params=np.ones(spec.param_dim, dtype=np.float32),
+        dt=0.1,
+    )
+    assert predicted is not None
+    assert predicted.shape == (spec.state_dim,)
+
+
+def test_state_correction_hook_supports_universal_foundation_model():
+    spec, _, _ = _load_system("cstr")
+    model = UniversalDigitalTwin.from_config(
+        _tiny_universal_model_config(),
+        _tiny_universal_metadata(),
+        jax.random.PRNGKey(0),
+    )
+    hook = StateCorrectionHook(
+        spec,
+        model=model,
+        config=StateCorrectionConfig(assimilation_gain=0.5, filter_alpha=1.0),
+    )
+
+    prior = np.asarray(spec.default_initial_state, dtype=np.float32)
+    measurement = prior + np.asarray([-0.05, 0.04, -2.0, 1.0], dtype=np.float32)
+    control = np.asarray(
+        [0.5 * sum(spec.control_ranges[name]) for name in spec.control_names],
+        dtype=np.float32,
+    )
+
+    result = hook.correct(
+        prior_state=prior,
+        measurement=measurement,
+        control=control,
+        params=np.ones(spec.param_dim, dtype=np.float32),
+        timestamp=0.1,
+        seed=7,
+    )
+
+    assert result.corrected_state.shape == (spec.state_dim,)
+    assert result.latent_mean is not None
+    assert result.latent_logvar is not None
+    assert result.latent_mean.shape == (8,)
 
     predicted = hook.predict(
         control=control,
@@ -127,6 +228,46 @@ def test_process_mpc_interface_rollout_and_random_shooting():
         timestamp=0.1,
     )
     assert np.asarray(update["corrected_state"]).shape == (spec.state_dim,)
+
+
+def test_process_mpc_interface_rollout_supports_universal_foundation_model():
+    spec, simulator, _ = _load_system("cstr")
+    model = UniversalDigitalTwin.from_config(
+        _tiny_universal_model_config(),
+        _tiny_universal_metadata(),
+        jax.random.PRNGKey(1),
+    )
+    interface = ProcessMPCInterface(
+        spec,
+        simulator,
+        model=model,
+        config=MPCInterfaceConfig(dt=0.05, horizon=6, rollout_samples=3),
+    )
+
+    controls = np.tile(
+        np.asarray(
+            [0.5 * sum(spec.control_ranges[name]) for name in spec.control_names],
+            dtype=np.float32,
+        )[None, :],
+        (6, 1),
+    )
+    disturbances = np.tile(
+        np.asarray(spec.default_nominal_disturbance, dtype=np.float32)[None, :],
+        (6, 1),
+    )
+
+    rollout = interface.rollout_candidate(
+        controls,
+        disturbances=disturbances,
+        use_model=True,
+        n_samples=3,
+        seed=9,
+    )
+
+    assert rollout["source"] == "model"
+    assert np.asarray(rollout["states"]).shape == (6, spec.state_dim)
+    assert np.asarray(rollout["std"]).shape == (6, spec.state_dim)
+    assert np.isfinite(np.asarray(rollout["states"])).all()
 
 
 def test_process_control_env_runs_gymnasium_style_loop():

@@ -74,7 +74,7 @@ def main():
     system_name = system_spec.name
 
     simulator = get_simulator(system_name, config)
-    from dte.data.generation_generic import GenericDataGenerator
+    from dte.data.generators.generic import GenericDataGenerator
     generator = GenericDataGenerator(simulator, config, system_spec)
     batch_size = (
         args.batch_size

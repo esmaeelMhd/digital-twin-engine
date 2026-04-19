@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from dte.models.digital_twin import DigitalTwin
+from dte.models.unit.digital_twin import DigitalTwin
 from dte.control.mpc import SamplingMPC
 from dte.simulators.registry import get_system_spec, get_simulator
 from dte.utils.plotting import plot_mpc_results
@@ -86,10 +86,8 @@ def main():
     )
     parser.add_argument(
         "--system_config",
-        "--cstr_config",
         type=str,
         default="configs/cstr_default.yaml",
-        dest="system_config",
         help="System config"
     )
     parser.add_argument(

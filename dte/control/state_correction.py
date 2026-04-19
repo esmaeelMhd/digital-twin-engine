@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from dte.models.digital_twin import DigitalTwin
+from .foundation_adapter import FoundationModel, encode_state, predict_one_step
 from dte.simulators.base import ProcessUnitSpec
 
 
@@ -96,7 +96,7 @@ class StateCorrectionHook:
     def __init__(
         self,
         spec: ProcessUnitSpec,
-        model: DigitalTwin | None = None,
+        model: FoundationModel | None = None,
         *,
         config: StateCorrectionConfig | None = None,
     ):
@@ -163,14 +163,16 @@ class StateCorrectionHook:
                 if params is not None
                 else np.ones(self.spec.param_dim, dtype=np.float32)
             )
-            _, z_mean, z_logvar = self.model.encode(
-                jnp.asarray(corrected, dtype=jnp.float32),
-                jnp.asarray(params_arr, dtype=jnp.float32),
-                jnp.asarray(control, dtype=jnp.float32),
-                jax.random.PRNGKey(seed),
+            _, z_mean, z_logvar = encode_state(
+                self.model,
+                self.spec,
+                corrected,
+                params_arr,
+                np.asarray(control, dtype=np.float32),
+                seed=seed,
             )
-            latent_mean = np.asarray(z_mean, dtype=np.float32)
-            latent_logvar = np.asarray(z_logvar, dtype=np.float32)
+            latent_mean = z_mean
+            latent_logvar = z_logvar
 
         self._filtered_measurement = filtered
         self._state_estimate = corrected
@@ -213,32 +215,20 @@ class StateCorrectionHook:
         )
         dt_value = float(dt if dt is not None else self.config.default_dt)
 
-        if self._latent_mean is None:
-            _, z_mean, z_logvar = self.model.encode(
-                jnp.asarray(self._state_estimate, dtype=jnp.float32),
-                jnp.asarray(params_arr, dtype=jnp.float32),
-                jnp.asarray(control_arr, dtype=jnp.float32),
-                jax.random.PRNGKey(0),
-            )
-            self._latent_mean = np.asarray(z_mean, dtype=np.float32)
-            self._latent_logvar = np.asarray(z_logvar, dtype=np.float32)
-
-        drift = self.model.latent_sde.drift(
-            jnp.asarray(self._latent_mean, dtype=jnp.float32),
-            jnp.asarray(control_arr, dtype=jnp.float32),
-            jnp.asarray(disturbance_arr, dtype=jnp.float32),
-            jnp.asarray(params_arr, dtype=jnp.float32),
+        state_arr, latent_next = predict_one_step(
+            self.model,
+            self.spec,
+            self._latent_mean,
+            self._state_estimate,
+            control_arr,
+            disturbance_arr,
+            params_arr,
+            dt=dt_value,
+            seed=0,
         )
-        z_next = jnp.asarray(self._latent_mean, dtype=jnp.float32) + dt_value * drift
-        next_state = self.model.decode(
-            z_next,
-            jnp.asarray(params_arr, dtype=jnp.float32),
-            jnp.asarray(control_arr, dtype=jnp.float32),
-        )
-        state_arr = np.asarray(next_state, dtype=np.float32)
         if self.config.clip_to_state_bounds:
             lower, upper = _state_bounds(self.spec)
             state_arr = np.clip(state_arr, lower, upper)
         self._state_estimate = state_arr
-        self._latent_mean = np.asarray(z_next, dtype=np.float32)
+        self._latent_mean = np.asarray(latent_next, dtype=np.float32)
         return state_arr.copy()

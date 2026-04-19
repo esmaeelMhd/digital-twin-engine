@@ -178,7 +178,7 @@ def matching_context_path(ideas_path: Path) -> Path | None:
 
 
 def discover_model_ideas_files() -> list[Path]:
-    paths = sorted(PROJECT_ROOT.glob("auto_research_*_ideas.yaml"))
+    paths = sorted((PROJECT_ROOT / "docs" / "autoresearch_ideas").glob("auto_research_*_ideas.yaml"))
     discovered: list[Path] = []
     for path in paths:
         name = default_backlog_name(path)
@@ -347,7 +347,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--base-config",
         type=str,
-        default="configs/autoresearch_latent_stage1.yaml",
+        default="configs/autoresearch/autoresearch_latent_stage1.yaml",
         help="Base autoresearch config to clone for each backlog run",
     )
     parser.add_argument(

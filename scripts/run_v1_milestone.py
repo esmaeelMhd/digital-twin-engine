@@ -232,7 +232,7 @@ def main() -> None:
                         "smoke_phase1",
                         [
                             sys.executable,
-                            "scripts/smoke_phase1.py",
+                            "scripts/phases/smoke_phase1.py",
                             "--workspace_dir",
                             str(smoke_root / "phase1"),
                         ],
@@ -242,7 +242,7 @@ def main() -> None:
                         "smoke_phase2",
                         [
                             sys.executable,
-                            "scripts/smoke_phase2.py",
+                            "scripts/phases/smoke_phase2.py",
                             "--workspace_dir",
                             str(smoke_root / "phase2"),
                         ],
@@ -252,7 +252,7 @@ def main() -> None:
                         "smoke_phase3",
                         [
                             sys.executable,
-                            "scripts/smoke_phase3.py",
+                            "scripts/phases/smoke_phase3.py",
                             "--workspace_dir",
                             str(smoke_root / "phase3"),
                             "--jax_platforms",
@@ -264,7 +264,7 @@ def main() -> None:
                         "smoke_phase4",
                         [
                             sys.executable,
-                            "scripts/smoke_phase4.py",
+                            "scripts/phases/smoke_phase4.py",
                             "--workspace_dir",
                             str(smoke_root / "phase4"),
                             "--jax_platforms",
@@ -276,7 +276,7 @@ def main() -> None:
                         "smoke_phase5",
                         [
                             sys.executable,
-                            "scripts/smoke_phase5.py",
+                            "scripts/phases/smoke_phase5.py",
                             "--workspace_dir",
                             str(smoke_root / "phase5"),
                             "--jax_platform",
@@ -288,7 +288,7 @@ def main() -> None:
                         "smoke_phase6",
                         [
                             sys.executable,
-                            "scripts/smoke_phase6.py",
+                            "scripts/phases/smoke_phase6.py",
                             "--workspace_dir",
                             str(smoke_root / "phase6"),
                             "--jax_platform",
@@ -300,7 +300,7 @@ def main() -> None:
                         "smoke_phase7",
                         [
                             sys.executable,
-                            "scripts/smoke_phase7.py",
+                            "scripts/phases/smoke_phase7.py",
                             "--workspace_dir",
                             str(smoke_root / "phase7"),
                             "--jax_platform",
@@ -394,8 +394,6 @@ def main() -> None:
                         str(outputs_root / "rollout_stability"),
                         "--jax_platform",
                         args.jax_platform,
-                        "--train_config_mode",
-                        "strict",
                         "--systems",
                         *args.compare_systems,
                     ],

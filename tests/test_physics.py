@@ -12,7 +12,7 @@ from dte.physics.conservation import (
     energy_balance_residual,
     total_conservation_metric,
 )
-from dte.training.losses import LossComputer
+from dte.training.shared.losses import LossComputer
 
 
 def test_mass_balance_on_ground_truth():

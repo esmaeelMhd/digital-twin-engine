@@ -434,12 +434,6 @@ def main() -> None:
         action="store_true",
         help="Write configs and commands without executing them",
     )
-    parser.add_argument(
-        "--train_config_mode",
-        choices=["strict", "legacy_safe"],
-        default="strict",
-        help="How subprocess calls to scripts/train.py should resolve their YAML configs",
-    )
     args = parser.parse_args()
 
     workspace_dir = resolve_workspace_dir(args.workspace_dir)
@@ -463,7 +457,6 @@ def main() -> None:
         "min_improvement_ratio": args.min_improvement_ratio,
         "stability_tolerance_ratio": args.stability_tolerance_ratio,
         "disable_neural_cde_in_old": bool(args.disable_neural_cde_in_old),
-        "train_config_mode": args.train_config_mode,
         "steps": [],
         "comparisons": [],
         "overall_pass": False,
@@ -511,8 +504,6 @@ def main() -> None:
                         str(output_dir),
                         "--seed",
                         str(args.seed),
-                        "--config_mode",
-                        args.train_config_mode,
                     ],
                     log_path=logs_dir / f"train_{system_name}_{variant}.log",
                     dry_run=args.dry_run,

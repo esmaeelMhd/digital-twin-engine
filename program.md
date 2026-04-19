@@ -11,7 +11,7 @@ Work with the human to:
    - `README.md` for product and architecture context.
    - `WORKFLOW.md` for the standard training/evaluation flow.
    - `configs/training_default.yaml` for the baseline model and optimizer settings.
-   - `scripts/train.py` and `dte/training/trainer.py` for the experiment harness and metric generation.
+   - `scripts/train.py` and `dte/training/unit/trainer.py` for the experiment harness and metric generation.
    - `auto_research.md` for repo-specific agent guidance and recent operating knowledge.
    - `program.md` for the actual autonomous research rules.
 3. Verify the datasets exist. Every configured benchmark target must have a `data_dir`
@@ -119,7 +119,7 @@ python scripts/agent.py --max-runs 50
 python scripts/agent.py --no-dashboard
 
 # Restrict the LLM to one file only
-python scripts/agent.py --file dte/training/trainer.py
+python scripts/agent.py --file dte/training/unit/trainer.py
 
 # LLM provider options
 python scripts/agent.py --deepseek              # DeepSeek reasoning model
@@ -152,8 +152,8 @@ Defaults:
 
 - `configs/training_default.yaml`
 - `scripts/train.py`
-- `dte/models/encoder.py`, `decoder.py`, `latent_sde.py`, `digital_twin.py`
-- `dte/training/trainer.py`, `losses.py`
+- `dte/models/unit/encoder.py`, `decoder.py`, `latent_sde.py`, `digital_twin.py`
+- `dte/training/unit/trainer.py`, `shared/losses.py`
 
 ### What the agent must never touch
 
