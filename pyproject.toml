@@ -54,3 +54,10 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["dte"]
+
+[tool.pytest.ini_options]
+# Eight test modules import helpers from scripts/, which is not part of the
+# installed wheel. Putting the repository root on sys.path makes those imports
+# work the same way whether pytest runs from a checkout or against an install.
+pythonpath = ["."]
+testpaths = ["tests"]
