@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "digital-twin-engine"
 version = "0.1.0"
-description = "AI-powered digital twin engine for chemical process systems. Uses physics-constrained latent neural SDEs for fast simulation and model predictive control."
+description = "Surrogate models of chemical process systems using physics-constrained latent neural SDEs, with an MPC loop and a REST API."
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = [
-    "jax[cuda12]>=0.4.20",
+    "jax>=0.4.20",
     "equinox>=0.11.0",
     "diffrax>=0.4.0",
     "optax>=0.1.7",
@@ -40,6 +40,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# CUDA wheels are opt-in: the base install works on CPU-only machines and in CI.
+# Install with `pip install -e ".[cuda]"` on a GPU host.
+cuda = [
+    "jax[cuda12]>=0.4.20",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",

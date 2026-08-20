@@ -1,19 +1,39 @@
 # Digital Twin Engine
 
-AI-powered digital twin platform for industrial process systems using physics-informed latent neural SDEs.
+Surrogate models of industrial process systems, built on physics-informed latent neural SDEs.
 
 ## What is this?
 
-A general-purpose surrogate modelling platform that:
+A research codebase for surrogate modelling of process systems with
+physics-informed latent neural SDEs. It provides:
 
-- Runs **1000x faster** than first-principles simulation
-- Provides **uncertainty quantification** via stochastic latent dynamics
-- Enables **real-time model predictive control**
-- Respects **conservation laws** (mass, energy) via physics-informed losses
-- Works with **any process system** — not just CSTR (fully decoupled architecture)
-- Adapts **online** to plant drift and new operating conditions
-- Supports **transfer learning** across multiple units with few-shot fine-tuning
-- Ships with a **REST API** and **Docker** deployment stack
+- **Uncertainty estimates** via stochastic latent dynamics, as ensemble spread
+  over sampled rollouts
+- **Conservation-law residuals** (mass, energy) as physics-informed training
+  losses and evaluation diagnostics
+- **A decoupled system interface**, so a new process is added through a config,
+  a simulator class, and registry entries rather than by editing the model
+- **Few-shot transfer** across unit variants, including decoder-only
+  fine-tuning on a handful of trajectories
+- **A shared universal backbone**, training one checkpoint across several
+  system types
+- **An MPC loop, a REST API, and a Docker stack** for exercising trained models
+
+### What this is not
+
+This is a research codebase, not a validated engineering tool. Specifically:
+
+- It has **not** been benchmarked against a commercial process simulator, and
+  this repository makes no speedup claim. Any surrogate-versus-solver timing
+  you need should be measured on your own hardware and workload.
+- The MPC loop runs against the learned surrogate. It has never been connected
+  to plant equipment, and nothing here should be treated as control-ready.
+- Physics-informed losses penalise conservation residuals; they do not
+  guarantee conservation.
+- The shipped systems (CSTR, heat exchanger, two-tank) are synthetic textbook
+  processes. No real plant data is included or required.
+- Online adaptation is implemented and exercised in tests, not validated
+  against measured plant drift.
 
 ## Architecture
 
@@ -68,13 +88,17 @@ The shared universal path also uses typed state groups declared in each system c
 ### Setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/esmaeelMhd/digital-twin-engine.git
 cd digital-twin-engine
 
 python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
+# CPU install (works everywhere, including CI)
 pip install -e .
+
+# GPU host: add the CUDA 12 JAX wheels
+pip install -e ".[cuda]"
 ```
 
 ## Quick Start

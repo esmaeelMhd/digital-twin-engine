@@ -12,7 +12,7 @@ Follow these instructions sequentially to initialize the new repository, port th
 1. **Create the new workspace:**
    Run in the terminal:
    ```bash
-   cd /home/ismayil
+   cd ~
    mkdir flux-attention-engine
    cd flux-attention-engine
    git init
@@ -25,14 +25,14 @@ Follow these instructions sequentially to initialize the new repository, port th
    ```
 
 3. **Port and Adapt `pyproject.toml`:**
-   * Copy `/home/ismayil/digital-twin-engine/pyproject.toml` to `/home/ismayil/flux-attention-engine/pyproject.toml`.
+   * Copy `pyproject.toml` to `~/flux-attention-engine/pyproject.toml`.
    * **Edit the copied file:** Change the project name from `digital-twin-engine` to `flux-attention-engine`.
    * Add new dependencies: `rdkit`, `openai`, `anthropic`, `networkx`.
    * Remove any legacy specific dependencies if they are purely for the old dashboard (e.g., `streamlit` can stay or go, but keep it minimal).
 
 4. **Initialize the Virtual Environment:**
    ```bash
-   cd /home/ismayil/flux-attention-engine
+   cd ~/flux-attention-engine
    python3 -m venv .venv
    source .venv/bin/activate
    pip install -e .
@@ -45,7 +45,7 @@ Follow these instructions sequentially to initialize the new repository, port th
 We need the first-principles ODEs to generate ground-truth data for the graph networks.
 
 1. **Copy the Simulator Modules:**
-   Copy the following files from `/home/ismayil/digital-twin-engine/dte/simulators/` to `/home/ismayil/flux-attention-engine/flux/simulators/`:
+   Copy the following files from `dte/simulators/` to `~/flux-attention-engine/flux/simulators/`:
    * `base.py`
    * `registry.py`
    * `cstr.py`
@@ -53,7 +53,7 @@ We need the first-principles ODEs to generate ground-truth data for the graph ne
    * `heat_exchanger.py`
 
 2. **Copy the Physics Constraints:**
-   Copy the following from `/home/ismayil/digital-twin-engine/dte/physics/` to `/home/ismayil/flux-attention-engine/flux/physics/`:
+   Copy the following from `dte/physics/` to `~/flux-attention-engine/flux/physics/`:
    * `base.py`
    * `registry.py`
    * `cstr.py`
@@ -61,8 +61,8 @@ We need the first-principles ODEs to generate ground-truth data for the graph ne
    * `heat_exchanger.py`
 
 3. **Copy the Data Generator:**
-   * Copy `/home/ismayil/digital-twin-engine/dte/data/generation_generic.py` to `flux/data/generation_generic.py`.
-   * Copy `/home/ismayil/digital-twin-engine/scripts/generate_data.py` to `scripts/generate_data.py`.
+   * Copy `dte/data/generation_generic.py` to `flux/data/generation_generic.py`.
+   * Copy `scripts/generate_data.py` to `scripts/generate_data.py`.
 
 4. **Refactor Imports (Crucial):**
    * Use a tool (or `sed` via terminal) in the new repository to replace all instances of `from dte.` or `import dte.` with `from flux.` or `import flux.`.

@@ -1,7 +1,7 @@
 # Phase 1 Completion Plan
 
 This document defines the concrete plan to close `Phase 1: Unit Foundation V1`
-from [docs/full_stack_convergence_program.md](/home/ismayil/digital-twin-engine/docs/full_stack_convergence_program.md:1).
+from [docs/full_stack_convergence_program.md](docs/full_stack_convergence_program.md:1).
 
 It is based on the current canonical run, not on hypothetical failure modes.
 
@@ -9,7 +9,7 @@ It is based on the current canonical run, not on hypothetical failure modes.
 
 Canonical workspace:
 
-- [outputs/unit_foundation_phase1_run_v11/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run_v11/summary.json:1)
+- [outputs/unit_foundation_phase1_run_v11/summary.json](outputs/unit_foundation_phase1_run_v11/summary.json:1)
 
 Current gate state:
 
@@ -27,9 +27,9 @@ Current red metrics:
 
 Primary evidence:
 
-- [eval/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/eval/summary.json:1)
-- [transfer_benchmark/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/transfer_benchmark/summary.json:1)
-- [control_gate/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/control_gate/summary.json:1)
+- [eval/summary.json](outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/eval/summary.json:1)
+- [transfer_benchmark/summary.json](outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/transfer_benchmark/summary.json:1)
+- [control_gate/summary.json](outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/control_gate/summary.json:1)
 
 ## Definition Of Done
 
@@ -131,7 +131,7 @@ Iteration speed matters, but the path must stay canonical.
 For rollout closure:
 
 - run training + evaluation through the canonical stack
-- inspect [eval/summary.json](/home/ismayil/digital-twin-engine/outputs/unit_foundation_phase1_run/outputs/unit_foundation/eval/summary.json:1)
+- inspect [eval/summary.json](outputs/unit_foundation_phase1_run/outputs/unit_foundation/eval/summary.json:1)
 
 For transfer closure:
 

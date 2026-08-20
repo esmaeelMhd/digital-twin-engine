@@ -359,7 +359,7 @@ Acceptance gate:
 
 Current execution plan:
 
-- [docs/phase1_completion_plan.md](/home/ismayil/digital-twin-engine/docs/phase1_completion_plan.md:1)
+- [docs/phase1_completion_plan.md](docs/phase1_completion_plan.md:1)
 
 ## Phase 2: Customer Adaptation V1
 
