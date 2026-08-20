@@ -458,4 +458,6 @@ python scripts/train.py --data_dir data/test/ --n_epochs 5 --batch_size 8
 
 ## License
 
-Proprietary. All rights reserved.
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Apache-2.0 rather than MIT because it carries an express patent grant, which matters for surrogate-modelling and process-control methods, and because the JAX stack this builds on (JAX, Equinox, Diffrax, Optax) is Apache-2.0 throughout.
