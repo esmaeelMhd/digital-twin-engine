@@ -66,3 +66,6 @@ frontend/vite.config.d.ts
 
 # Imported OS metadata
 *:Zone.Identifier
+
+# Editor / agent tooling (local only)
+.cursor/
