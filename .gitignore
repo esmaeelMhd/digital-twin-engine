@@ -71,3 +71,6 @@ frontend/vite.config.d.ts
 
 # Editor / agent tooling (local only)
 .cursor/
+
+# Generated from vite.config.ts by `tsc -b`
+frontend/vite.config.js
