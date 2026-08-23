@@ -94,11 +94,30 @@ cd digital-twin-engine
 python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# CPU install (works everywhere, including CI)
+# CPU install: JAX, the model, training, evaluation, and MPC
 pip install -e .
 
 # GPU host: add the CUDA 12 JAX wheels
 pip install -e ".[cuda]"
+```
+
+The base install is deliberately small. Everything beyond training and
+evaluation is an opt-in extra, so a surrogate model does not drag in a web
+server or three LLM SDKs:
+
+| Extra | Adds | Needed for |
+|---|---|---|
+| `cuda` | CUDA 12 JAX wheels | GPU training |
+| `api` | FastAPI, Uvicorn, httpx | the REST service in `dte/api` |
+| `dashboard` | Streamlit, Plotly, scikit-learn | the apps in `app/`, latent-space plots |
+| `autoresearch` | Anthropic, OpenAI, Google GenAI SDKs | the LLM loop in `scripts/agent.py` |
+| `tracking` | Weights & Biases | experiment logging |
+| `dev` | pytest, ruff, black (pulls `api`) | running the test suite |
+| `all` | everything above except `cuda` | |
+
+```bash
+pip install -e ".[all]"      # everything
+pip install -e ".[api]"      # just serve a trained model
 ```
 
 ## Quick Start

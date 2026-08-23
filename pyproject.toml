@@ -11,34 +11,18 @@ requires-python = ">=3.10,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 dependencies = [
+    # Core: everything needed to generate data, train, evaluate, and run MPC.
     "jax>=0.4.20",
     "equinox>=0.11.0",
     "diffrax>=0.4.0",
     "optax>=0.1.7",
     "jaxtyping>=0.2.20",
-    "pyyaml>=6.0",
-    "h5py>=3.9.0",
     "numpy>=1.24.0",
-    "matplotlib>=3.7.0",
-    "streamlit>=1.28.0",
-    "plotly>=5.17.0",
-    "casadi>=3.6.0",
-    "do-mpc>=4.5.0",
-    "pytest>=7.4.0",
-    "tqdm>=4.66.0",
-    "wandb>=0.15.0",
-    "scikit-learn>=1.3.0",
-    "anthropic>=0.40.0",
-    "openai>=1.50.0",
-    "google-genai>=1.0.0",
-    "rich>=13.0.0",
-    "nvidia-ml-py>=12.0.0",
-    "requests>=2.31.0",
-    "fastapi>=0.111.0",
-    "python-multipart>=0.0.9",
-    "uvicorn[standard]>=0.29.0",
-    "httpx>=0.27.0",
     "pandas>=2.0.0",
+    "h5py>=3.9.0",
+    "pyyaml>=6.0",
+    "matplotlib>=3.7.0",
+    "tqdm>=4.66.0",
 ]
 
 [project.optional-dependencies]
@@ -47,11 +31,41 @@ dependencies = [
 cuda = [
     "jax[cuda12]>=0.4.20",
 ]
+# REST API service (dte/api).
+api = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+]
+# Streamlit dashboards (app/) and latent-space plots.
+dashboard = [
+    "streamlit>=1.28.0",
+    "plotly>=5.17.0",
+    "scikit-learn>=1.3.0",
+]
+# LLM-driven autoresearch loop (scripts/agent.py). The provider SDKs are
+# imported lazily, so nothing here is needed to train or evaluate a model.
+autoresearch = [
+    "anthropic>=0.40.0",
+    "openai>=1.50.0",
+    "google-genai>=1.0.0",
+    "rich>=13.0.0",
+    "requests>=2.31.0",
+]
+tracking = [
+    "wandb>=0.15.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+    # API tests import fastapi.testclient at module level.
+    "digital-twin-engine[api]",
+]
+all = [
+    "digital-twin-engine[api,dashboard,autoresearch,tracking]",
 ]
 
 [tool.hatch.build.targets.wheel]

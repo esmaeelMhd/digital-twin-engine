@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "Digital Twin Engine"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: "Mohammadi"
+    given-names: "Esmaeel"
+repository-code: "https://github.com/esmaeelMhd/digital-twin-engine"
+abstract: >-
+  Surrogate models of industrial process systems built on physics-informed
+  latent neural SDEs, in JAX. Provides uncertainty estimates from stochastic
+  latent dynamics, conservation-law residuals as training losses and
+  evaluation diagnostics, few-shot transfer across unit variants, and a
+  shared backbone trained across several system types.
+keywords:
+  - surrogate modelling
+  - physics-informed machine learning
+  - neural stochastic differential equations
+  - digital twin
+  - process engineering
+  - JAX
+license: Apache-2.0
+version: "0.1.0"
+date-released: "2026-08-23"
