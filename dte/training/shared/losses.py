@@ -137,7 +137,7 @@ class LossComputer:
         del dt
         return 0.5 * jnp.mean(diffusion_trajectory ** 2)
 
-    # Backward-compatible alias used by trainers and tests.
+    # Backward-compatible alias kept for older call sites and configs.
     sde_kl_loss = diffusion_magnitude_penalty
 
     def trajectory_loss(

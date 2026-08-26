@@ -54,6 +54,7 @@ class Trainer:
         config: dict,
         train_dataset: TrajectoryDataset,
         val_dataset: Optional[TrajectoryDataset] = None,
+        filter_spec=None,
     ):
         """Initialize trainer.
         
@@ -63,6 +64,9 @@ class Trainer:
             config: Configuration dictionary
             train_dataset: Training dataset
             val_dataset: Validation dataset (optional)
+            filter_spec: Optional Equinox partition mask.  Defaults to
+                ``model.trainable_filter_spec()``.  Pass a part-specific
+                spec from ``build_finetune_filter_spec`` for fine-tuning.
         """
         self.model = model
         self.loss_computer = loss_computer
@@ -87,7 +91,10 @@ class Trainer:
         )
 
         # Freeze normalization tables / group masks; only neural weights train.
-        self.filter_spec = model.trainable_filter_spec()
+        # Callers may pass a tighter spec (e.g. decoder-only fine-tuning).
+        self.filter_spec = (
+            filter_spec if filter_spec is not None else model.trainable_filter_spec()
+        )
         trainable, _ = eqx.partition(model, self.filter_spec)
         self.opt_state = self.optimizer.init(trainable)
         
@@ -112,16 +119,17 @@ class Trainer:
         model: DigitalTwin,
         batch: Dict[str, Array],
         key: PRNGKeyArray,
-        step=None,
-        sde_active: bool | None = None,
-        one_step_weight=None,
+        step,
+        sde_active: bool,
+        one_step_weight,
     ) -> tuple[float, Dict[str, float]]:
         """Compute all losses for a batch.
 
         Dynamic training state (step, SDE gate, teacher-forcing weight) is
         passed in explicitly so ``@eqx.filter_jit`` can trace it.  Reading
         ``self.step`` inside a jitted method would freeze those values at
-        the first trace.
+        the first trace.  Callers must supply all three; there is no
+        fallback onto mutating ``self`` state.
         """
         batch_size = batch["states"].shape[0]
         
@@ -131,13 +139,6 @@ class Trainer:
         disturbances = batch["disturbances"]
         params_batch = batch["params"]
         ts = batch["t"]
-
-        if step is None:
-            step = jnp.asarray(self.step, dtype=jnp.float32)
-        if sde_active is None:
-            sde_active = self._sde_active_at_step(self.step)
-        if one_step_weight is None:
-            one_step_weight = jnp.asarray(self.loss_computer.w_one_step, dtype=jnp.float32)
 
         weights = self.loss_computer.get_loss_weights(step, one_step_weight=one_step_weight)
 

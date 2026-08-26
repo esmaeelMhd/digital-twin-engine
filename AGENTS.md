@@ -112,7 +112,7 @@ Physics losses are computed in physical units.
 | File | Role |
 |---|---|
 | `dte/training/online.py` | `OnlineAdapter` — ring buffer, CUSUM drift detection, sliding-window fine-tuning |
-| `dte/training/shared/transfer.py` | `FewShotAdapter`, `zero_shot_eval`, `_build_filter_spec` |
+| `dte/training/shared/transfer.py` | `FewShotAdapter`, `zero_shot_eval`, `build_finetune_filter_spec` |
 | `dte/training/shared/losses.py` | `LossComputer` |
 | `dte/training/unit/trainer.py` | Single-system trainer |
 | `dte/training/universal/trainer.py` | Mixed-system trainer |
@@ -252,7 +252,6 @@ python scripts/evaluate.py \
   --model_path outputs/smoke_test/final_model.eqx \
   --config outputs/smoke_test/config.yaml \
   --data_dir data/test/ --output_dir outputs/smoke_test/eval/
-```
 ```
 
 ---

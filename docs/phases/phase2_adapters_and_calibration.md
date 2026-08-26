@@ -108,7 +108,7 @@ Targeted verification for Phase 2:
 
 ## Reusable Smoke Script
 
-Use [scripts/phases/smoke_phase2.py](scripts/phases/smoke_phase2.py) to rerun the small end-to-end Phase 2 matrix:
+Use [scripts/phases/smoke_phase2.py](../../scripts/phases/smoke_phase2.py) to rerun the small end-to-end Phase 2 matrix:
 
 ```bash
 source .venv/bin/activate

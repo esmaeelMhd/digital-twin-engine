@@ -244,6 +244,8 @@ _cors_origins = os.environ.get(
     "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
 ).split(",")
 _origins = [origin.strip() for origin in _cors_origins if origin.strip()]
+if "*" in _origins:
+    _origins = ["*"]
 _allow_star = _origins == ["*"]
 app.add_middleware(
     CORSMiddleware,

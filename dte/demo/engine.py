@@ -160,7 +160,10 @@ def load_demo_release_snapshot(
     customer_report_markdown = _load_text_if_exists(customer_report_path)
 
     per_system_total_loss: dict[str, float] = {}
-    for system_name, metrics in (eval_summary or {}).get("per_system_val_losses", {}).items():
+    eval_metrics = (eval_summary or {}).get("per_system_val_losses") or (
+        eval_summary or {}
+    ).get("per_system_train_fallback", {})
+    for system_name, metrics in eval_metrics.items():
         if isinstance(metrics, dict):
             total = _safe_float(metrics.get("total"))
             if total is not None:
