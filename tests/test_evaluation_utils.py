@@ -95,6 +95,18 @@ def test_sensitivity_and_uncertainty_metrics_are_well_formed():
     assert calibration_gap(mean, std, target) >= 0.0
 
 
+def test_calibration_gap_rejects_unknown_sigma_levels():
+    mean = jnp.array([0.0], dtype=jnp.float32)
+    std = jnp.array([1.0], dtype=jnp.float32)
+    target = jnp.array([0.1], dtype=jnp.float32)
+    try:
+        calibration_gap(mean, std, target, sigma_levels=(1.5,))
+    except ValueError as exc:
+        assert "Unknown sigma level" in str(exc)
+    else:
+        raise AssertionError("calibration_gap should reject unknown sigma levels")
+
+
 def test_universal_evaluation_helpers_normalize_and_sample_rollouts():
     metadata = _build_metadata()
     model = UniversalDigitalTwin.from_config(_build_config(), metadata, jax.random.PRNGKey(0))

@@ -85,8 +85,11 @@ class Trainer:
             optax.clip_by_global_norm(opt_config["gradient_clip"]),
             optax.adam(schedule, b1=0.95, b2=0.99),
         )
-        
-        self.opt_state = self.optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+
+        # Freeze normalization tables / group masks; only neural weights train.
+        self.filter_spec = model.trainable_filter_spec()
+        trainable, _ = eqx.partition(model, self.filter_spec)
+        self.opt_state = self.optimizer.init(trainable)
         
         # Training history
         self.history = {
@@ -98,24 +101,29 @@ class Trainer:
         self.best_val_loss = float("inf")
         self.last_train_summary: Dict[str, float | int | bool | str | None] = {}
     
+    def _sde_active_at_step(self, step: int) -> bool:
+        sde_cfg = self.config.get("sde_training", {})
+        sde_enabled = bool(sde_cfg.get("enabled", False))
+        sde_warmup_steps = int(sde_cfg.get("warmup_steps", 0))
+        return sde_enabled and (int(step) >= sde_warmup_steps)
+
     def compute_loss(
         self,
         model: DigitalTwin,
         batch: Dict[str, Array],
         key: PRNGKeyArray,
+        step=None,
+        sde_active: bool | None = None,
+        one_step_weight=None,
     ) -> tuple[float, Dict[str, float]]:
         """Compute all losses for a batch.
-        
-        Args:
-            model: Digital Twin model
-            batch: Batch data
-            key: PRNG key
-            
-        Returns:
-            Tuple of (total_loss, loss_dict)
+
+        Dynamic training state (step, SDE gate, teacher-forcing weight) is
+        passed in explicitly so ``@eqx.filter_jit`` can trace it.  Reading
+        ``self.step`` inside a jitted method would freeze those values at
+        the first trace.
         """
         batch_size = batch["states"].shape[0]
-        seq_len = batch["states"].shape[1]
         
         # Extract data
         states = batch["states"]
@@ -123,15 +131,15 @@ class Trainer:
         disturbances = batch["disturbances"]
         params_batch = batch["params"]
         ts = batch["t"]
-        
-        # Get loss weights (with KL annealing)
-        weights = self.loss_computer.get_loss_weights(self.step)
-        
-        # Determine whether to use the stochastic SDE path this step.
-        sde_cfg = self.config.get("sde_training", {})
-        sde_enabled = sde_cfg.get("enabled", False)
-        sde_warmup_steps = sde_cfg.get("warmup_steps", 0)
-        sde_active = sde_enabled and (self.step >= sde_warmup_steps)
+
+        if step is None:
+            step = jnp.asarray(self.step, dtype=jnp.float32)
+        if sde_active is None:
+            sde_active = self._sde_active_at_step(self.step)
+        if one_step_weight is None:
+            one_step_weight = jnp.asarray(self.loss_computer.w_one_step, dtype=jnp.float32)
+
+        weights = self.loss_computer.get_loss_weights(step, one_step_weight=one_step_weight)
 
         # Process each sequence in batch
         keys = jax.random.split(key, batch_size)
@@ -239,7 +247,7 @@ class Trainer:
         loss_kl = self.loss_computer.kl_divergence_loss(z_means, z_logvars)
         dt = ts[0, 1] - ts[0, 0]  # Keep as JAX array, don't convert to float
 
-        # SDE KL: penalise diffusion magnitudes when stochastic training is active.
+        # Diffusion-magnitude penalty when stochastic training is active.
         sde_cfg = self.config.get("sde_training", {})
         sde_kl_weight = float(sde_cfg.get("sde_kl_weight", 0.0))
         if sde_active and sde_kl_weight > 0:
@@ -264,7 +272,7 @@ class Trainer:
             diff_values = jax.vmap(_diffusion_at_traj, in_axes=(0, 0))(
                 jnp.arange(batch_size), keys_diff
             )
-            loss_sde_kl = self.loss_computer.sde_kl_loss(diff_values, dt)
+            loss_sde_kl = self.loss_computer.diffusion_magnitude_penalty(diff_values, dt)
         else:
             loss_sde_kl = jnp.array(0.0)
 
@@ -297,6 +305,7 @@ class Trainer:
             "total": total_loss,
             "reconstruction": loss_recon,
             "kl": loss_kl,
+            "kl_weight": weights["kl"],
             "sde_kl": loss_sde_kl,
             "one_step": loss_one_step,
             "trajectory": loss_traj,
@@ -312,30 +321,37 @@ class Trainer:
         opt_state,
         batch: Dict[str, Array],
         key: PRNGKeyArray,
+        step,
+        sde_active: bool,
+        one_step_weight,
     ):
         """Single training step.
-        
-        Args:
-            model: Current model
-            opt_state: Optimizer state
-            batch: Batch data
-            key: PRNG key
-            
-        Returns:
-            Tuple of (new_model, new_opt_state, loss_dict)
+
+        ``step`` and ``one_step_weight`` are traced arrays.  ``sde_active`` is
+        a Python bool (static) so the stochastic/deterministic branch retraces
+        once when SDE warmup ends.
         """
-        # Compute loss and gradients
-        (loss, loss_dict), grads = eqx.filter_value_and_grad(
-            lambda m: self.compute_loss(m, batch, key),
-            has_aux=True
-        )(model)
-        
-        # Update model
-        updates, new_opt_state = self.optimizer.update(
-            grads, opt_state, eqx.filter(model, eqx.is_inexact_array)
-        )
-        new_model = eqx.apply_updates(model, updates)
-        
+        trainable, frozen = eqx.partition(model, self.filter_spec)
+
+        def loss_fn(trainable_model):
+            full_model = eqx.combine(trainable_model, frozen)
+            return self.compute_loss(
+                full_model,
+                batch,
+                key,
+                step=step,
+                sde_active=sde_active,
+                one_step_weight=one_step_weight,
+            )
+
+        (_loss, loss_dict), grads = eqx.filter_value_and_grad(
+            loss_fn,
+            has_aux=True,
+        )(trainable)
+
+        updates, new_opt_state = self.optimizer.update(grads, opt_state, trainable)
+        new_trainable = eqx.apply_updates(trainable, updates)
+        new_model = eqx.combine(new_trainable, frozen)
         return new_model, new_opt_state, loss_dict
 
     @eqx.filter_jit
@@ -344,9 +360,19 @@ class Trainer:
         model: DigitalTwin,
         batch: Dict[str, Array],
         key: PRNGKeyArray,
+        step,
+        sde_active: bool,
+        one_step_weight,
     ):
         """Single validation step without gradient computation."""
-        _, loss_dict = self.compute_loss(model, batch, key)
+        _, loss_dict = self.compute_loss(
+            model,
+            batch,
+            key,
+            step=step,
+            sde_active=sde_active,
+            one_step_weight=one_step_weight,
+        )
         return loss_dict
     
     def train_epoch(
@@ -388,20 +414,18 @@ class Trainer:
         else:
             effective_seq_len = base_seq_len
 
-        # Teacher forcing annealing: ramp one_step weight from initial to final ratio
+        # Teacher forcing annealing: ramp one_step weight from initial to final ratio.
+        # Passed as a traced scalar into the jitted step; do not mutate LossComputer.
         tf_cfg = self.config.get("teacher_forcing", {})
-        tf_enabled = tf_cfg.get("initial_ratio", 1.0) != tf_cfg.get("final_ratio", 0.0)
-        if tf_enabled:
-            tf_init = float(tf_cfg.get("initial_ratio", 1.0))
-            tf_final = float(tf_cfg.get("final_ratio", 0.0))
-            tf_epochs = int(tf_cfg.get("anneal_epochs", 30))
-            tf_frac = min(1.0, epoch / max(1, tf_epochs))
-            tf_ratio = tf_init + tf_frac * (tf_final - tf_init)
-            # Override the one_step weight in the loss computer for this epoch
-            original_one_step_weight = self.loss_computer.w_one_step
-            self.loss_computer.w_one_step = original_one_step_weight * tf_ratio
-        else:
-            original_one_step_weight = None
+        tf_init = float(tf_cfg.get("initial_ratio", 1.0))
+        tf_final = float(tf_cfg.get("final_ratio", 0.0))
+        tf_epochs = int(tf_cfg.get("anneal_epochs", 30))
+        tf_frac = min(1.0, epoch / max(1, tf_epochs))
+        tf_ratio = tf_init + tf_frac * (tf_final - tf_init)
+        one_step_weight = jnp.asarray(
+            self.loss_computer.w_one_step * tf_ratio,
+            dtype=jnp.float32,
+        )
 
         # Base loss keys; physics residuals are added dynamically below
         epoch_losses: Dict[str, list] = {
@@ -427,8 +451,16 @@ class Trainer:
 
             # Training step
             key, subkey = jax.random.split(key)
+            step_arr = jnp.asarray(self.step, dtype=jnp.float32)
+            sde_active = self._sde_active_at_step(self.step)
             self.model, self.opt_state, loss_dict = self.train_step(
-                self.model, self.opt_state, batch, subkey
+                self.model,
+                self.opt_state,
+                batch,
+                subkey,
+                step_arr,
+                sde_active,
+                one_step_weight,
             )
 
             # Record losses (convert to Python floats now)
@@ -457,10 +489,6 @@ class Trainer:
                 timed_out = True
                 break
         
-        # Restore teacher-forcing weight to original value
-        if original_one_step_weight is not None:
-            self.loss_computer.w_one_step = original_one_step_weight
-
         if not epoch_losses["total"]:
             raise RuntimeError(
                 "No training batches were completed before the time budget expired."
@@ -516,7 +544,17 @@ class Trainer:
 
             # Compute loss (no gradients)
             key, subkey = jax.random.split(key)
-            loss_dict = self.eval_step(self.model, batch, subkey)
+            step_arr = jnp.asarray(self.step, dtype=jnp.float32)
+            sde_active = self._sde_active_at_step(self.step)
+            one_step_weight = jnp.asarray(self.loss_computer.w_one_step, dtype=jnp.float32)
+            loss_dict = self.eval_step(
+                self.model,
+                batch,
+                subkey,
+                step_arr,
+                sde_active,
+                one_step_weight,
+            )
 
             # Record losses (convert to Python floats)
             loss_dict_float = {k: float(v) for k, v in loss_dict.items()}

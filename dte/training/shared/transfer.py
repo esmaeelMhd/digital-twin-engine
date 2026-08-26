@@ -2,8 +2,8 @@
 
 Provides:
 
-- :func:`apply_finetune_mask` -- Zero out gradients for frozen components so
-  that standard Equinox optimizers only update the unfrozen parts.
+- :func:`apply_finetune_mask` -- Compatibility no-op; freezing is applied
+  via an Equinox ``filter_spec`` inside :class:`FewShotAdapter`.
 - :class:`FewShotAdapter` -- Fine-tune a pre-trained model on a small number
   of trajectories from a *new* unit, with optional zero-shot evaluation.
 - :func:`zero_shot_eval` -- Evaluate a model on a new unit without any
@@ -15,22 +15,23 @@ Typical workflow
 
     from dte.training.shared.transfer import FewShotAdapter, zero_shot_eval
 
-    # 1. Zero-shot baseline
-    zs_metrics = zero_shot_eval(pretrained_model, new_unit_dataset, n_batches=20)
+    # 1. Zero-shot baseline on a held-out evaluation split
+    zs_metrics = zero_shot_eval(pretrained_model, eval_dataset, n_batches=20)
     print("Zero-shot MSE:", zs_metrics["mse"])
 
-    # 2. Few-shot fine-tune (freeze encoder + SDE, update decoder only)
+    # 2. Few-shot fine-tune on a disjoint adaptation split
+    #    (freeze encoder + SDE, update decoder only)
     adapter = FewShotAdapter(pretrained_model, system_spec)
     finetuned_model = adapter.finetune(
-        new_unit_dataset,
+        adapt_dataset,
         n_steps=200,
         batch_size=8,
         seq_len=20,
         part="decoder",
     )
 
-    # 3. Few-shot evaluation
-    fs_metrics = zero_shot_eval(finetuned_model, new_unit_dataset, n_batches=20)
+    # 3. Evaluate on the same held-out split used in step 1
+    fs_metrics = zero_shot_eval(finetuned_model, eval_dataset, n_batches=20)
     print("Few-shot MSE:", fs_metrics["mse"])
 """
 
@@ -60,39 +61,13 @@ def apply_finetune_mask(
     model: DigitalTwin,
     part: FinetunePartType = "decoder",
 ) -> DigitalTwin:
-    """Return a model whose frozen components have their arrays set to non-
-    differentiable leaves so that ``eqx.filter`` excludes them from the
-    optimizer update.
+    """Compatibility no-op.
 
-    This works by replacing the frozen sub-trees with ``eqx.nn.StateIndex``-like
-    static arrays (via a zero-gradient trick): Equinox's ``eqx.filter`` and
-    ``eqx.filter_value_and_grad`` already exclude non-array leaves, but arrays
-    in frozen sub-trees are still arrays.  The standard Equinox approach is to
-    pass a custom ``filter_spec`` to ``eqx.filter_value_and_grad`` that masks
-    out the frozen leaves.
-
-    We implement this by attaching a ``_frozen`` attribute to the model and
-    returning the modified model along with a compatible ``filter_spec`` that
-    can be used in :func:`FewShotAdapter.finetune`.
-
-    For convenience when used with ``scripts/train.py``, this function simply
-    *returns the model unchanged* -- the actual freezing is handled in
-    :class:`FewShotAdapter` via its internal ``filter_spec``.
-
-    Parameters
-    ----------
-    model:
-        The model to prepare for fine-tuning.
-    part:
-        Which component to update.  ``"decoder"`` (default) freezes the
-        encoder and latent SDE; ``"encoder"`` freezes the decoder and SDE;
-        ``"all"`` does not freeze anything.
-
-    Returns
-    -------
-    DigitalTwin
-        The model (unmodified -- freezing is applied lazily via filter_spec).
+    Freezing is applied lazily in :class:`FewShotAdapter` (and in
+    ``scripts/train.py``) via an Equinox ``filter_spec`` / ``eqx.partition``.
+    This function returns ``model`` unchanged.
     """
+    del part
     return model
 
 
@@ -104,31 +79,30 @@ def _build_filter_spec(
     and frozen leaves as ``False``.
 
     The spec is a PyTree mirroring the model with bool leaves, suitable for
-    use with ``eqx.partition(model, spec)``.
+    use with ``eqx.partition(model, spec)``.  It is always intersected with
+    :meth:`DigitalTwin.trainable_filter_spec` so spec metadata (centers,
+    scales, group masks) stays frozen even when ``part="all"``.
     """
+    metadata_ok = model.trainable_filter_spec()
     # Start with "train nothing" (all False), then selectively enable
     all_false = jax.tree_util.tree_map(lambda _: False, model)
 
-    if part == "all":
-        # Train all array leaves
-        return jax.tree_util.tree_map(eqx.is_array, model)
-
     if part == "decoder":
-        # Only decoder arrays are trainable
-        return eqx.tree_at(
+        part_spec = eqx.tree_at(
             lambda m: m.decoder,
             all_false,
             replace=jax.tree_util.tree_map(eqx.is_array, model.decoder),
         )
     elif part == "encoder":
-        # Only encoder arrays are trainable
-        return eqx.tree_at(
+        part_spec = eqx.tree_at(
             lambda m: m.encoder,
             all_false,
             replace=jax.tree_util.tree_map(eqx.is_array, model.encoder),
         )
     else:
-        return jax.tree_util.tree_map(eqx.is_array, model)
+        part_spec = jax.tree_util.tree_map(eqx.is_array, model)
+
+    return jax.tree_util.tree_map(lambda a, b: bool(a) and bool(b), part_spec, metadata_ok)
 
 
 # ---------------------------------------------------------------------------

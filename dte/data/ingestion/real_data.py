@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import h5py
 import numpy as np
@@ -76,7 +76,8 @@ class RealDataIngestion:
         to disable.
     drop_large_gaps:
         If True, trajectory segments containing unfillable gaps are dropped.
-        If False, the last good value is held constant (zero-order hold).
+        If False, interior large gaps are linearly interpolated by ``np.interp``
+        (not zero-order hold).
     """
 
     def __init__(
@@ -119,11 +120,14 @@ class RealDataIngestion:
         source_path:
             Path to input CSV file.
         output_path:
-            Path for output HDF5 file.
+            Destination HDF5 path.
         trajectory_duration:
-            Length of each extracted trajectory window (seconds).
+            Window length in seconds extracted as one "trajectory".
         trajectory_stride:
-            Step between consecutive trajectory windows (seconds).
+            Stride in seconds between window starts.  The default duration of
+            100 s and stride of 10 s yields 90% overlapping windows; they are
+            not independent samples.  Use a stride close to ``trajectory_duration``
+            if you need approximately i.i.d. trajectories for train/val splits.
 
         Returns
         -------
@@ -253,7 +257,8 @@ class RealDataIngestion:
             if self.drop_large_gaps:
                 # Replace with NaN, handled during segment extraction
                 interp_vals[large_gap_mask] = np.nan
-            # else: zero-order hold (interp already does this at boundaries)
+            # else: np.interp linearly bridges interior gaps; ZOH applies
+            # only outside the observed time range, not across interior holes.
 
             data_uniform[col] = interp_vals
             missing_mask[col] = large_gap_mask
@@ -263,13 +268,16 @@ class RealDataIngestion:
         for col in all_columns:
             vals = data_uniform[col]
             valid_vals = vals[~np.isnan(vals)]
-            if len(valid_vals) == 0:
+            if len(valid_vals) < 3:
                 noise_std[col] = 0.0
+            else:
+                # First-difference estimator of sensor noise, not total signal std.
+                noise_std[col] = float(np.std(np.diff(valid_vals)) / np.sqrt(2.0))
+            if len(valid_vals) == 0:
                 continue
 
             col_mean = np.nanmean(vals)
             col_std = np.nanstd(vals)
-            noise_std[col] = float(col_std)
 
             if col_std > 0 and not np.isinf(self.outlier_sigma):
                 z_scores = np.abs((vals - col_mean) / col_std)

@@ -363,7 +363,9 @@ class DigitalTwin(eqx.Module):
 
         if key is not None:
             z_sampled = self.encoder.sample(z_mean, z_logvar, key)
-            # Blend deterministic mean and stochastic sample to stabilize rollout
+            # Variance-damping heuristic: mix the posterior mean with a
+            # reparameterized sample.  The effective sampling distribution is
+            # N(z_mean, 0.25 * Sigma), not the encoder's N(z_mean, Sigma).
             z = 0.5 * z_mean + 0.5 * z_sampled
         else:
             z = z_mean
@@ -470,6 +472,47 @@ class DigitalTwin(eqx.Module):
 
         print(f"Model loaded from {path}")
         return model
+
+    def trainable_filter_spec(self):
+        """Mark neural weights as trainable and freeze normalization tables.
+
+        Centers, scales, nominal disturbances, and grouped-encoder masks are
+        system-spec metadata.  They sit on the loss path, so a naive
+        ``eqx.is_inexact_array`` filter would train them.  The returned spec
+        is suitable for ``eqx.partition`` / ``eqx.combine``.
+        """
+        spec = jax.tree.map(eqx.is_inexact_array, self)
+        frozen = []
+        encoder = self.encoder
+        for name in (
+            "state_center",
+            "state_scale",
+            "control_center",
+            "control_scale",
+            "group_masks",
+            "group_active",
+        ):
+            if hasattr(encoder, name):
+                frozen.append(getattr(encoder, name))
+        if hasattr(self.decoder, "control_scale"):
+            frozen.append(self.decoder.control_scale)
+        for module in (self.latent_sde.drift, self.latent_sde.diffusion):
+            for name in (
+                "control_center",
+                "control_scale",
+                "disturbance_center",
+                "disturbance_scale",
+            ):
+                frozen.append(getattr(module, name))
+        frozen.append(self.latent_sde.nominal_disturbance)
+        freeze_ids = {id(leaf) for leaf in frozen}
+
+        def _mark(is_train, leaf):
+            if id(leaf) in freeze_ids:
+                return False
+            return is_train
+
+        return jax.tree.map(_mark, spec, self)
 
     def get_parameter_count(self) -> Dict[str, int]:
         """Get parameter counts for each submodule."""

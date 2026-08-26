@@ -29,7 +29,6 @@ def apply_decoder_constraints(
         ctype = c["type"]
         # Convert list to tuple for JAX indexing (avoids deprecated list indexing)
         raw_idxs = c["indices"]
-        idxs = tuple(raw_idxs) if len(raw_idxs) > 1 else (raw_idxs[0],)
         if ctype == "softplus":
             bias = c.get("bias", 0.5)
             out = out.at[jnp.array(raw_idxs)].set(

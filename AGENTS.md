@@ -33,6 +33,10 @@ source .venv/bin/activate
 | `dte/simulators/cstr.py` | CSTR concrete simulator |
 | `dte/simulators/heat_exchanger.py` | Counter-current heat exchanger simulator |
 | `dte/simulators/two_tank.py` | Coupled two-tank level simulator |
+| `dte/simulators/isothermal_cstr.py` | Isothermal CSTR |
+| `dte/simulators/storage_tank.py` | Storage tank |
+| `dte/simulators/separator.py` | Splitter / separator |
+| `dte/simulators/bioreactor_compartment.py` | Bioreactor compartment |
 
 `SystemSpec` carries: `state_dim`, `control_dim`, `disturbance_dim`, `param_dim`,
 `state_names`, `control_names`, `disturbance_names`, `decoder_constraints`,
@@ -52,31 +56,39 @@ normalisation constants anywhere in the model code.
 | `dte/physics/cstr.py` | `CSTRPhysicsLoss` (mass + energy residuals) |
 | `dte/physics/heat_exchanger.py` | `HeatExchangerPhysicsLoss` (energy residual) |
 | `dte/physics/two_tank.py` | `TwoTankPhysicsLoss` (mass residual) |
+| `dte/physics/isothermal_cstr.py` | `IsothermalCSTRPhysicsLoss` |
+| `dte/physics/storage_tank.py` | `StorageTankPhysicsLoss` |
+| `dte/physics/separator.py` | `SeparatorPhysicsLoss` |
+| `dte/physics/bioreactor_compartment.py` | `BioreactorCompartmentPhysicsLoss` |
 | `dte/physics/conservation.py` | Re-exports from `cstr.py` for backward compatibility |
 
-`LossComputer` (`dte/training/losses.py`) accepts any `PhysicsLoss` instance and
+`LossComputer` (`dte/training/shared/losses.py`) accepts any `PhysicsLoss` instance and
 queries `residual_names()` dynamically — it has no CSTR coupling.
 Training and evaluation resolve system-specific physics through
 `dte/physics/registry.py`, not through hardcoded script branches.
 
 ### Training features (all implemented)
 
-- **Stochastic SDE training** — full diffusion path + KL regularisation, gated by
-  `sde_training.enabled` in config. Warmup delay controlled by `sde_training.warmup_steps`.
+- **Stochastic SDE training** — Euler–Maruyama path plus L2 diffusion-magnitude
+  regularisation, gated by `sde_training.enabled`. Warmup delay controlled by
+  `sde_training.warmup_steps`. Pass `step` / `sde_active` as explicit arguments
+  into the jitted unit trainer; do not read `self.step` inside `@eqx.filter_jit`.
 - **Curriculum learning** — `seq_len` ramps from `curriculum.initial_seq_len` to
   `curriculum.final_seq_len` over `curriculum.warmup_epochs`.
 - **Teacher-forcing annealing** — one-step loss weight anneals from
   `teacher_forcing.initial_ratio` to `teacher_forcing.final_ratio` over
-  `teacher_forcing.anneal_epochs`.
+  `teacher_forcing.anneal_epochs`. Pass the weight as a traced scalar; do not
+  mutate `LossComputer.w_one_step` across jitted steps.
 
 ### Data
 
 | File | Role |
 |---|---|
-| `dte/data/dataset.py` | `TrajectoryDataset` — HDF5 loader, `sample_batch(key, bs, seq_len=None)` |
+| `dte/data/datasets/unit_dataset.py` | `TrajectoryDataset` — HDF5 loader, `sample_batch(key, bs, seq_len=None)` |
+| `dte/data/datasets/universal_unit_dataset.py` | Mixed-system padded dataset for universal training |
 | `dte/data/generation.py` | CSTR-specific data generator (fast, original) |
-| `dte/data/generation_generic.py` | `GenericDataGenerator` — works with any `ProcessSimulator` |
-| `dte/data/real_data.py` | `RealDataIngestion` — CSV/Parquet ingestion pipeline |
+| `dte/data/generators/generic.py` | `GenericDataGenerator` — works with any `ProcessSimulator` |
+| `dte/data/ingestion/real_data.py` | `RealDataIngestion` — CSV/Parquet ingestion pipeline |
 
 **HDF5 schema** (all generators must match this):
 ```
@@ -100,11 +112,14 @@ Physics losses are computed in physical units.
 | File | Role |
 |---|---|
 | `dte/training/online.py` | `OnlineAdapter` — ring buffer, CUSUM drift detection, sliding-window fine-tuning |
-| `dte/training/transfer.py` | `FewShotAdapter`, `zero_shot_eval`, `_build_filter_spec` |
+| `dte/training/shared/transfer.py` | `FewShotAdapter`, `zero_shot_eval`, `_build_filter_spec` |
+| `dte/training/shared/losses.py` | `LossComputer` |
+| `dte/training/unit/trainer.py` | Single-system trainer |
+| `dte/training/universal/trainer.py` | Mixed-system trainer |
 | `dte/api/models.py` | Pydantic v2 request/response models |
 | `dte/api/service.py` | FastAPI app — `/health`, `/predict`, `/ensemble`, `/steady_state` |
 | `Dockerfile` | Multi-stage: `builder` → `api` (lean) + `train` (full) |
-| `docker-compose.yml` | `api` + `dashboard` services; `--profile tools` for data-gen/training |
+| `docker-compose.yml` | `api` + `frontend` + `dashboard` services; `--profile tools` for data-gen/training |
 
 ---
 
@@ -118,8 +133,10 @@ Physics losses are computed in physical units.
 | `configs/two_tank_default.yaml` | Two-tank `SystemSpec`, simulator params, decoder constraints, normalisation |
 | `configs/two_tank_training.yaml` | Two-tank-specific training hypers (smaller model, mass loss weights) |
 | `configs/training_default.yaml` | Model architecture + training loop + SDE/curriculum/teacher-forcing |
+| `configs/training_universal.yaml` | Shared universal-checkpoint training |
 | `configs/mpc_default.yaml` | CEM-MPC horizon, candidates, elite fraction |
 | `configs/autoresearch_default.yaml` | Bounded experiment harness settings + agent modifiable-file list |
+| `configs/*_default.yaml` | Additional system specs (`isothermal_cstr`, `storage_tank`, `separator`, `bioreactor_compartment`) |
 
 ---
 
@@ -130,8 +147,10 @@ Physics losses are computed in physical units.
 | `scripts/generate_data.py` | Data generation for any registered system (routes by system name) |
 | `scripts/ingest_real_data.py` | Real plant CSV/Parquet → HDF5 ingestion CLI |
 | `scripts/train.py` | Training; `--finetune <ckpt>` + `--finetune_part {decoder,encoder,all}` for transfer |
-| `scripts/evaluate.py` | Evaluation and plot generation |
-| `scripts/run_mpc.py` | CEM-MPC simulation; `--compare_pid` supported only for CSTR |
+| `scripts/evaluate.py` | Evaluation and plot generation; `--test_data` for a held-out HDF5 file |
+| `scripts/train_universal.py` | Shared universal-checkpoint training |
+| `scripts/evaluate_universal.py` | Shared universal-checkpoint evaluation |
+| `scripts/run_mpc.py` | CEM-MPC simulation; `--compare_pid` supported only for CSTR; requires `--model_config` |
 | `scripts/autoresearch.py` | Bounded single-experiment harness |
 | `scripts/agent.py` | Autonomous LLM-driven research loop |
 | `scripts/verify_install.py` | Install sanity check |
@@ -153,8 +172,8 @@ system / physics registry boundary.
 
 ## What Is Safe to Change
 
-- `dte/models/*.py` — model architecture (always initialised from `SystemSpec`)
-- `dte/training/losses.py`, `trainer.py` — loss computation and training loop
+- `dte/models/unit/*.py`, `dte/models/universal/*.py` — model architecture (always initialised from `SystemSpec`)
+- `dte/training/shared/losses.py`, `dte/training/unit/trainer.py` — loss computation and training loop
 - `configs/training_default.yaml` — hyperparameters
 - `scripts/train.py` — training CLI (but keep `--system_config` and `--finetune` flags)
 - Any new `dte/simulators/`, `dte/physics/` files for new systems
@@ -169,7 +188,7 @@ system / physics registry boundary.
 | `program.md` | Autoresearch operating rules |
 | `auto_research.md` | LLM prompt context for autoresearch agent |
 | `dte/simulators/base.py` | Core abstraction; changes break all downstream code |
-| `dte/data/dataset.py` | HDF5 schema contract; key names must stay stable |
+| `dte/data/datasets/unit_dataset.py` | HDF5 schema contract; key names must stay stable |
 
 ---
 
@@ -177,8 +196,16 @@ system / physics registry boundary.
 
 **JAX array fields in Equinox modules**
 Do not use `eqx.field(static=True)` for JAX arrays — that triggers a warning and
-may silently make gradients not flow. Use plain fields; exclude from optimiser via
-`eqx.filter(model, eqx.is_array)`.
+may silently make gradients not flow. Store them as plain array fields. Freeze
+normalisation tables and grouped-encoder masks with
+`DigitalTwin.trainable_filter_spec()` (or the universal equivalent) and
+`eqx.partition` / `eqx.combine`. A naive `eqx.filter(model, eqx.is_inexact_array)`
+will train those metadata leaves.
+
+**`@eqx.filter_jit` staleness**
+`self` is a static argument. Never read mutating Python state such as
+`self.step` or `self.loss_computer.w_one_step` inside a jitted `train_step`.
+Pass `step`, `sde_active`, and `one_step_weight` as explicit arguments.
 
 **HDF5 time key**
 The time dataset key is `"time"`, not `"t"`. Every generator that writes HDF5 must
@@ -226,6 +253,7 @@ python scripts/evaluate.py \
   --config outputs/smoke_test/config.yaml \
   --data_dir data/test/ --output_dir outputs/smoke_test/eval/
 ```
+```
 
 ---
 
@@ -254,5 +282,6 @@ Prefer experiments that:
 | `DTE_MODEL_PATH` | `outputs/best_model.eqx` | Trained checkpoint path |
 | `DTE_TRAINING_CONFIG` | `configs/training_default.yaml` | Training config used to reconstruct model |
 | `DTE_API_KEY` | _(unset)_ | API key for FastAPI auth; unset = auth disabled |
+| `DTE_CORS_ORIGINS` | localhost Vite/API origins | Comma-separated CORS allowlist; `*` disables credentials |
 | `STREAMLIT_AUTH_PASSWORD` | _(unset)_ | Dashboard password; unset = auth disabled |
 | `JAX_PLATFORMS` | _(unset)_ | Set to `cpu` to force CPU (useful in containers) |

@@ -1,6 +1,6 @@
 """System registry: maps system names to SystemSpec and ProcessSimulator instances."""
 
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict
 
 from dte.core.state_schema import ParameterDescriptor, SignalChannel, StateChannel, TopologyPort
 from dte.simulators.base import (

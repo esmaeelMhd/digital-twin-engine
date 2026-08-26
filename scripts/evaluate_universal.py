@@ -24,6 +24,7 @@ from dte.evaluation.universal import (
     compute_rollout_metrics,
     compute_control_sensitivity_summary,
     compute_uncertainty_summary,
+    per_system_metrics_key,
 )
 from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.training.universal.trainer import UniversalTrainer
@@ -187,7 +188,8 @@ def main():
         "model_path": str(Path(args.model_path).resolve()),
         "output_dir": str(Path(args.output_dir).resolve()),
         "mixed_val_losses": mixed_val,
-        "per_system_val_losses": per_system,
+        per_system_metrics_key(trainer): per_system,
+        "evaluation_split": "val" if trainer.val_dataset is not None else "train_fallback",
         "aggregate_metric_name": "geometric_mean_per_system_total_loss",
         "aggregate_metric_value": _json_safe_float(aggregate_total),
         "val_manifest": val_dataset.manifest(),

@@ -30,11 +30,13 @@ Environment variables
 - ``DTE_DEMO_CONFIG``    Demo config; when its runtime section points to a universal
   release checkpoint, the API will use that shared runtime first
 - ``DTE_API_KEY``        Optional API key for authentication
+- ``DTE_CORS_ORIGINS``   Comma-separated allowed origins (default: localhost Vite/API)
 """
 
 from __future__ import annotations
 
 import os
+import secrets
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -63,7 +65,6 @@ from dte.api.models import (
     DemoSimulateResponse,
     EnsembleRequest,
     EnsembleResponse,
-    ErrorResponse,
     HealthResponse,
     OnboardingCreateJobRequest,
     OnboardingJobReportResponse,
@@ -238,11 +239,16 @@ app = FastAPI(
 # CORS — allow browser frontends to call this API
 # ---------------------------------------------------------------------------
 
-_cors_origins = os.environ.get("DTE_CORS_ORIGINS", "*").split(",")
+_cors_origins = os.environ.get(
+    "DTE_CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+).split(",")
+_origins = [origin.strip() for origin in _cors_origins if origin.strip()]
+_allow_star = _origins == ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _cors_origins],
-    allow_credentials=True,
+    allow_origins=_origins,
+    allow_credentials=not _allow_star,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -254,7 +260,6 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    import traceback
     detail = str(exc) if str(exc) else type(exc).__name__
     return JSONResponse(
         status_code=500,
@@ -274,7 +279,7 @@ async def _verify_api_key(api_key: Optional[str] = Security(_api_key_header)):
     required = os.environ.get(_API_KEY_ENV)
     if required is None:
         return  # Auth disabled
-    if api_key != required:
+    if api_key is None or not secrets.compare_digest(str(api_key), str(required)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key.  Supply it via 'X-API-Key' header.",
@@ -1335,7 +1340,6 @@ async def steady_state(req: SteadyStateRequest):
         else jnp.array(spec.default_nominal_disturbance, dtype=jnp.float32)
     )
 
-    import numpy as np
     ss = simulator.steady_state(
         np.asarray(control),
         np.asarray(disturbance),

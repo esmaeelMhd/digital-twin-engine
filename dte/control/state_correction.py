@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 
 from .foundation_adapter import FoundationModel, encode_state, predict_one_step

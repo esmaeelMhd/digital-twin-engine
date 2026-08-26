@@ -273,7 +273,8 @@ def main():
             "train_dataset": train_dataset.manifest(),
             "val_dataset": val_dataset.manifest(),
         },
-        "per_system_val_losses": train_summary["per_system_val_losses"],
+        "per_system_val_losses": train_summary.get("per_system_val_losses"),
+        "per_system_train_fallback": train_summary.get("per_system_train_fallback"),
     }
 
     summary_path = Path(args.summary_path) if args.summary_path else Path(args.output_dir) / "summary.json"

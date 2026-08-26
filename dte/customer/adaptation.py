@@ -202,7 +202,8 @@ def run_customer_adaptation(
         },
         "template_matching": template_matches.to_dict(),
         "validation_report": report,
-        "per_system_val_losses": train_summary["per_system_val_losses"],
+        "per_system_val_losses": train_summary.get("per_system_val_losses"),
+        "per_system_train_fallback": train_summary.get("per_system_train_fallback"),
     }
 
     summary_path = Path(summary_path) if summary_path else output_dir_path / "summary.json"

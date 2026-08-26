@@ -3,7 +3,6 @@
 from typing import Optional, List
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
 
 
 def plot_trajectory_comparison(
@@ -303,7 +302,6 @@ def plot_mpc_results(
     # Layout: states in left column, controls appended below
     n_state_rows = state_dim
     n_control_rows = control_dim
-    n_rows = max(n_state_rows, n_control_rows)
     # Use 2-column layout: left=states, right=controls
     total_rows = max(n_state_rows, n_control_rows)
     fig, axes = plt.subplots(total_rows, 2, figsize=(14, 3 * total_rows + 2))

@@ -10,7 +10,6 @@ from dte.physics.cstr import CSTRPhysicsLoss
 from dte.physics.conservation import (
     mass_balance_residual,
     energy_balance_residual,
-    total_conservation_metric,
 )
 from dte.training.shared.losses import LossComputer
 

@@ -6,7 +6,7 @@ It is intended to reduce ambiguity before any future config-path refactor.
 The main rule is:
 
 - keep active runtime, training, and tested experiment configs under `configs/`
-- keep historical or one-off material under `legacy/configs/`
+- keep historical or one-off material under `configs/archive/` or `docs/archive/`
 - do not move active config files unless scripts, docs, tests, and environment defaults are updated in the same pass
 
 ## Current Active Groups
@@ -118,22 +118,16 @@ These are narrower stage configs still used by the maintained autoresearch surfa
 
 Status: keep active.
 
-## Legacy Group
+## Archive Group
 
-These already belong in legacy and should stay there unless they are reactivated deliberately.
+Historical campaign notes and old experiment configs live under:
 
-- `legacy/configs/autoresearch_foundation.yaml`
-- `legacy/configs/autoresearch_moonshot.yaml`
-- `legacy/configs/autoresearch_moonshot_compare.yaml`
-- `legacy/configs/autoresearch_foundation_moonshot.yaml`
-- `legacy/configs/autoresearch_foundation_moonshot_round2.yaml`
-- `legacy/configs/generation_phase1_regime_smoke.yaml`
-- `legacy/configs/training_universal_phase1_corpus.yaml`
-- `legacy/configs/training_universal_phase1_regime_smoke.yaml`
-- `legacy/configs/training_universal_round1.yaml`
-- `legacy/configs/autoresearch/*`
+- `configs/archive/`
+- `docs/archive/`
 
-Status: legacy.
+They are not part of the active validation surface. There is no `legacy/` tree in this repository.
+
+Status: archival.
 
 ## Recommended Mental Model
 
@@ -144,7 +138,7 @@ If you are looking at `configs/`, read it in this order:
 3. `demo_app.yaml` / `mpc_default.yaml` = runtime surfaces
 4. `generation_phase1_*` and `training_universal_phase1_regime*` = structured universal experiments
 5. `autoresearch*.yaml` = bounded research harness configs
-6. `legacy/configs/` = historical material
+6. `configs/archive/` = historical material
 
 ## Future Target Layout
 
@@ -192,5 +186,5 @@ Too many current scripts, tests, env defaults, and docs still point at the flat 
 Use this rule for housekeeping:
 
 - keep files in `configs/` if they are named in scripts, tests, docs, env defaults, or active workflows
-- move files to `legacy/configs/` only if they are historical/manual-only and no longer part of the active validation surface
+- move files to `configs/archive/` only if they are historical/manual-only and no longer part of the active validation surface
 - do not move regime configs just because their names look experimental; they are still part of the tested universal path

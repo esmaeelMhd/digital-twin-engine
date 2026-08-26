@@ -5,7 +5,8 @@ Implements:
   and periodically fine-tunes the model on the most recent window.
 - **Drift detection**: Monitors rolling prediction error; triggers re-calibration
   when error exceeds an adaptive threshold (CUSUM-inspired).
-- **Exponential forgetting**: Older data in the buffer is weighted less (EWC-lite).
+- **Exponential forgetting**: Older data in the buffer is weighted less
+  (L2-anchor regularisation toward the last fine-tune snapshot).
 - **Integration with MPC loop**: :class:`OnlineAdapter` can be called after each
   new observation arrives from the plant.
 
@@ -35,15 +36,15 @@ Usage
 from __future__ import annotations
 
 import collections
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import PRNGKeyArray
 
 from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.base import SystemSpec
@@ -91,9 +92,10 @@ class OnlineAdapterConfig:
         Number of initial steps used to estimate the baseline error for drift
         detection (exponential moving average is used after this period).
     ewc_lambda:
-        Strength of the EWC-like forgetting penalty (0 = disabled).
-        When > 0 a Fisher-based regulariser is applied to penalise large
-        deviations from the last checkpoint.
+        Strength of the L2-anchor forgetting penalty (0 = disabled).
+        When > 0, parameters are pulled toward the snapshot taken after the
+        previous fine-tune pass.  This is not Fisher-information EWC; no
+        Fisher diagonal is estimated.
     finetune_encoder_only:
         If True, only encoder parameters receive gradient updates during
         fine-tuning (faster, prevents encoder collapse, better for small data).
@@ -242,7 +244,7 @@ class _DriftDetector:
         self._reference = (1 - self.alpha) * self._reference + self.alpha * error
 
         # CUSUM accumulation
-        deviation = error - self._reference - self.slack
+        deviation = error - self._reference * (1.0 + self.slack)
         self._cusum = max(0.0, self._cusum + deviation)
         self.cusum_history.append(self._cusum)
 
@@ -315,9 +317,8 @@ class OnlineAdapter:
         )
         self._opt_state = self._optimizer.init(eqx.filter(model, eqx.is_array))
 
-        # EWC anchors (computed after the first fine-tune pass if ewc_lambda > 0)
+        # L2-anchor snapshot (updated after each fine-tune pass if ewc_lambda > 0)
         self._anchor_params = eqx.filter(model, eqx.is_array) if config.ewc_lambda > 0 else None
-        self._fisher: Optional[object] = None  # Fisher diagonal (not yet estimated)
 
         # Step counters
         self._push_count: int = 0
@@ -525,7 +526,7 @@ class OnlineAdapter:
                 # Simple MSE in state space
                 mse = jnp.mean((pred - states) ** 2)
 
-                # EWC penalty
+                # L2-anchor penalty toward the previous fine-tune snapshot
                 ewc_pen = jnp.array(0.0)
                 if self.config.ewc_lambda > 0 and self._anchor_params is not None:
                     curr_arrays = eqx.filter(m, eqx.is_array)
@@ -568,7 +569,7 @@ class OnlineAdapter:
         self._opt_state = opt_tuple[1]
         self._finetune_count += 1
 
-        # Update EWC anchor
+        # Update L2-anchor snapshot
         if self.config.ewc_lambda > 0:
             self._anchor_params = eqx.filter(self.model, eqx.is_array)
 

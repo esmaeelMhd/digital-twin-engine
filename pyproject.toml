@@ -78,3 +78,19 @@ packages = ["dte"]
 # work the same way whether pytest runs from a checkout or against an install.
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",  # existing long lines; not a review blocker
+    "E741",  # short names like l, O used in math-adjacent code
+    "E402",  # scripts sometimes import after runtime logging setup
+    "E731",  # lambdas used as local callables in JAX modules
+    "F821",  # jaxtyping Array/Float names in annotations
+    "F722",  # jaxtyping shape strings in annotations
+    "W293",  # trailing whitespace on blank lines in existing files
+]

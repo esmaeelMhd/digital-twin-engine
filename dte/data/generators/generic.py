@@ -11,10 +11,9 @@ the same fast dataset path.
 
 from __future__ import annotations
 
-import os
 import time
 from functools import partial
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import h5py
 import jax

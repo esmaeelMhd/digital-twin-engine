@@ -20,6 +20,7 @@ from dte.data.datasets.universal_unit_dataset import (
     SystemDatasetSource,
 )
 from dte.models.universal.digital_twin import UniversalDigitalTwin
+from dte.evaluation.universal import per_system_metrics_key
 from dte.training.universal.trainer import UniversalTrainer
 
 
@@ -196,7 +197,8 @@ def main():
         "parameter_counts": model.get_parameter_count(),
         "train_manifest": train_dataset.manifest(),
         "val_manifest": val_dataset.manifest(),
-        "per_system_val_losses": per_system,
+        per_system_metrics_key(trainer): per_system,
+        "evaluation_split": "val" if trainer.val_dataset is not None else "train_fallback",
         "aggregate_metric_name": "geometric_mean_per_system_total_loss",
         "aggregate_metric_value": _json_safe_float(aggregate_total),
     }
