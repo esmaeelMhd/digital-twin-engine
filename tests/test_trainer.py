@@ -183,7 +183,14 @@ def test_single_system_trainer_sde_kl_branch_computes_loss():
     trainer = Trainer(model, loss_computer, config, dataset, dataset)
 
     batch = dataset.sample_batch(jax.random.PRNGKey(1), batch_size=2)
-    total_loss, loss_dict = trainer.compute_loss(model, batch, jax.random.PRNGKey(2))
+    total_loss, loss_dict = trainer.compute_loss(
+        model,
+        batch,
+        jax.random.PRNGKey(2),
+        step=jnp.asarray(0, dtype=jnp.float32),
+        sde_active=True,
+        one_step_weight=jnp.asarray(loss_computer.w_one_step, dtype=jnp.float32),
+    )
 
     assert jnp.isfinite(total_loss)
     assert "sde_kl" in loss_dict
@@ -287,6 +294,52 @@ def test_unit_trainer_freezes_normalization_tables():
     assert jnp.allclose(trainer.model.encoder.state_center, before_center)
     assert jnp.allclose(trainer.model.encoder.state_scale, before_scale)
     assert jnp.allclose(trainer.model.latent_sde.nominal_disturbance, before_nom)
+
+
+def test_decoder_only_filter_spec_leaves_encoder_and_sde_frozen():
+    """--finetune_part decoder must update decoder weights only."""
+
+    from dte.training.shared.transfer import build_finetune_filter_spec
+
+    config = _load_training_config()
+    config["optimizer"]["warmup_steps"] = 0
+    config["optimizer"]["peak_lr"] = 1e-2
+    spec = _load_cstr_spec()
+    dataset = _build_dataset(spec)
+    model = DigitalTwin.from_config(config, jax.random.PRNGKey(0), system_spec=spec)
+    loss_computer = LossComputer(
+        config,
+        dataset.get_normalization_stats(),
+        physics_loss=None,
+        state_names=spec.state_names,
+    )
+    trainer = Trainer(
+        model,
+        loss_computer,
+        config,
+        dataset,
+        dataset,
+        filter_spec=build_finetune_filter_spec(model, "decoder"),
+    )
+    batch = dataset.sample_batch(jax.random.PRNGKey(1), batch_size=2)
+
+    before_enc = jnp.array(trainer.model.encoder.mean_layer.weight)
+    before_sde = jnp.array(trainer.model.latent_sde.drift.gate_layer.weight)
+    before_dec = jnp.array(trainer.model.decoder.layers[0].weight)
+
+    trainer.model, trainer.opt_state, _ = trainer.train_step(
+        trainer.model,
+        trainer.opt_state,
+        batch,
+        jax.random.PRNGKey(2),
+        jnp.asarray(0, dtype=jnp.float32),
+        True,
+        jnp.asarray(loss_computer.w_one_step, dtype=jnp.float32),
+    )
+
+    assert jnp.allclose(trainer.model.encoder.mean_layer.weight, before_enc)
+    assert jnp.allclose(trainer.model.latent_sde.drift.gate_layer.weight, before_sde)
+    assert not jnp.allclose(trainer.model.decoder.layers[0].weight, before_dec)
 
 
 def test_few_shot_adapter_freezes_normalization_tables():

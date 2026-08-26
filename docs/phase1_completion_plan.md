@@ -1,15 +1,15 @@
 # Phase 1 Completion Plan
 
 This document defines the concrete plan to close `Phase 1: Unit Foundation V1`
-from [docs/full_stack_convergence_program.md](docs/full_stack_convergence_program.md:1).
+from [docs/full_stack_convergence_program.md](full_stack_convergence_program.md).
 
 It is based on the current canonical run, not on hypothetical failure modes.
 
 ## Current Status
 
-Canonical workspace:
+Canonical workspace (local run artifact, not in git):
 
-- [outputs/unit_foundation_phase1_run_v11/summary.json](outputs/unit_foundation_phase1_run_v11/summary.json:1)
+- `outputs/unit_foundation_phase1_run_v11/summary.json`
 
 Current gate state:
 
@@ -25,11 +25,11 @@ Current red metrics:
 - rollout outlier: `heat_exchanger` rollout RMSE `10.1438`
 - transfer fail: `two_tank_high_throughput` warm-start rollout RMSE `0.8689` vs scratch `0.1274`
 
-Primary evidence:
+Primary evidence (local run artifacts, not in git):
 
-- [eval/summary.json](outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/eval/summary.json:1)
-- [transfer_benchmark/summary.json](outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/transfer_benchmark/summary.json:1)
-- [control_gate/summary.json](outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/control_gate/summary.json:1)
+- `outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/eval/summary.json`
+- `outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/transfer_benchmark/summary.json`
+- `outputs/unit_foundation_phase1_run_v11/outputs/unit_foundation/control_gate/summary.json`
 
 ## Definition Of Done
 
@@ -131,7 +131,7 @@ Iteration speed matters, but the path must stay canonical.
 For rollout closure:
 
 - run training + evaluation through the canonical stack
-- inspect [eval/summary.json](outputs/unit_foundation_phase1_run/outputs/unit_foundation/eval/summary.json:1)
+- inspect `outputs/unit_foundation_phase1_run/outputs/unit_foundation/eval/summary.json` (local run artifact)
 
 For transfer closure:
 

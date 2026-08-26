@@ -59,6 +59,9 @@ def _extract_universal_per_system_losses(summary: dict[str, Any]) -> dict[str, d
     mapping = summary.get("per_system_val_losses")
     if isinstance(mapping, dict):
         return mapping
+    mapping = summary.get("per_system_train_fallback")
+    if isinstance(mapping, dict):
+        return mapping
     mapping = summary.get("per_system_metrics")
     if isinstance(mapping, dict):
         return mapping

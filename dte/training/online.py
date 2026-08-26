@@ -48,6 +48,7 @@ from jaxtyping import PRNGKeyArray
 
 from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.base import SystemSpec
+from dte.training.shared.transfer import build_finetune_filter_spec
 
 try:
     from dte.training.shared.losses import LossComputer  # optional, for type hints only
@@ -290,6 +291,10 @@ class OnlineAdapter:
     ):
         if config is None:
             config = OnlineAdapterConfig()
+        if config.finetune_encoder_only and config.finetune_decoder_only:
+            raise ValueError(
+                "finetune_encoder_only and finetune_decoder_only are mutually exclusive."
+            )
         self.config = config
         self.model = model
         self.system_spec = system_spec
@@ -310,15 +315,26 @@ class OnlineAdapter:
             reference_steps=config.drift_reference_steps,
         )
 
+        if config.finetune_encoder_only:
+            part = "encoder"
+        elif config.finetune_decoder_only:
+            part = "decoder"
+        else:
+            part = "all"
+        self._filter_spec = build_finetune_filter_spec(model, part)
+        trainable, _ = eqx.partition(model, self._filter_spec)
+
         # Fine-tune optimizer (much smaller LR than offline)
         self._optimizer = optax.chain(
             optax.clip_by_global_norm(config.gradient_clip),
             optax.adam(config.learning_rate),
         )
-        self._opt_state = self._optimizer.init(eqx.filter(model, eqx.is_array))
+        self._opt_state = self._optimizer.init(trainable)
 
-        # L2-anchor snapshot (updated after each fine-tune pass if ewc_lambda > 0)
-        self._anchor_params = eqx.filter(model, eqx.is_array) if config.ewc_lambda > 0 else None
+        # L2-anchor snapshot of trainable leaves (updated after each fine-tune)
+        self._anchor_params = (
+            eqx.filter(trainable, eqx.is_inexact_array) if config.ewc_lambda > 0 else None
+        )
 
         # Step counters
         self._push_count: int = 0
@@ -507,9 +523,14 @@ class OnlineAdapter:
 
         params_arr = jnp.array(self._default_params)
 
+        filter_spec = self._filter_spec
+
         @eqx.filter_jit
         def _step_fn(model, opt_state, batch, key):
-            def loss_fn(m):
+            trainable, frozen = eqx.partition(model, filter_spec)
+
+            def loss_fn(trainable_model):
+                m = eqx.combine(trainable_model, frozen)
                 states = batch["states"]
                 controls = batch["controls"]
                 disturbances = batch["disturbances"]
@@ -529,7 +550,7 @@ class OnlineAdapter:
                 # L2-anchor penalty toward the previous fine-tune snapshot
                 ewc_pen = jnp.array(0.0)
                 if self.config.ewc_lambda > 0 and self._anchor_params is not None:
-                    curr_arrays = eqx.filter(m, eqx.is_array)
+                    curr_arrays = eqx.filter(trainable_model, eqx.is_inexact_array)
                     diff_leaves = jax.tree_util.tree_leaves(
                         jax.tree_util.tree_map(
                             lambda a, b: jnp.sum((a - b) ** 2),
@@ -541,12 +562,13 @@ class OnlineAdapter:
 
                 return mse + ewc_pen
 
-            loss_val, grads = eqx.filter_value_and_grad(loss_fn)(model)
+            loss_val, grads = eqx.filter_value_and_grad(loss_fn)(trainable)
 
             updates, new_opt_state = opt_state[0].update(
-                grads, opt_state[1], eqx.filter(model, eqx.is_array)
+                grads, opt_state[1], trainable
             )
-            new_model = eqx.apply_updates(model, updates)
+            new_trainable = eqx.apply_updates(trainable, updates)
+            new_model = eqx.combine(new_trainable, frozen)
             return new_model, new_opt_state, loss_val
 
         # Wrap optimizer into a tuple so it can be passed through JIT
@@ -569,9 +591,10 @@ class OnlineAdapter:
         self._opt_state = opt_tuple[1]
         self._finetune_count += 1
 
-        # Update L2-anchor snapshot
+        # Update L2-anchor snapshot of trainable leaves
         if self.config.ewc_lambda > 0:
-            self._anchor_params = eqx.filter(self.model, eqx.is_array)
+            trainable, _ = eqx.partition(self.model, self._filter_spec)
+            self._anchor_params = eqx.filter(trainable, eqx.is_inexact_array)
 
     # ------------------------------------------------------------------
     # Convenience: reset
@@ -602,4 +625,5 @@ class OnlineAdapter:
         self._step = 0
         self._pred_error_history.clear()
         if not keep_model:
-            self._opt_state = self._optimizer.init(eqx.filter(self.model, eqx.is_array))
+            trainable, _ = eqx.partition(self.model, self._filter_spec)
+            self._opt_state = self._optimizer.init(trainable)

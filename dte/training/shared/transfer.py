@@ -2,8 +2,8 @@
 
 Provides:
 
-- :func:`apply_finetune_mask` -- Compatibility no-op; freezing is applied
-  via an Equinox ``filter_spec`` inside :class:`FewShotAdapter`.
+- :func:`build_finetune_filter_spec` -- Equinox partition mask for decoder /
+  encoder / all fine-tuning, always intersected with frozen SystemSpec metadata.
 - :class:`FewShotAdapter` -- Fine-tune a pre-trained model on a small number
   of trajectories from a *new* unit, with optional zero-shot evaluation.
 - :func:`zero_shot_eval` -- Evaluate a model on a new unit without any
@@ -57,21 +57,7 @@ from dte.simulators.base import SystemSpec
 FinetunePartType = Literal["decoder", "encoder", "all"]
 
 
-def apply_finetune_mask(
-    model: DigitalTwin,
-    part: FinetunePartType = "decoder",
-) -> DigitalTwin:
-    """Compatibility no-op.
-
-    Freezing is applied lazily in :class:`FewShotAdapter` (and in
-    ``scripts/train.py``) via an Equinox ``filter_spec`` / ``eqx.partition``.
-    This function returns ``model`` unchanged.
-    """
-    del part
-    return model
-
-
-def _build_filter_spec(
+def build_finetune_filter_spec(
     model: DigitalTwin,
     part: FinetunePartType,
 ):
@@ -280,7 +266,7 @@ class FewShotAdapter:
         if key is None:
             key = jax.random.PRNGKey(0)
 
-        filter_spec = _build_filter_spec(self.model, part)
+        filter_spec = build_finetune_filter_spec(self.model, part)
 
         optimizer = optax.chain(
             optax.clip_by_global_norm(self.gradient_clip),

@@ -491,6 +491,7 @@ class DigitalTwin(eqx.Module):
             "control_scale",
             "group_masks",
             "group_active",
+            "law_feature_defaults",
         ):
             if hasattr(encoder, name):
                 frozen.append(getattr(encoder, name))

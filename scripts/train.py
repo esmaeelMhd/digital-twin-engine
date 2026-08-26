@@ -222,8 +222,9 @@ def main():
     # Create model (from scratch or from pre-trained checkpoint)
     print("\nInitializing model...")
     is_finetune = args.finetune is not None
+    finetune_filter_spec = None
     if is_finetune:
-        from dte.training.shared.transfer import apply_finetune_mask
+        from dte.training.shared.transfer import build_finetune_filter_spec
         print(f"Fine-tune mode: loading checkpoint from {args.finetune}")
         model = DigitalTwin.load(
             args.finetune,
@@ -231,7 +232,7 @@ def main():
             system_spec=system_spec,
             system_config=system_config,
         )
-        model = apply_finetune_mask(model, part=args.finetune_part)
+        finetune_filter_spec = build_finetune_filter_spec(model, args.finetune_part)
         print(f"Fine-tune part: {args.finetune_part} (other components frozen)")
     else:
         model = DigitalTwin.from_config(
@@ -254,6 +255,7 @@ def main():
         config=config,
         train_dataset=train_dataset,
         val_dataset=val_dataset,
+        filter_spec=finetune_filter_spec,
     )
     
     # Initialize wandb if requested

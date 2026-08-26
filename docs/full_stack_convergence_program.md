@@ -1,5 +1,10 @@
 # Full-Stack Convergence Program
 
+> **Historical planning document.** The `legacy/` migration described below
+> was not carried out. Single-system `DigitalTwin` training remains a
+> first-class path (see `docs/architecture.md`). Physics-informed losses
+> penalise conservation residuals; they do not guarantee conservation.
+
 This document defines the shortest credible path from the current repo to the
 target platform:
 
@@ -164,11 +169,17 @@ They should not sit beside the active architecture as if they were source.
 
 `UniversalDigitalTwin` is the primary model path.
 
-`DigitalTwin` and the single-system training paths are **deprecated immediately**. They do not remain for compatibility. They must be moved to `legacy/` during Phase 0 to force all tests and baselines to harden the Universal architecture.
+The original plan treated `DigitalTwin` and single-system training as
+deprecated and proposed moving them to `legacy/` during Phase 0. That
+migration was not carried out. Single-system training remains a first-class,
+tested path; the universal checkpoint is an additional shared-backbone track.
 
 ### 1.b. Residual Physics is the Standard
 
-The Universal decoder must predict *residuals* on top of mechanistic base laws (derived from `dte/laws/`), rather than predicting the full state directly. This ensures strict mass/energy conservation guarantees during inference and prevents unchecked rollout drift.
+The Universal decoder should predict *residuals* on top of mechanistic base
+laws (derived from `dte/laws/`), rather than predicting the full state
+directly. Residual physics penalises conservation violations; it does not
+guarantee conservation at inference.
 
 ### 2. Flowsheet is no longer experimental
 
@@ -359,7 +370,7 @@ Acceptance gate:
 
 Current execution plan:
 
-- [docs/phase1_completion_plan.md](docs/phase1_completion_plan.md:1)
+- [docs/phase1_completion_plan.md](phase1_completion_plan.md)
 
 ## Phase 2: Customer Adaptation V1
 
