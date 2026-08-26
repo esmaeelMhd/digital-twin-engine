@@ -79,31 +79,30 @@ def _build_filter_spec(
     and frozen leaves as ``False``.
 
     The spec is a PyTree mirroring the model with bool leaves, suitable for
-    use with ``eqx.partition(model, spec)``.
+    use with ``eqx.partition(model, spec)``.  It is always intersected with
+    :meth:`DigitalTwin.trainable_filter_spec` so spec metadata (centers,
+    scales, group masks) stays frozen even when ``part="all"``.
     """
+    metadata_ok = model.trainable_filter_spec()
     # Start with "train nothing" (all False), then selectively enable
     all_false = jax.tree_util.tree_map(lambda _: False, model)
 
-    if part == "all":
-        # Train all array leaves
-        return jax.tree_util.tree_map(eqx.is_array, model)
-
     if part == "decoder":
-        # Only decoder arrays are trainable
-        return eqx.tree_at(
+        part_spec = eqx.tree_at(
             lambda m: m.decoder,
             all_false,
             replace=jax.tree_util.tree_map(eqx.is_array, model.decoder),
         )
     elif part == "encoder":
-        # Only encoder arrays are trainable
-        return eqx.tree_at(
+        part_spec = eqx.tree_at(
             lambda m: m.encoder,
             all_false,
             replace=jax.tree_util.tree_map(eqx.is_array, model.encoder),
         )
     else:
-        return jax.tree_util.tree_map(eqx.is_array, model)
+        part_spec = jax.tree_util.tree_map(eqx.is_array, model)
+
+    return jax.tree_util.tree_map(lambda a, b: bool(a) and bool(b), part_spec, metadata_ok)
 
 
 # ---------------------------------------------------------------------------

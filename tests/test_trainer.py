@@ -289,6 +289,37 @@ def test_unit_trainer_freezes_normalization_tables():
     assert jnp.allclose(trainer.model.latent_sde.nominal_disturbance, before_nom)
 
 
+def test_few_shot_adapter_freezes_normalization_tables():
+    """Transfer fine-tuning must keep SystemSpec centers/scales fixed."""
+
+    from dte.training.shared.transfer import FewShotAdapter
+
+    config = _load_training_config()
+    spec = _load_cstr_spec()
+    dataset = _build_dataset(spec)
+    model = DigitalTwin.from_config(config, jax.random.PRNGKey(0), system_spec=spec)
+    before_center = jnp.array(model.encoder.state_center)
+    before_scale = jnp.array(model.encoder.state_scale)
+    before_nom = jnp.array(model.latent_sde.nominal_disturbance)
+    before_ctrl = jnp.array(model.decoder.control_scale)
+
+    adapter = FewShotAdapter(model, spec, learning_rate=1e-3)
+    adapter.finetune(
+        dataset,
+        n_steps=1,
+        batch_size=2,
+        seq_len=8,
+        part="all",
+        key=jax.random.PRNGKey(1),
+        verbose=False,
+    )
+
+    assert jnp.allclose(adapter.model.encoder.state_center, before_center)
+    assert jnp.allclose(adapter.model.encoder.state_scale, before_scale)
+    assert jnp.allclose(adapter.model.latent_sde.nominal_disturbance, before_nom)
+    assert jnp.allclose(adapter.model.decoder.control_scale, before_ctrl)
+
+
 def test_cusum_slack_is_relative_to_reference():
     """CUSUM should accumulate when error exceeds (1 + slack) * reference."""
 
