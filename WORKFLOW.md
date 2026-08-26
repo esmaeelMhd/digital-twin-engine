@@ -13,7 +13,7 @@ This file replaces the earlier workflow that assumed only the older single-syste
 - demo website and demo API
 - generic MPC / RL-readiness interfaces
 
-Phase 8 from `legacy/docs/plan.md` is still not implemented. Everything else through Phase 7 is now present in some usable form.
+Phase 8 from the original roadmap is still not implemented. Everything else through Phase 7 is now present in some usable form.
 
 ---
 
@@ -73,8 +73,8 @@ The repo now has seven practical layers:
 
 Recommended reading if you need phase-specific detail:
 
-- [legacy/docs/repo_audit.md](legacy/docs/repo_audit.md)
-- [legacy/docs/implementation_mapping.md](legacy/docs/implementation_mapping.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/technical.md](docs/technical.md)
 - [docs/phases/phase1_unit_foundation_model.md](docs/phases/phase1_unit_foundation_model.md)
 - [docs/phases/phase2_adapters_and_calibration.md](docs/phases/phase2_adapters_and_calibration.md)
 - [docs/phases/phase3_flowsheet_graph_modeling.md](docs/phases/phase3_flowsheet_graph_modeling.md)
@@ -531,7 +531,7 @@ Default pattern:
 
 ```bash
 source .venv/bin/activate
-python scripts/smoke_phaseN.py
+python scripts/phases/smoke_phaseN.py
 ```
 
 Most smoke runners also support:
@@ -580,7 +580,7 @@ docker compose --profile tools up
 
 Important note:
 
-- `docker compose up` currently starts the API and the legacy `app/dashboard.py` dashboard
+- `docker compose up` starts the API, the React `frontend` service, and the Streamlit `app/dashboard.py` dashboard
 - it does **not** currently start `app/demo_app.py`
 
 ---
@@ -650,18 +650,14 @@ If you are validating the full roadmap rather than one feature, run:
 6. `scripts/phases/smoke_phase6.py`
 7. `scripts/phases/smoke_phase7.py`
 8. `scripts/run_v1_milestone.py`
-5. `scripts/phases/smoke_phase5.py`
-6. `scripts/phases/smoke_phase6.py`
-7. `scripts/phases/smoke_phase7.py`
 
 ---
 
 ## 17. Additional References
 
 - `README.md`
-- `legacy/docs/QUICK_START.md`
 - `AGENTS.md`
-- `legacy/docs/repo_audit.md`
-- `legacy/docs/implementation_mapping.md`
+- `docs/architecture.md`
+- `docs/technical.md`
 - `program.md`
 - `tests/`

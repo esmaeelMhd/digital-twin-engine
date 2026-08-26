@@ -200,7 +200,7 @@ def test_jit_compatibility():
     control = jnp.array([50.0, 300.0])
     
     z, z_mean, z_logvar = encode_jit(state, params, control, key_sample)
-    state_recon = decode_jit(z, params, control)
+    decode_jit(z, params, control)
     
     # Run again to verify JIT works
     z2, _, _ = encode_jit(state, params, control, key_sample)

@@ -122,22 +122,23 @@ class LossComputer:
         kl = -0.5 * jnp.sum(1 + z_logvar - z_mean ** 2 - jnp.exp(z_logvar), axis=-1)
         return jnp.mean(kl)
 
-    def sde_kl_loss(
+    def diffusion_magnitude_penalty(
         self,
         diffusion_trajectory: Float[Array, "batch seq_len latent_dim"],
         dt: float,
     ) -> Float[Array, ""]:
-        """Approximate SDE KL term: penalizes diffusion magnitudes.
+        """L2 penalty on latent diffusion coefficients.
 
-        This is a tractable surrogate for the Girsanov KL between the learned
-        SDE and a unit Wiener process prior.  It encourages the diffusion
-        coefficients to stay small unless the data requires stochasticity.
-
-        KL ~ (1 / (2*dt)) * sum_t ||sigma(z_t)||^2 * dt
-           = (1/2) * mean_t ||sigma||^2
+        This is a magnitude regularizer, not a path-space KL.  It encourages
+        the diagonal diffusion coefficients to stay small unless the data
+        requires stochasticity.  ``dt`` is unused and kept for call-site
+        compatibility.
         """
-        # diffusion_trajectory: (batch, seq_len, latent_dim) -- squared coefficients
+        del dt
         return 0.5 * jnp.mean(diffusion_trajectory ** 2)
+
+    # Backward-compatible alias used by trainers and tests.
+    sde_kl_loss = diffusion_magnitude_penalty
 
     def trajectory_loss(
         self,
@@ -224,22 +225,30 @@ class LossComputer:
     # KL annealing
     # ------------------------------------------------------------------
 
-    def get_loss_weights(self, step: int = 0) -> Dict[str, float]:
-        """Return current loss weights with KL annealing applied."""
-        kl_config = self.config.get("kl_annealing", {})
-        start_weight = kl_config.get("start_weight", 0.0)
-        end_weight = kl_config.get("end_weight", self.w_kl)
-        anneal_steps = kl_config.get("anneal_steps", 5000)
+    def get_loss_weights(self, step: int = 0, one_step_weight=None) -> Dict[str, float]:
+        """Return current loss weights with KL annealing applied.
 
-        if step < anneal_steps:
-            kl_weight = start_weight + (end_weight - start_weight) * (step / anneal_steps)
-        else:
-            kl_weight = end_weight
+        ``step`` and ``one_step_weight`` may be Python scalars or JAX arrays so
+        this method is safe to call inside ``eqx.filter_jit``.
+        """
+        kl_config = self.config.get("kl_annealing", {})
+        start_weight = float(kl_config.get("start_weight", 0.0))
+        end_weight = float(kl_config.get("end_weight", self.w_kl))
+        anneal_steps = float(kl_config.get("anneal_steps", 5000))
+
+        step_f = jnp.asarray(step, dtype=jnp.float32)
+        frac = jnp.clip(
+            step_f / jnp.maximum(jnp.asarray(anneal_steps, dtype=jnp.float32), 1.0),
+            0.0,
+            1.0,
+        )
+        kl_weight = start_weight + (end_weight - start_weight) * frac
+        os_weight = self.w_one_step if one_step_weight is None else one_step_weight
 
         weights = {
             "reconstruction": self.w_recon,
             "kl": kl_weight,
-            "one_step": self.w_one_step,
+            "one_step": os_weight,
             "trajectory": self.w_traj,
         }
         weights.update(self.physics_weights)

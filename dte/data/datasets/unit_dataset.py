@@ -4,7 +4,7 @@ from typing import Dict, Union
 import numpy as np
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Float, PRNGKeyArray
+from jaxtyping import Array, PRNGKeyArray
 
 from dte.data.generation import load_dataset
 

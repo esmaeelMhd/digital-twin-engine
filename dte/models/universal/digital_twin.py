@@ -1068,6 +1068,9 @@ class UniversalDigitalTwin(eqx.Module):
             std = jnp.exp(0.5 * z_logvar)
             eps = jax.random.normal(key, z_mean.shape)
             z_sample = z_mean + eps * std
+            # Variance-damping heuristic: mix the posterior mean with a
+            # reparameterized sample.  The effective sampling distribution is
+            # N(z_mean, 0.25 * Sigma), not the encoder's N(z_mean, Sigma).
             z = 0.5 * z_mean + 0.5 * z_sample
         return z, z_mean, z_logvar
 

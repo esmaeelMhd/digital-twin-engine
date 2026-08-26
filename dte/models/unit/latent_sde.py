@@ -19,7 +19,7 @@ class LatentDrift(eqx.Module):
     physics_prior_u: eqx.nn.Linear
 
     # Input normalizations stored as regular (non-static) JAX arrays.
-    # They are frozen from gradient updates via eqx.filter in the optimizer.
+    # Frozen from gradient updates by DigitalTwin.trainable_filter_spec.
     control_center: Float[Array, "control_dim"]
     control_scale: Float[Array, "control_dim"]
     disturbance_center: Float[Array, "disturbance_dim"]
@@ -122,6 +122,7 @@ class LatentDrift(eqx.Module):
         if not self.linear_prior_enabled:
             return residual_drift
 
+        # Learned linear prior (not a physics residual): Az + Bu.
         physics_drift = self.physics_prior_z(z) + self.physics_prior_u(u_norm)
         return physics_drift + residual_drift
 
@@ -615,7 +616,7 @@ class LatentSDE(eqx.Module):
         params: Float[Array, "param_dim"],
         disturbances: Float[Array, "n_steps disturbance_dim"] | None = None,
     ) -> Float[Array, "n_steps latent_dim"]:
-        """Deterministic forward pass using only drift (no noise)."""
+        """Noise-free drift-path integration (not the SDE mean E[z_t])."""
         disturbances = self._get_disturbances(ts, disturbances, z0.dtype)
         if self.neural_cde_enabled:
             dt_steps = ts[1:] - ts[:-1]

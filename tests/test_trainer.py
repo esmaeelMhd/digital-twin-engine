@@ -188,3 +188,119 @@ def test_single_system_trainer_sde_kl_branch_computes_loss():
     assert jnp.isfinite(total_loss)
     assert "sde_kl" in loss_dict
     assert jnp.isfinite(loss_dict["sde_kl"])
+
+
+def test_kl_annealing_and_sde_gate_are_not_frozen_by_jit():
+    """Step-dependent KL weight and SDE warmup must change after the first trace."""
+
+    config = _load_training_config()
+    config["kl_annealing"] = {
+        "start_weight": 0.0,
+        "end_weight": 0.0001,
+        "anneal_steps": 5000,
+    }
+    config["sde_training"] = {
+        "enabled": True,
+        "warmup_steps": 2,
+        "sde_kl_weight": 1e-3,
+    }
+    spec = _load_cstr_spec()
+    dataset = _build_dataset(spec)
+    model = DigitalTwin.from_config(config, jax.random.PRNGKey(0), system_spec=spec)
+    loss_computer = LossComputer(
+        config,
+        dataset.get_normalization_stats(),
+        physics_loss=None,
+        state_names=spec.state_names,
+    )
+    trainer = Trainer(model, loss_computer, config, dataset, dataset)
+    batch = dataset.sample_batch(jax.random.PRNGKey(1), batch_size=2)
+    one_step_weight = jnp.asarray(loss_computer.w_one_step, dtype=jnp.float32)
+
+    _, loss_dict_0 = trainer.compute_loss(
+        trainer.model,
+        batch,
+        jax.random.PRNGKey(2),
+        step=jnp.asarray(0, dtype=jnp.float32),
+        sde_active=False,
+        one_step_weight=one_step_weight,
+    )
+    trainer.model, trainer.opt_state, _ = trainer.train_step(
+        trainer.model,
+        trainer.opt_state,
+        batch,
+        jax.random.PRNGKey(3),
+        jnp.asarray(0, dtype=jnp.float32),
+        False,
+        one_step_weight,
+    )
+    trainer.model, trainer.opt_state, loss_dict_warm = trainer.train_step(
+        trainer.model,
+        trainer.opt_state,
+        batch,
+        jax.random.PRNGKey(4),
+        jnp.asarray(10, dtype=jnp.float32),
+        True,
+        one_step_weight,
+    )
+
+    weights_0 = loss_computer.get_loss_weights(jnp.asarray(0, dtype=jnp.float32))
+    weights_end = loss_computer.get_loss_weights(jnp.asarray(5000, dtype=jnp.float32))
+    assert float(weights_0["kl"]) < float(weights_end["kl"])
+    assert float(loss_dict_0["kl_weight"]) == float(weights_0["kl"])
+    assert trainer._sde_active_at_step(0) is False
+    assert trainer._sde_active_at_step(2) is True
+    assert float(loss_dict_0["sde_kl"]) == 0.0
+    assert float(loss_dict_warm["sde_kl"]) > 0.0
+
+
+def test_unit_trainer_freezes_normalization_tables():
+    """System-spec centers/scales and group masks must not move during a step."""
+
+    config = _load_training_config()
+    spec = _load_cstr_spec()
+    dataset = _build_dataset(spec)
+    model = DigitalTwin.from_config(config, jax.random.PRNGKey(0), system_spec=spec)
+    loss_computer = LossComputer(
+        config,
+        dataset.get_normalization_stats(),
+        physics_loss=None,
+        state_names=spec.state_names,
+    )
+    trainer = Trainer(model, loss_computer, config, dataset, dataset)
+    batch = dataset.sample_batch(jax.random.PRNGKey(1), batch_size=2)
+
+    before_center = jnp.array(trainer.model.encoder.state_center)
+    before_scale = jnp.array(trainer.model.encoder.state_scale)
+    before_nom = jnp.array(trainer.model.latent_sde.nominal_disturbance)
+
+    trainer.model, trainer.opt_state, _ = trainer.train_step(
+        trainer.model,
+        trainer.opt_state,
+        batch,
+        jax.random.PRNGKey(2),
+        jnp.asarray(0, dtype=jnp.float32),
+        True,
+        jnp.asarray(loss_computer.w_one_step, dtype=jnp.float32),
+    )
+
+    assert jnp.allclose(trainer.model.encoder.state_center, before_center)
+    assert jnp.allclose(trainer.model.encoder.state_scale, before_scale)
+    assert jnp.allclose(trainer.model.latent_sde.nominal_disturbance, before_nom)
+
+
+def test_cusum_slack_is_relative_to_reference():
+    """CUSUM should accumulate when error exceeds (1 + slack) * reference."""
+
+    from dte.training.online import _DriftDetector
+
+    detector = _DriftDetector(threshold=0.5, slack=0.5, reference_steps=3, alpha=0.0)
+    for _ in range(3):
+        assert detector.update(0.1) is False
+    # error = 0.2 is 2x the reference, above the 1.5x relative slack
+    alarmed = False
+    for _ in range(20):
+        if detector.update(0.2):
+            alarmed = True
+            break
+    assert alarmed is True

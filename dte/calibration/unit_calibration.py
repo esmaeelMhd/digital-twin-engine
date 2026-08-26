@@ -14,6 +14,7 @@ from dte.data.datasets.universal_unit_dataset import (
     UniversalSystemMetadata,
 )
 from dte.models.universal.digital_twin import UniversalDigitalTwin
+from dte.evaluation.universal import per_system_metrics_key
 from dte.training.universal.trainer import UniversalTrainer
 
 
@@ -536,5 +537,5 @@ class UnitCalibrator:
             "active_param_indices": list(self.options.active_param_indices or ()),
             "trainable_parameter_count": self.trainable_parameter_count,
             "parameter_counts": self.model.get_parameter_count(),
-            "per_system_val_losses": per_system,
+            per_system_metrics_key(self.trainer): per_system,
         }

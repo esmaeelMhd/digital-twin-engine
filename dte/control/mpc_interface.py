@@ -6,8 +6,6 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 
 from .foundation_adapter import FoundationModel, rollout_model_ensemble

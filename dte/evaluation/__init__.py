@@ -25,6 +25,7 @@ from dte.evaluation.universal import (
     compute_rollout_metrics,
     compute_uncertainty_summary,
     normalize_universal_batch,
+    per_system_metrics_key,
     predict_model_next_state,
     predict_rollout_samples,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "finite_difference_control_jacobian",
     "gaussian_nll",
     "normalize_universal_batch",
+    "per_system_metrics_key",
     "plant_balance_proxy_loss",
     "predict_model_next_state",
     "predict_rollout_samples",

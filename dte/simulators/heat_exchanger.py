@@ -23,7 +23,6 @@ from jaxtyping import Array, Float
 import diffrax
 
 from dte.simulators.base import ProcessSimulator, SystemSpec
-from dte.simulators.registry import _build_heat_exchanger_spec
 
 
 @dataclass(frozen=True)

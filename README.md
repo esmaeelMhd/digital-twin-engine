@@ -8,7 +8,9 @@ A research codebase for surrogate modelling of process systems with
 physics-informed latent neural SDEs. It provides:
 
 - **Uncertainty estimates** via stochastic latent dynamics, as ensemble spread
-  over sampled rollouts
+  over sampled rollouts. The variational element is a Gaussian encoder at
+  t=0 (standard VAE KL). Diffusion magnitude is L2-regularised; there is no
+  path-space posterior/prior KL.
 - **Conservation-law residuals** (mass, energy) as physics-informed training
   losses and evaluation diagnostics
 - **A decoupled system interface**, so a new process is added through a config,
@@ -30,8 +32,13 @@ This is a research codebase, not a validated engineering tool. Specifically:
   to plant equipment, and nothing here should be treated as control-ready.
 - Physics-informed losses penalise conservation residuals; they do not
   guarantee conservation.
-- The shipped systems (CSTR, heat exchanger, two-tank) are synthetic textbook
-  processes. No real plant data is included or required.
+- The latent dynamics are trained primarily as a point-prediction model with
+  a Gaussian encoder at t=0 and an L2 penalty on diffusion magnitude. This is
+  not a variational latent SDE with a Girsanov path-space KL.
+- Rollouts condition on the true future disturbance trajectory. That is
+  standard for simulation benchmarks and unavailable at plant deployment.
+- The shipped systems are synthetic textbook processes. No real plant data is
+  included or required.
 - Online adaptation is implemented and exercised in tests, not validated
   against measured plant drift.
 
@@ -52,8 +59,8 @@ graph LR
 
 ### Core Components
 
-1. **Encoder** — VAE-style encoder maps physical states + controls → latent space z
-2. **Latent Neural SDE** — Models dynamics in latent space: `dz = f(z,u,c)dt + g(z,u,c)dW`
+1. **Encoder** — VAE-style encoder maps physical states + controls → latent space z at the initial time
+2. **Latent Neural SDE** — Models dynamics in latent space: `dz = f(z,u,c)dt + g(z,u,c)dW`. Stochastic training injects Euler–Maruyama noise; diffusion magnitude is L2-regularised.
 3. **Decoder** — Maps latent states back to physical space with configurable output constraints
 4. **SystemSpec** — Dataclass that defines a system's dimensions, names, normalizations, and constraints
 5. **PhysicsLoss** — Pluggable interface for system-specific conservation law residuals
@@ -70,6 +77,10 @@ graph LR
 | `cstr` | 4 (Ca, Cb, T, Tc) | 2 (F_in, Tc_in) | 2 (Ca_in, T_in) | Mass + Energy balance |
 | `heat_exchanger` | 2 (T_hot, T_cold) | 2 (F_hot, F_cold) | 2 (T_hot_in, T_cold_in) | Energy balance |
 | `two_tank` | 2 (h1, h2) | 2 (q_in, valve) | 2 (d1, d2) | Mass balance |
+| `isothermal_cstr` | 2 (Ca, Cb) | 1 (F_in) | 1 (Ca_in) | Species mass balance |
+| `storage_tank` | 3 (inventory, quality, T) | 1 (outlet_flow) | 3 (feed rate/quality/T) | Inventory + energy |
+| `separator` | 3 (light, heavy, T) | 1 (split_fraction) | 2 (feed quality/T) | Cut + energy residual |
+| `bioreactor_compartment` | 3 (S, X, DO) | 1 (aeration) | 1 (feed_substrate) | Mass + oxygen residual |
 
 New systems require a YAML config, a simulator class, an optional physics loss, and registry entries — no changes to the core model or trainer.
 
@@ -171,7 +182,7 @@ python scripts/train.py \
   --n_epochs 100
 ```
 
-Training includes stochastic SDE path, curriculum learning, and teacher-forcing annealing (all configurable in `configs/training_default.yaml`).
+Training includes an optional stochastic SDE path, curriculum learning, and teacher-forcing annealing (all configurable in `configs/training_default.yaml`).
 
 System-specific training configs are also included for simpler 2-state systems:
 `configs/heat_exchanger_training.yaml` and `configs/two_tank_training.yaml`.
@@ -249,6 +260,24 @@ python scripts/evaluate.py \
   --output_dir outputs/cstr_v1/eval/
 ```
 
+For a held-out test set (fresh seed, never used for training or early stopping):
+
+```bash
+python scripts/generate_data.py \
+  --config configs/cstr_default.yaml \
+  --n_trajectories 500 \
+  --output_dir data/cstr_test/ \
+  --seed 12345
+
+python scripts/evaluate.py \
+  --model_path outputs/cstr_v1/best_model.eqx \
+  --config outputs/cstr_v1/config.yaml \
+  --system_config configs/cstr_default.yaml \
+  --data_dir data/cstr/ \
+  --test_data data/cstr_test/train_data.h5 \
+  --output_dir outputs/cstr_v1/eval_test/
+```
+
 For the shared universal checkpoint:
 
 ```bash
@@ -263,6 +292,7 @@ python scripts/evaluate_universal.py \
 ```bash
 python scripts/run_mpc.py \
   --model_path outputs/cstr_v1/best_model.eqx \
+  --model_config outputs/cstr_v1/config.yaml \
   --system_config configs/cstr_default.yaml \
   --setpoint_T 340.0 \
   --compare_pid
@@ -278,7 +308,18 @@ uvicorn dte.api.service:app --host 0.0.0.0 --port 8000
 docker compose up api
 ```
 
-### 9. Launch the React Frontend
+Endpoints: `GET /health`, `POST /predict`, `POST /ensemble`, `POST /steady_state`.
+Optional API-key auth: set `DTE_API_KEY` in the environment.
+
+### 10. Launch the Dashboard
+
+```bash
+streamlit run app/dashboard.py
+```
+
+Optional password protection: set `STREAMLIT_AUTH_PASSWORD` in the environment.
+
+### 11. Launch the React Frontend
 
 ```bash
 nvm use
@@ -289,29 +330,10 @@ npm run dev
 
 If `nvm` is not installed, upgrade Node manually to a supported release first. Node 18 is too old for the current Vite toolchain.
 
-Endpoints: `GET /health`, `POST /predict`, `POST /ensemble`, `POST /steady_state`.
-Optional API-key auth: set `DTE_API_KEY` in the environment.
-
-### 9. Launch the Dashboard
-
-```bash
-streamlit run app/dashboard.py
-```
-
-Optional password protection: set `STREAMLIT_AUTH_PASSWORD` in the environment.
-
-### 10. Launch the Browser Demo Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
 The browser frontend expects the API on `http://localhost:8000` by default.
 Override that with `frontend/.env` if needed.
 
-### 11. Autoresearch Loop
+### 12. Autoresearch Loop
 
 ```bash
 python scripts/autoresearch.py \
@@ -324,64 +346,43 @@ python scripts/autoresearch.py \
 
 ```
 digital-twin-engine/
-├── configs/
-│   ├── cstr_default.yaml             # CSTR system spec + physics params
-│   ├── heat_exchanger_default.yaml   # Heat exchanger system spec
-│   ├── heat_exchanger_training.yaml  # HX-specific training hyper-params
-│   ├── training_default.yaml         # Model + training configuration
-│   ├── training_universal.yaml       # Shared universal-checkpoint training config
-│   └── mpc_default.yaml
+├── configs/                  # System specs, training, MPC, universal, autoresearch
 ├── dte/
-│   ├── simulators/
-│   │   ├── base.py           # SystemSpec, ProcessSimulator ABC
-│   │   ├── registry.py       # System factory (get_system_spec, get_simulator)
-│   │   ├── cstr.py           # CSTR simulator
-│   │   └── heat_exchanger.py # Counter-current heat exchanger
+│   ├── simulators/           # SystemSpec, registry, per-system simulators
+│   ├── physics/              # PhysicsLoss ABC, registry, conservation residuals
 │   ├── data/
-│   │   ├── dataset.py        # TrajectoryDataset (HDF5 loader)
-│   │   ├── generation.py     # CSTR-specific data generator
-│   │   ├── generation_generic.py # Generic data generator (any ProcessSimulator)
-│   │   ├── multi_system_dataset.py # Mixed-system padded dataset for universal training
-│   │   └── real_data.py      # Real-world plant data ingestion pipeline
+│   │   ├── datasets/         # unit, universal, flowsheet HDF5 loaders
+│   │   ├── generators/       # GenericDataGenerator for any ProcessSimulator
+│   │   ├── generation.py     # CSTR-specific generator (legacy fast path)
+│   │   └── ingestion/        # Real plant CSV/Parquet → HDF5
 │   ├── models/
-│   │   ├── encoder.py        # VAE encoder (SystemSpec-driven normalisation)
-│   │   ├── latent_sde.py     # Drift + diffusion networks
-│   │   ├── decoder.py        # Decoder with configurable output constraints
-│   │   ├── digital_twin.py   # Composed single-system DigitalTwin module
-│   │   └── universal_digital_twin.py # Shared grouped-state universal model
-│   ├── physics/
-│   │   ├── base.py           # PhysicsLoss ABC + NullPhysicsLoss
-│   │   ├── registry.py       # Physics loss / diagnostic registry
-│   │   ├── cstr.py           # CSTR mass + energy balance residuals
-│   │   └── heat_exchanger.py # Heat exchanger energy balance residual
+│   │   ├── unit/             # Encoder, Decoder, LatentSDE, DigitalTwin
+│   │   ├── universal/        # Shared grouped-state universal backbone
+│   │   └── flowsheet/        # Graph-composed flowsheet model
 │   ├── training/
-│   │   ├── losses.py         # LossComputer (generic, pluggable PhysicsLoss)
-│   │   ├── trainer.py        # Trainer with SDE training, curriculum, teacher-forcing
-│   │   ├── universal_trainer.py # Shared-checkpoint multi-system trainer
-│   │   ├── online.py         # OnlineAdapter — sliding-window fine-tune + drift detection
-│   │   └── transfer.py       # FewShotAdapter, zero_shot_eval, apply_finetune_mask
-│   ├── api/
-│   │   ├── models.py         # Pydantic request/response models
-│   │   └── service.py        # FastAPI service
-│   ├── control/              # MPC and PID controllers
+│   │   ├── shared/           # LossComputer, transfer, config resolution
+│   │   ├── unit/             # Single-system trainer
+│   │   ├── universal/        # Mixed-system trainer
+│   │   ├── flowsheet/        # Flowsheet trainer
+│   │   └── online.py         # Sliding-window fine-tune + CUSUM drift
+│   ├── core/                 # ProcessUnitSpec, state schema
+│   ├── laws/                 # Optional chemistry / thermo / biology modules
+│   ├── flowsheet/            # Flowsheet schema and synthetic graphs
+│   ├── calibration/          # Few-shot universal-unit calibration
+│   ├── customer/             # Onboarding, template matching, reporting
+│   ├── evaluation/           # Uncertainty, rollout, control metrics
+│   ├── control/              # MPC, PID, RL env, state correction
+│   ├── api/                  # FastAPI service
+│   ├── demo/                 # Browser-demo engine
+│   ├── convergence/          # Bounded experiment closure helpers
 │   ├── autoresearch/         # Autonomous research helpers
-│   └── utils/                # Plotting, logging
-├── scripts/
-│   ├── generate_data.py      # Data generation (any registered system)
-│   ├── ingest_real_data.py   # Real plant data ingestion CLI
-│   ├── train.py              # Training (+ --finetune transfer-learning mode)
-│   ├── train_universal.py    # Shared universal-checkpoint training
-│   ├── evaluate.py
-│   ├── evaluate_universal.py # Shared universal-checkpoint evaluation
-│   └── run_mpc.py
-├── app/
-│   ├── dashboard.py          # Streamlit dashboard (with optional auth)
-│   └── agent_dashboard.py
-├── Dockerfile                # Multi-stage: api + train targets
-├── docker-compose.yml        # api + frontend + dashboard + optional tools profile
-├── frontend/                # React/Vite browser demo frontend
+│   └── utils/
+├── scripts/                  # generate_data, train, evaluate, MPC, phases
+├── app/                      # Streamlit dashboards
+├── frontend/                 # React/Vite browser demo
 ├── tests/
-└── notebooks/
+├── Dockerfile
+└── docker-compose.yml
 ```
 
 ## Technical Details
@@ -390,7 +391,7 @@ digital-twin-engine/
 
 | Feature | Config key | Description |
 |---|---|---|
-| Stochastic SDE training | `sde_training.enabled` | Full SDE path with KL diffusion regularisation |
+| Stochastic SDE training | `sde_training.enabled` | Euler–Maruyama path plus L2 diffusion-magnitude regularisation |
 | Curriculum learning | `curriculum.enabled` | seq_len ramps from `initial_seq_len` to `final_seq_len` over `warmup_epochs` |
 | Teacher-forcing annealing | `teacher_forcing.initial_ratio` | Shifts weight from one-step to free-rollout loss |
 

@@ -12,9 +12,9 @@ from dte.customer.onboarding_schema import (
 )
 from dte.customer.reporting import (
     generate_customer_validation_report,
-    predict_rollout_samples,
     render_validation_report_markdown,
 )
+from dte.evaluation.universal import predict_rollout_samples
 from dte.customer.template_matching import TemplateMatch, TemplateMatchResult, match_customer_templates
 
 __all__ = [

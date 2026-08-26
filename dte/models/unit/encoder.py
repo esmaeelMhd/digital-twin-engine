@@ -18,9 +18,9 @@ class Encoder(eqx.Module):
     mean_layer: eqx.nn.Linear
     logvar_layer: eqx.nn.Linear
 
-    # Normalization arrays stored as non-trainable leaf arrays.
-    # We use regular (trainable) storage but freeze them by never including them
-    # in optimizer updates.  They are JAX arrays, so they live on device.
+    # Normalization arrays stored as non-static JAX arrays.  The unit trainer
+    # freezes them via DigitalTwin.trainable_filter_spec so they do not receive
+    # gradient updates.
     state_center: Float[Array, "state_dim"]
     state_scale: Float[Array, "state_dim"]
     control_center: Float[Array, "control_dim"]
@@ -45,8 +45,6 @@ class Encoder(eqx.Module):
         key: PRNGKeyArray,
     ):
         keys = jax.random.split(key, n_layers + 2)
-
-        input_dim = state_dim + param_dim + control_dim
 
         self.layers = []
         self.context_layers = []

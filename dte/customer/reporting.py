@@ -14,7 +14,6 @@ from dte.evaluation.universal import (
     compute_forecast_metrics,
     compute_rollout_metrics,
     compute_uncertainty_summary,
-    predict_rollout_samples,
 )
 from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.training.universal.trainer import UniversalTrainer

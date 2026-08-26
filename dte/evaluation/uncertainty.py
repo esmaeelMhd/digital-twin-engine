@@ -61,6 +61,10 @@ def calibration_gap(
     ideal = {1.0: 0.682689492, 2.0: 0.954499736, 3.0: 0.997300204}
     gaps = []
     for sigma in sigma_levels:
+        if sigma not in ideal:
+            raise ValueError(
+                f"Unknown sigma level {sigma}; supported levels are {sorted(ideal)}."
+            )
         empirical = empirical_coverage(mean, std, target, sigma=sigma, mask=mask)
-        gaps.append(abs(empirical - ideal.get(sigma, empirical)))
+        gaps.append(abs(empirical - ideal[sigma]))
     return float(sum(gaps) / max(len(gaps), 1))

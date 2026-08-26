@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import time
+import warnings
 from typing import Dict, Optional
 
 import equinox as eqx
@@ -625,6 +626,13 @@ class UniversalTrainer:
         return {name: float(jnp.mean(jnp.asarray(values))) for name, values in losses.items()}
 
     def evaluate_per_system(self, key: PRNGKeyArray, n_batches: int = 4) -> Dict[str, Dict[str, float]]:
+        if self.val_dataset is None:
+            warnings.warn(
+                "evaluate_per_system is using the training dataset because no "
+                "validation split was provided. Label these metrics as "
+                "per_system_train_fallback, not per_system_val_losses.",
+                stacklevel=2,
+            )
         dataset = self.val_dataset or self.train_dataset
         results = {}
         for idx, name in enumerate(dataset.system_names):

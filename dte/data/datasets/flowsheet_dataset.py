@@ -14,7 +14,7 @@ import numpy as np
 from jaxtyping import Array, PRNGKeyArray
 
 from dte.flowsheet.schema import FlowsheetSpec
-from dte.flowsheet.types import EXTERNAL_SINK, EXTERNAL_SOURCE, STREAM_KINDS
+from dte.flowsheet.types import EXTERNAL_SINK, EXTERNAL_SOURCE
 from dte.simulators.base import ProcessUnitSpec
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import TYPE_CHECKING
 
 import jax
@@ -86,8 +87,22 @@ def _normalized_sample(
     return {name: value[0] for name, value in normalized.items()}
 
 
+def per_system_metrics_key(trainer: "UniversalTrainer") -> str:
+    """JSON key for per-system metrics, reflecting the actual evaluation split."""
+    if trainer.val_dataset is not None:
+        return "per_system_val_losses"
+    return "per_system_train_fallback"
+
+
 def _evaluation_dataset(trainer: UniversalTrainer):
-    return trainer.val_dataset or trainer.train_dataset
+    if trainer.val_dataset is not None:
+        return trainer.val_dataset
+    warnings.warn(
+        "Universal evaluation is using the training dataset because no "
+        "validation split was provided. Reported metrics are train-set, not held-out.",
+        stacklevel=2,
+    )
+    return trainer.train_dataset
 
 
 def predict_rollout_samples(

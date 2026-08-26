@@ -17,7 +17,7 @@ from pathlib import Path
 from dte.models.unit.digital_twin import DigitalTwin
 from dte.physics.registry import get_physics_diagnostic_fn, zero_residual
 from dte.data.datasets.unit_dataset import TrajectoryDataset
-from dte.simulators.registry import get_system_spec
+from dte.simulators.registry import get_simulator, get_system_spec
 from dte.utils.plotting import (
     plot_trajectory_comparison,
     plot_conservation_violation,
@@ -335,6 +335,14 @@ def _print_metric_summary(title: str, summary: dict):
     )
 
 
+def _measurement_noise_std(system_spec, system_config, key) -> np.ndarray:
+    """Estimate per-state sensor-noise std from the simulator noise hook."""
+    simulator = get_simulator(system_spec.name, system_config)
+    zeros = jnp.zeros((256, system_spec.state_dim), dtype=jnp.float32)
+    noisy = simulator.apply_measurement_noise(key, zeros)
+    return np.asarray(jnp.std(noisy, axis=0), dtype=np.float64)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate Digital Twin model")
     parser.add_argument(
@@ -435,6 +443,16 @@ def main():
         action="store_true",
         help="Skip ensemble uncertainty plots and calibration"
     )
+    parser.add_argument(
+        "--test_data",
+        type=str,
+        default=None,
+        help=(
+            "Held-out HDF5 file. When set, evaluate the full file instead of "
+            "the training-run validation split. Generate with "
+            "scripts/generate_data.py --seed <unused seed>."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -489,36 +507,37 @@ def main():
     param_counts = model.get_parameter_count()
     print(f"Model parameters: {param_counts['total']:,}")
     
-    # Load validation dataset
-    print("\nLoading validation dataset...")
-    data_path = os.path.join(args.data_dir, "train_data.h5")
-    full_dataset = TrajectoryDataset(
-        data_path,
-        seq_len=config["training"]["seq_len"],
-        stride=config["training"]["stride"],
-    )
-    
-    # Use last 20% as validation
-    val_split = 0.2
-    _, val_dataset = full_dataset.split(val_split)
-    
-    print(f"Validation samples: {val_dataset.n_samples}")
+    seq_len = config["training"]["seq_len"]
+    stride = config["training"]["stride"]
+    if args.test_data:
+        eval_path = str(_resolve_repo_path(args.test_data))
+        print(f"\nLoading held-out test dataset from {eval_path}...")
+        eval_dataset = TrajectoryDataset(eval_path, seq_len=seq_len, stride=stride)
+        split_label = "test"
+    else:
+        print("\nLoading validation dataset...")
+        data_path = os.path.join(args.data_dir, "train_data.h5")
+        full_dataset = TrajectoryDataset(data_path, seq_len=seq_len, stride=stride)
+        val_split = float(config.get("training", {}).get("val_split", 0.2))
+        _, eval_dataset = full_dataset.split(val_split)
+        split_label = "validation"
+
+    print(f"{split_label.capitalize()} samples: {eval_dataset.n_samples}")
     
     model_metrics = _init_metric_store()
     baseline_metrics = _init_metric_store()
-    state_std = jnp.asarray(val_dataset.get_normalization_stats()["state_std"]) + 1e-8
+    state_std = jnp.asarray(eval_dataset.get_normalization_stats()["state_std"]) + 1e-8
     plot_candidates = []
     
-    # Evaluate on random validation subsequences
-    print(f"\nEvaluating on {args.n_trajectories} validation subsequences...")
-    n_eval = min(args.n_trajectories, val_dataset.n_samples)
+    print(f"\nEvaluating on {args.n_trajectories} {split_label} subsequences...")
+    n_eval = min(args.n_trajectories, eval_dataset.n_samples)
     key, index_key = jax.random.split(key)
     sample_indices = np.asarray(
-        jax.random.choice(index_key, val_dataset.n_samples, shape=(n_eval,), replace=False)
+        jax.random.choice(index_key, eval_dataset.n_samples, shape=(n_eval,), replace=False)
     )
 
     for sample_idx in sample_indices:
-        sample = val_dataset[int(sample_idx)]
+        sample = eval_dataset[int(sample_idx)]
         
         initial_state = sample["states"][0]
         true_states = sample["states"]
@@ -629,53 +648,68 @@ def main():
     ensemble_summary = None
     if not args.skip_ensemble:
         print(f"\nGenerating ensemble predictions with {args.n_samples} samples...")
-        sample = val_dataset[int(sample_indices[0])]
-        key, subkey = jax.random.split(key)
-        
-        ensemble_result = model.predict_ensemble(
-            sample["states"][0],
-            sample["controls"],
-            sample["disturbances"],
-            sample["params"],
-            sample["t"],
-            subkey,
-            n_samples=args.n_samples,
-        )
-        
-        # Plot ensemble prediction
+        key, noise_key = jax.random.split(key)
+        noise_std = _measurement_noise_std(system_spec, system_config, noise_key)
+        coverages = []
+        plot_sample = None
+        plot_ensemble = None
+        n_cal = min(max(n_eval, 1), eval_dataset.n_samples)
+        cal_indices = sample_indices[:n_cal]
+
+        for sample_idx in cal_indices:
+            sample = eval_dataset[int(sample_idx)]
+            key, subkey = jax.random.split(key)
+            ensemble_result = model.predict_ensemble(
+                sample["states"][0],
+                sample["controls"],
+                sample["disturbances"],
+                sample["params"],
+                sample["t"],
+                subkey,
+                n_samples=args.n_samples,
+            )
+            if plot_sample is None:
+                plot_sample = sample
+                plot_ensemble = ensemble_result
+            pred_std = np.asarray(ensemble_result["states_std"])
+            combined_std = np.sqrt(pred_std ** 2 + noise_std.reshape(1, -1) ** 2)
+            true_states = np.asarray(sample["states"])
+            pred_mean = np.asarray(ensemble_result["states_mean"])
+            within_2sigma = np.abs(true_states - pred_mean) <= 2.0 * combined_std
+            coverages.append(float(np.mean(within_2sigma)))
+
         fig = plot_trajectory_comparison(
-            np.array(sample["states"]),
-            np.array(ensemble_result["states_samples"]),
-            np.array(sample["t"]),
+            np.array(plot_sample["states"]),
+            np.array(plot_ensemble["states_samples"]),
+            np.array(plot_sample["t"]),
             state_names=state_names,
-            controls=np.array(sample["controls"]),
+            controls=np.array(plot_sample["controls"]),
             control_names=control_names,
-            pred_std=np.array(ensemble_result["states_std"]),
+            pred_std=np.array(plot_ensemble["states_std"]),
             save_path=os.path.join(args.output_dir, "ensemble_prediction.png")
         )
         plt.close(fig)
-        
-        # Compute calibration (what % of true values fall within ±2σ)
-        true_states = sample["states"]
-        pred_mean = ensemble_result["states_mean"]
-        pred_std = ensemble_result["states_std"]
-        
-        within_2sigma = np.abs(true_states - pred_mean) <= 2 * pred_std
-        calibration = float(np.mean(within_2sigma) * 100.0)
 
+        calibration = float(np.mean(coverages) * 100.0)
         ensemble_summary = {
-            "sample_index": int(sample_indices[0]),
+            "n_trajectories": int(len(cal_indices)),
             "n_samples": args.n_samples,
             "within_2sigma_percent": calibration,
+            "includes_measurement_noise": True,
+            "measurement_noise_std": noise_std.tolist(),
         }
-        
-        print(f"\nUncertainty Calibration:")
-        print(f"  % within ±2σ: {calibration:.1f}% (ideal: 95%)")
+
+        print(f"\nUncertainty Calibration ({split_label}, {len(cal_indices)} trajectories):")
+        print(
+            f"  % within ±2σ (model + sensor noise): {calibration:.1f}% "
+            f"(Gaussian ideal: 95.4%)"
+        )
 
     summary = {
         "model_path": args.model_path,
         "config_path": args.config,
         "data_dir": args.data_dir,
+        "split": split_label,
         "predict_mode": args.predict_mode,
         "sample_count": int(n_eval),
         "sample_indices": [int(idx) for idx in sample_indices.tolist()],
