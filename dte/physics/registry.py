@@ -1,6 +1,7 @@
 """Registry helpers for system-specific physics losses and diagnostics."""
 
 from collections.abc import Callable
+from dataclasses import fields
 
 import jax.numpy as jnp
 from jaxtyping import Array, Float
@@ -26,12 +27,32 @@ PhysicsDiagnosticFn = Callable[
 ]
 
 
+def _params_from_config(cfg: dict, params_cls):
+    """Build a parameter dataclass, skipping unknown keys.
+
+    Known fields that cannot be converted to float raise a clear error
+    instead of crashing inside the dataclass constructor.
+    """
+    allowed = {item.name for item in fields(params_cls)}
+    kwargs = {}
+    for key, value in cfg.items():
+        if key not in allowed:
+            continue
+        try:
+            kwargs[key] = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Physics config key {key!r} for {params_cls.__name__} "
+                f"must be numeric, got {value!r}"
+            ) from exc
+    return params_cls(**kwargs)
+
+
 def _build_cstr_physics_loss(system_config: dict) -> PhysicsLoss:
     from dte.physics.cstr import CSTRPhysicsLoss
     from dte.simulators.cstr import CSTRParams
 
-    cstr_cfg = system_config.get("cstr", {})
-    params_obj = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
+    params_obj = _params_from_config(system_config.get("cstr", {}), CSTRParams)
     return CSTRPhysicsLoss(params_obj)
 
 
@@ -39,8 +60,7 @@ def _build_heat_exchanger_physics_loss(system_config: dict) -> PhysicsLoss:
     from dte.physics.heat_exchanger import HeatExchangerPhysicsLoss
     from dte.simulators.heat_exchanger import HeatExchangerParams
 
-    hx_cfg = system_config.get("heat_exchanger", {})
-    params_obj = HeatExchangerParams(**{k: float(v) for k, v in hx_cfg.items()})
+    params_obj = _params_from_config(system_config.get("heat_exchanger", {}), HeatExchangerParams)
     return HeatExchangerPhysicsLoss(params_obj)
 
 
@@ -48,8 +68,7 @@ def _build_two_tank_physics_loss(system_config: dict) -> PhysicsLoss:
     from dte.physics.two_tank import TwoTankPhysicsLoss
     from dte.simulators.two_tank import TwoTankParams
 
-    two_tank_cfg = system_config.get("two_tank", {})
-    params_obj = TwoTankParams(**{k: float(v) for k, v in two_tank_cfg.items()})
+    params_obj = _params_from_config(system_config.get("two_tank", {}), TwoTankParams)
     return TwoTankPhysicsLoss(params_obj)
 
 
@@ -57,8 +76,7 @@ def _build_isothermal_cstr_physics_loss(system_config: dict) -> PhysicsLoss:
     from dte.physics.isothermal_cstr import IsothermalCSTRPhysicsLoss
     from dte.simulators.isothermal_cstr import IsothermalCSTRParams
 
-    cfg = system_config.get("isothermal_cstr", {})
-    params_obj = IsothermalCSTRParams(**{k: float(v) for k, v in cfg.items()})
+    params_obj = _params_from_config(system_config.get("isothermal_cstr", {}), IsothermalCSTRParams)
     return IsothermalCSTRPhysicsLoss(params_obj)
 
 
@@ -66,8 +84,7 @@ def _build_storage_tank_physics_loss(system_config: dict) -> PhysicsLoss:
     from dte.physics.storage_tank import StorageTankPhysicsLoss
     from dte.simulators.storage_tank import StorageTankParams
 
-    cfg = system_config.get("storage_tank", {})
-    params_obj = StorageTankParams(**{k: float(v) for k, v in cfg.items()})
+    params_obj = _params_from_config(system_config.get("storage_tank", {}), StorageTankParams)
     return StorageTankPhysicsLoss(params_obj)
 
 
@@ -75,8 +92,7 @@ def _build_separator_physics_loss(system_config: dict) -> PhysicsLoss:
     from dte.physics.separator import SeparatorPhysicsLoss
     from dte.simulators.separator import SeparatorParams
 
-    cfg = system_config.get("separator", {})
-    params_obj = SeparatorParams(**{k: float(v) for k, v in cfg.items()})
+    params_obj = _params_from_config(system_config.get("separator", {}), SeparatorParams)
     return SeparatorPhysicsLoss(params_obj)
 
 
@@ -84,8 +100,7 @@ def _build_bioreactor_compartment_physics_loss(system_config: dict) -> PhysicsLo
     from dte.physics.bioreactor_compartment import BioreactorCompartmentPhysicsLoss
     from dte.simulators.bioreactor_compartment import BioreactorCompartmentParams
 
-    cfg = system_config.get("bioreactor_compartment", {})
-    params_obj = BioreactorCompartmentParams(**{k: float(v) for k, v in cfg.items()})
+    params_obj = _params_from_config(system_config.get("bioreactor_compartment", {}), BioreactorCompartmentParams)
     return BioreactorCompartmentPhysicsLoss(params_obj)
 
 
@@ -98,8 +113,7 @@ def _build_cstr_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
     )
     from dte.simulators.cstr import CSTRParams
 
-    cstr_cfg = system_config.get("cstr", {})
-    params_obj = CSTRParams(**{k: float(v) for k, v in cstr_cfg.items()})
+    params_obj = _params_from_config(system_config.get("cstr", {}), CSTRParams)
 
     def _diagnose(states, controls, disturbances, dt, params=None):
         if params is None:
@@ -127,8 +141,7 @@ def _build_heat_exchanger_diagnostic_fn(system_config: dict) -> PhysicsDiagnosti
     )
     from dte.simulators.heat_exchanger import HeatExchangerParams
 
-    hx_cfg = system_config.get("heat_exchanger", {})
-    params_obj = HeatExchangerParams(**{k: float(v) for k, v in hx_cfg.items()})
+    params_obj = _params_from_config(system_config.get("heat_exchanger", {}), HeatExchangerParams)
 
     def _diagnose(states, controls, disturbances, dt, params=None):
         return {
@@ -149,8 +162,7 @@ def _build_two_tank_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
     )
     from dte.simulators.two_tank import TwoTankParams
 
-    two_tank_cfg = system_config.get("two_tank", {})
-    params_obj = TwoTankParams(**{k: float(v) for k, v in two_tank_cfg.items()})
+    params_obj = _params_from_config(system_config.get("two_tank", {}), TwoTankParams)
 
     def _diagnose(states, controls, disturbances, dt, params=None):
         return {
@@ -171,8 +183,7 @@ def _build_isothermal_cstr_diagnostic_fn(system_config: dict) -> PhysicsDiagnost
     )
     from dte.simulators.isothermal_cstr import IsothermalCSTRParams
 
-    cfg = system_config.get("isothermal_cstr", {})
-    params_obj = IsothermalCSTRParams(**{k: float(v) for k, v in cfg.items()})
+    params_obj = _params_from_config(system_config.get("isothermal_cstr", {}), IsothermalCSTRParams)
     nominal_params = jnp.array(
         [params_obj.V, params_obj.k0, params_obj.Ea_over_R, params_obj.T_ref],
         dtype=jnp.float32,
@@ -195,8 +206,7 @@ def _build_storage_tank_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticF
     from dte.physics.storage_tank import state_residuals_with_params
     from dte.simulators.storage_tank import StorageTankParams
 
-    cfg = system_config.get("storage_tank", {})
-    params_obj = StorageTankParams(**{k: float(v) for k, v in cfg.items()})
+    params_obj = _params_from_config(system_config.get("storage_tank", {}), StorageTankParams)
     nominal_params = jnp.array([params_obj.volume, params_obj.heat_loss], dtype=jnp.float32)
 
     def _diagnose(states, controls, disturbances, dt, params=None):
@@ -215,8 +225,7 @@ def _build_separator_diagnostic_fn(system_config: dict) -> PhysicsDiagnosticFn:
     from dte.physics.separator import state_residuals_with_params
     from dte.simulators.separator import SeparatorParams
 
-    cfg = system_config.get("separator", {})
-    params_obj = SeparatorParams(**{k: float(v) for k, v in cfg.items()})
+    params_obj = _params_from_config(system_config.get("separator", {}), SeparatorParams)
     nominal_params = jnp.array([params_obj.holdup, params_obj.separation_gain], dtype=jnp.float32)
 
     def _diagnose(states, controls, disturbances, dt, params=None):
@@ -234,8 +243,7 @@ def _build_bioreactor_compartment_diagnostic_fn(system_config: dict) -> PhysicsD
     from dte.physics.bioreactor_compartment import state_residuals_with_params
     from dte.simulators.bioreactor_compartment import BioreactorCompartmentParams
 
-    cfg = system_config.get("bioreactor_compartment", {})
-    params_obj = BioreactorCompartmentParams(**{k: float(v) for k, v in cfg.items()})
+    params_obj = _params_from_config(system_config.get("bioreactor_compartment", {}), BioreactorCompartmentParams)
     nominal_params = jnp.array(
         [params_obj.mu_max, params_obj.kla, params_obj.decay_rate, params_obj.dilution_rate],
         dtype=jnp.float32,

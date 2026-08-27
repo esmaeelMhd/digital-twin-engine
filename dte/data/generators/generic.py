@@ -632,7 +632,9 @@ class GenericDataGenerator:
         t_start = time.perf_counter()
         invalid = 0
         exceptions = 0
-        signal_seconds = 0.0
+        consecutive_empty = 0
+        max_consecutive_empty = 10
+        current_batch_size = batch_size_eff
         steady_state_seconds = 0.0
         rollout_seconds = 0.0
         measurement_noise_seconds = 0.0
@@ -643,6 +645,7 @@ class GenericDataGenerator:
         attempts = 0
 
         while generated < n_trajectories:
+            valid_trajs = []
             try:
                 current_batch_size = min(batch_size_eff, n_trajectories - generated)
                 batch_keys = jax.random.split(key, current_batch_size + 1)
@@ -663,10 +666,10 @@ class GenericDataGenerator:
                     rollout_seconds += elapsed
                     if traj is None:
                         invalid += 1
-                        continue
-                    validation_seconds += float(traj.get("validation_seconds", 0.0))
-                    measurement_noise_seconds += float(traj.get("measurement_noise_seconds", 0.0))
-                    valid_trajs = [traj]
+                    else:
+                        validation_seconds += float(traj.get("validation_seconds", 0.0))
+                        measurement_noise_seconds += float(traj.get("measurement_noise_seconds", 0.0))
+                        valid_trajs = [traj]
                 else:
                     batch_start = time.perf_counter()
                     batch = self._generate_trajectories_batched(
@@ -697,7 +700,7 @@ class GenericDataGenerator:
                     ]
             except Exception:
                 exceptions += current_batch_size
-                continue
+                valid_trajs = []
 
             pbar.set_postfix(
                 attempts=attempts,
@@ -705,6 +708,19 @@ class GenericDataGenerator:
                 valid=generated,
             )
             pbar.refresh()
+
+            if not valid_trajs:
+                consecutive_empty += 1
+                if consecutive_empty >= max_consecutive_empty:
+                    pbar.close()
+                    raise RuntimeError(
+                        "Data generation produced no valid trajectories in "
+                        f"{consecutive_empty} consecutive batches "
+                        f"({attempts} attempts, {invalid} invalid, "
+                        f"{exceptions} exceptions). Check simulator configuration."
+                    )
+                continue
+            consecutive_empty = 0
 
             for traj in valid_trajs:
                 all_states.append(np.array(traj["states"]))
@@ -755,7 +771,6 @@ class GenericDataGenerator:
         elapsed = time.perf_counter() - t_start
         self.last_profile = {
             "total_generation_seconds": elapsed,
-            "signal_generation_seconds": signal_seconds,
             "steady_state_seconds": steady_state_seconds,
             "rollout_seconds": rollout_seconds,
             "measurement_noise_seconds": measurement_noise_seconds,

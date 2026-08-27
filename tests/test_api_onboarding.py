@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
@@ -391,8 +392,8 @@ def test_load_job_demo_runtime_aliases_template_and_legacy_system_names(
     onboarding._JOB_RUNTIME_CACHE.clear()
     monkeypatch.setenv("DTE_ONBOARDING_ROOT", str(tmp_path / "customer_jobs"))
 
-    preview_id = "prv_legacy"
-    job_id = "job_legacy"
+    preview_id = "prv_0123456789ab"
+    job_id = "job_0123456789ab"
     preview_directory = onboarding.preview_dir(preview_id)
     preview_directory.mkdir(parents=True, exist_ok=True)
     onboarding._write_json(
@@ -453,3 +454,12 @@ def test_load_job_demo_runtime_aliases_template_and_legacy_system_names(
     assert runtime.model is sentinel_model
     assert runtime.system_ids["legacy-reactor-1"] == 0
     assert runtime.system_ids["cstr"] == 0
+
+
+def test_onboarding_path_helpers_reject_traversal_ids():
+    with pytest.raises(onboarding.InvalidOnboardingIdError):
+        onboarding.job_dir("../etc/passwd")
+    with pytest.raises(onboarding.InvalidOnboardingIdError):
+        onboarding.upload_dir("upl_not-hex-id!!")
+    with pytest.raises(onboarding.InvalidOnboardingIdError):
+        onboarding.preview_dir("prv_zzzzzzzzzzzz")

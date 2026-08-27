@@ -74,6 +74,21 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _attach_per_system_losses(summary: dict[str, Any], trainer, losses) -> None:
+    key = (
+        "per_system_val_losses"
+        if getattr(trainer, "val_dataset", None) is not None
+        else "per_system_train_fallback"
+    )
+    summary[key] = losses
+
+
+def _read_per_system_losses(summary: dict[str, Any]) -> dict[str, Any]:
+    if "per_system_val_losses" in summary:
+        return summary["per_system_val_losses"]
+    return summary["per_system_train_fallback"]
+
+
 def _step_summary(name: str, started_at: float, succeeded: bool, **extra: Any) -> dict[str, Any]:
     return {
         "name": name,
@@ -485,7 +500,7 @@ def _select_best_transfer_restart(
             restart_results,
             key=lambda item: (
                 float(item["rollout_metrics"]["rmse"]),
-                float(item["train_summary"]["per_system_val_losses"][item["target"]]["total"]),
+                float(_read_per_system_losses(item["train_summary"])[item["target"]]["total"]),
                 int(item["restart_index"]),
             ),
         )
@@ -493,7 +508,7 @@ def _select_best_transfer_restart(
         return min(
             restart_results,
             key=lambda item: (
-                float(item["train_summary"]["per_system_val_losses"][item["target"]]["total"]),
+                float(_read_per_system_losses(item["train_summary"])[item["target"]]["total"]),
                 float(item["rollout_metrics"]["rmse"]),
                 int(item["restart_index"]),
             ),
@@ -518,7 +533,7 @@ def _select_best_transfer_candidate(
             key=lambda item: (
                 float(item["selected_restart"]["rollout_metrics"]["rmse"]),
                 float(
-                    item["selected_restart"]["train_summary"]["per_system_val_losses"][item["target"]]["total"]
+                    _read_per_system_losses(item["selected_restart"]["train_summary"])[item["target"]]["total"]
                 ),
                 int(item["candidate_index"]),
             ),
@@ -528,7 +543,7 @@ def _select_best_transfer_candidate(
             candidate_results,
             key=lambda item: (
                 float(
-                    item["selected_restart"]["train_summary"]["per_system_val_losses"][item["target"]]["total"]
+                    _read_per_system_losses(item["selected_restart"]["train_summary"])[item["target"]]["total"]
                 ),
                 float(item["selected_restart"]["rollout_metrics"]["rmse"]),
                 int(item["candidate_index"]),
@@ -809,7 +824,7 @@ def _run_transfer_benchmark(
                     per_system_eval_key,
                     n_batches=int(warm_start_config.get("evaluation", {}).get("per_system_batches", 2)),
                 )
-                warm_summary["per_system_val_losses"] = warm_per_system
+                _attach_per_system_losses(warm_summary, warm_eval_trainer, warm_per_system)
                 warm_forecast = compute_forecast_metrics(
                     warm_eval_trainer.model,
                     warm_eval_trainer,
@@ -909,7 +924,7 @@ def _run_transfer_benchmark(
             n_samples=int(target_config.get("evaluation", {}).get("rollout_samples", 4)),
         )
 
-        warm_total = float(warm_summary["per_system_val_losses"][target_name]["total"])
+        warm_total = float(_read_per_system_losses(warm_summary)[target_name]["total"])
         scratch_total = float(scratch_per_system[target_name]["total"])
         improved = (warm_total <= scratch_total) and (warm_rollout["rmse"] <= scratch_rollout["rmse"])
         all_improved = all_improved and improved
@@ -932,7 +947,11 @@ def _run_transfer_benchmark(
             "scratch": {
                 "train_summary": {
                     **scratch_train_summary,
-                    "per_system_val_losses": scratch_per_system,
+                    (
+                        "per_system_val_losses"
+                        if scratch_eval_trainer.val_dataset is not None
+                        else "per_system_train_fallback"
+                    ): scratch_per_system,
                 },
                 "forecast_metrics": scratch_forecast,
                 "rollout_metrics": scratch_rollout,

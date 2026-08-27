@@ -109,10 +109,10 @@ def main():
         default=None,
         metavar="CHECKPOINT_PATH",
         help=(
-            "Path to a pre-trained model checkpoint.  When supplied, the "
-            "encoder and latent-SDE are frozen and only the decoder is updated "
-            "(few-shot transfer learning mode).  Supports --n_epochs to control "
-            "the number of fine-tuning epochs."
+            "Path to a pre-trained model checkpoint. When supplied, training "
+            "starts from that checkpoint. Use --finetune_part to choose which "
+            "components receive gradient updates (decoder by default). "
+            "Supports --n_epochs to control the number of fine-tuning epochs."
         ),
     )
     parser.add_argument(

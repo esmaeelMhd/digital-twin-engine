@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+import pytest
 import yaml
 
 from dte.laws.examples import build_cstr_law_example_config
@@ -236,3 +237,17 @@ def test_two_tank_infeasible_operating_point_returns_nonfinite_steady_state():
     )
 
     assert not bool(jnp.all(jnp.isfinite(state)))
+
+
+def test_get_physics_loss_skips_unknown_cstr_config_keys():
+    config = _load_yaml("configs/cstr_default.yaml")
+    config["cstr"]["notes"] = "not a numeric parameter"
+    physics_loss = get_physics_loss("cstr", config)
+    assert "mass" in physics_loss.residual_names()
+
+
+def test_get_physics_loss_rejects_non_numeric_known_keys():
+    config = _load_yaml("configs/cstr_default.yaml")
+    config["cstr"]["V"] = "large"
+    with pytest.raises(ValueError, match="must be numeric"):
+        get_physics_loss("cstr", config)

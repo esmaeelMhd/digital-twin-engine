@@ -22,7 +22,7 @@ Usage
         n_finetune_steps=10,
         drift_threshold=0.05,
     )
-    adapter = OnlineAdapter(model, loss_computer, optimizer_config, system_spec, cfg)
+    adapter = OnlineAdapter(model, system_spec, cfg)
 
     # In the MPC/observation loop:
     for t, obs in plant_stream:
@@ -297,8 +297,15 @@ class OnlineAdapter:
             )
         self.config = config
         self.model = model
+        self._initial_model = model
         self.system_spec = system_spec
         self._key = key if key is not None else jax.random.PRNGKey(0)
+        seed = int(np.asarray(self._key).reshape(-1)[0]) & 0x7FFFFFFF
+        self._rng = np.random.default_rng(seed)
+        self._state_scale = np.maximum(
+            np.asarray(system_spec.normalization.state_scale, dtype=np.float32),
+            1e-6,
+        )
 
         # Ring buffer
         self._buffer = _RingBuffer(
@@ -314,6 +321,7 @@ class OnlineAdapter:
             slack=config.drift_slack,
             reference_steps=config.drift_reference_steps,
         )
+        self._last_drift = False
 
         if config.finetune_encoder_only:
             part = "encoder"
@@ -332,9 +340,7 @@ class OnlineAdapter:
         self._opt_state = self._optimizer.init(trainable)
 
         # L2-anchor snapshot of trainable leaves (updated after each fine-tune)
-        self._anchor_params = (
-            eqx.filter(trainable, eqx.is_inexact_array) if config.ewc_lambda > 0 else None
-        )
+        self._anchor_params = eqx.filter(trainable, eqx.is_inexact_array)
 
         # Step counters
         self._push_count: int = 0
@@ -347,13 +353,16 @@ class OnlineAdapter:
         # Default params (filled with ones; users can override via set_params)
         self._default_params = np.ones(system_spec.param_dim, dtype=np.float32)
 
+        self._step_fn = self._build_step_fn()
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     @property
     def drift_detected(self) -> bool:
-        return self._drift.alarm
+        """Whether the most recent ``push()`` triggered a CUSUM drift alarm."""
+        return self._last_drift
 
     @property
     def n_observations(self) -> int:
@@ -421,6 +430,7 @@ class OnlineAdapter:
             finetune_triggered = True
 
         # Extra fine-tune when drift detected
+        self._last_drift = alarm_just_triggered
         if alarm_just_triggered:
             self._drift.reset_alarm()
             if self._buffer.size >= self.config.seq_len + 1:
@@ -440,7 +450,7 @@ class OnlineAdapter:
             "push_count": self._push_count,
             "finetune_count": self._finetune_count,
             "buffer_size": self._buffer.size,
-            "drift_alarm": self._drift.alarm,
+            "drift_alarm": self._last_drift,
             "cusum": self._drift._cusum,
             "pred_error_mean": float(np.mean(errors)) if errors else 0.0,
             "pred_error_std": float(np.std(errors)) if errors else 0.0,
@@ -488,12 +498,13 @@ class OnlineAdapter:
             key,
         )
 
-        # Euler step in latent space
-        drift = self.model.latent_sde.drift(
+        # Euler step in latent space (honours the simulator prior when enabled)
+        drift = self.model.latent_drift(
             z_mean,
             jnp.array(prev_control),
             jnp.array(prev_disturbance),
             jnp.array(self._default_params),
+            dt,
         )
         z_next = z_mean + dt * drift
 
@@ -504,10 +515,65 @@ class OnlineAdapter:
             jnp.array(controls),
         )
 
-        # Normalised MSE
-        state_range = np.maximum(np.abs(states), 1e-6)
-        err = float(jnp.mean(((pred_state - jnp.array(states)) / jnp.array(state_range)) ** 2))
+        # Normalised MSE using SystemSpec state scales (not |current state|)
+        err = float(
+            jnp.mean(
+                ((pred_state - jnp.array(states)) / jnp.array(self._state_scale)) ** 2
+            )
+        )
         return err
+
+    def _build_step_fn(self):
+        """Compile one fine-tune step; filter spec and EWC lambda are static."""
+
+        filter_spec = self._filter_spec
+        ewc_lambda = float(self.config.ewc_lambda)
+
+        @eqx.filter_jit
+        def _step_fn(model, opt_state, batch, key, params_arr, anchor_params):
+            trainable, frozen = eqx.partition(model, filter_spec)
+
+            def loss_fn(trainable_model):
+                m = eqx.combine(trainable_model, frozen)
+                states = batch["states"]
+                controls = batch["controls"]
+                disturbances = batch["disturbances"]
+                ts = batch["t"]
+
+                key_enc, _ = jax.random.split(key)
+                _, z_mean, _ = m.encode(states[0], params_arr, controls[0], key_enc)
+                z_traj = m.rollout_latent(
+                    ts, z_mean, controls, params_arr, disturbances=disturbances
+                )
+                decode_fn = jax.vmap(lambda z, u: m.decode(z, params_arr, u), in_axes=(0, 0))
+                pred = decode_fn(z_traj, controls)
+
+                mse = jnp.mean((pred - states) ** 2)
+
+                ewc_pen = jnp.array(0.0)
+                if ewc_lambda > 0:
+                    curr_arrays = eqx.filter(trainable_model, eqx.is_inexact_array)
+                    diff_leaves = jax.tree_util.tree_leaves(
+                        jax.tree_util.tree_map(
+                            lambda a, b: jnp.sum((a - b) ** 2),
+                            curr_arrays,
+                            anchor_params,
+                        )
+                    )
+                    ewc_pen = ewc_lambda * sum(diff_leaves)
+
+                return mse + ewc_pen
+
+            loss_val, grads = eqx.filter_value_and_grad(loss_fn)(trainable)
+
+            updates, new_opt_state = opt_state[0].update(
+                grads, opt_state[1], trainable
+            )
+            new_trainable = eqx.apply_updates(trainable, updates)
+            new_model = eqx.combine(new_trainable, frozen)
+            return new_model, new_opt_state, loss_val
+
+        return _step_fn
 
     def _finetune(self, extra_steps: int = 0):
         """Run gradient steps on the current window."""
@@ -522,61 +588,10 @@ class OnlineAdapter:
             return
 
         params_arr = jnp.array(self._default_params)
-
-        filter_spec = self._filter_spec
-
-        @eqx.filter_jit
-        def _step_fn(model, opt_state, batch, key):
-            trainable, frozen = eqx.partition(model, filter_spec)
-
-            def loss_fn(trainable_model):
-                m = eqx.combine(trainable_model, frozen)
-                states = batch["states"]
-                controls = batch["controls"]
-                disturbances = batch["disturbances"]
-                ts = batch["t"]
-
-                key_enc, _ = jax.random.split(key)
-                _, z_mean, _ = m.encode(states[0], params_arr, controls[0], key_enc)
-                z_traj = m.latent_sde.mean_trajectory(
-                    ts, z_mean, controls, params_arr, disturbances=disturbances
-                )
-                decode_fn = jax.vmap(lambda z, u: m.decode(z, params_arr, u), in_axes=(0, 0))
-                pred = decode_fn(z_traj, controls)
-
-                # Simple MSE in state space
-                mse = jnp.mean((pred - states) ** 2)
-
-                # L2-anchor penalty toward the previous fine-tune snapshot
-                ewc_pen = jnp.array(0.0)
-                if self.config.ewc_lambda > 0 and self._anchor_params is not None:
-                    curr_arrays = eqx.filter(trainable_model, eqx.is_inexact_array)
-                    diff_leaves = jax.tree_util.tree_leaves(
-                        jax.tree_util.tree_map(
-                            lambda a, b: jnp.sum((a - b) ** 2),
-                            curr_arrays,
-                            self._anchor_params,
-                        )
-                    )
-                    ewc_pen = self.config.ewc_lambda * sum(diff_leaves)
-
-                return mse + ewc_pen
-
-            loss_val, grads = eqx.filter_value_and_grad(loss_fn)(trainable)
-
-            updates, new_opt_state = opt_state[0].update(
-                grads, opt_state[1], trainable
-            )
-            new_trainable = eqx.apply_updates(trainable, updates)
-            new_model = eqx.combine(new_trainable, frozen)
-            return new_model, new_opt_state, loss_val
-
-        # Wrap optimizer into a tuple so it can be passed through JIT
         opt_tuple = (self._optimizer, self._opt_state)
 
         for _ in range(n_steps):
-            # Random subsequence from buffer
-            start = np.random.randint(0, n_steps_in_buf - seq_len)
+            start = int(self._rng.integers(0, n_steps_in_buf - seq_len))
             batch = {
                 "states": jnp.array(traj["states"][start : start + seq_len]),
                 "controls": jnp.array(traj["controls"][start : start + seq_len]),
@@ -584,17 +599,22 @@ class OnlineAdapter:
                 "t": jnp.array(traj["t"][start : start + seq_len]),
             }
             self._key, subkey = jax.random.split(self._key)
-            self.model, new_opt_state, _ = _step_fn(self.model, opt_tuple, batch, subkey)
+            self.model, new_opt_state, _ = self._step_fn(
+                self.model,
+                opt_tuple,
+                batch,
+                subkey,
+                params_arr,
+                self._anchor_params,
+            )
             opt_tuple = (self._optimizer, new_opt_state)
             self._step += 1
 
         self._opt_state = opt_tuple[1]
         self._finetune_count += 1
 
-        # Update L2-anchor snapshot of trainable leaves
-        if self.config.ewc_lambda > 0:
-            trainable, _ = eqx.partition(self.model, self._filter_spec)
-            self._anchor_params = eqx.filter(trainable, eqx.is_inexact_array)
+        trainable, _ = eqx.partition(self.model, self._filter_spec)
+        self._anchor_params = eqx.filter(trainable, eqx.is_inexact_array)
 
     # ------------------------------------------------------------------
     # Convenience: reset
@@ -607,7 +627,8 @@ class OnlineAdapter:
         ----------
         keep_model:
             If True (default), the current fine-tuned model is retained.
-            If False, resets everything including the model back to initial state.
+            If False, restores the model snapshot taken at construction and
+            reinitialises the optimizer and L2-anchor from that snapshot.
         """
         self._buffer = _RingBuffer(
             capacity=self.config.window_size,
@@ -623,7 +644,10 @@ class OnlineAdapter:
         self._push_count = 0
         self._finetune_count = 0
         self._step = 0
+        self._last_drift = False
         self._pred_error_history.clear()
         if not keep_model:
+            self.model = self._initial_model
             trainable, _ = eqx.partition(self.model, self._filter_spec)
             self._opt_state = self._optimizer.init(trainable)
+            self._anchor_params = eqx.filter(trainable, eqx.is_inexact_array)

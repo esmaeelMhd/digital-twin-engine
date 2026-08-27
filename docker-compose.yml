@@ -14,7 +14,7 @@
 #   docker compose up api                   # start only the API
 #   docker compose --profile tools up       # also start data-gen / training
 #
-# Data persistence: mount host directories via the volumes section below.
+# Data persistence: bind-mount host directories (`./data`, `./outputs`, `./configs`).
 
 services:
   # ------------------------------------------------------------------
@@ -155,8 +155,3 @@ services:
         --system_config ${DTE_SYSTEM_CONFIG:-configs/cstr_default.yaml}
         --data_dir /app/data/cstr
         --output_dir /app/outputs/cstr_v1
-
-volumes:
-  # Named volumes for persistent storage across container restarts
-  dte-outputs: {}
-  dte-data: {}

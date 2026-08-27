@@ -8,35 +8,60 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 
+def _freeze_constraint(constraint: dict | tuple) -> tuple:
+    """Convert a constraint dict into a hashable (type, indices, extras) tuple."""
+    if not isinstance(constraint, dict):
+        return constraint
+    extras = tuple(
+        sorted(
+            (str(key), value)
+            for key, value in constraint.items()
+            if key not in ("type", "indices")
+        )
+    )
+    return (
+        str(constraint["type"]),
+        tuple(int(idx) for idx in constraint["indices"]),
+        extras,
+    )
+
+
+def _constraint_fields(constraint: dict | tuple) -> tuple[str, tuple, dict]:
+    if isinstance(constraint, dict):
+        return str(constraint["type"]), tuple(constraint["indices"]), constraint
+    ctype, indices, extras = constraint
+    return str(ctype), tuple(indices), dict(extras)
+
+
 def apply_decoder_constraints(
     state_raw: Float[Array, "state_dim"],
-    constraints: list,
+    constraints: list | tuple,
 ) -> Float[Array, "state_dim"]:
     """Apply physical constraints to raw decoder outputs.
 
-    Each constraint dict has the form::
+    Each constraint is either a dict::
 
         {"type": "softplus",     "indices": [0, 1], "bias": 0.5}
         {"type": "sigmoid_range","indices": [2, 3], "low": 0.0, "high": 1.0}
         {"type": "none",         "indices": [4]}
+
+    or the hashable tuple form stored on ``Decoder.constraints``.
 
     This function is JAX-traceable and works correctly under ``jit`` and
     ``vmap`` provided all constraint metadata is static (no data-dependent
     indexing based on JAX arrays).
     """
     out = state_raw
-    for c in constraints:
-        ctype = c["type"]
-        # Convert list to tuple for JAX indexing (avoids deprecated list indexing)
-        raw_idxs = c["indices"]
+    for spec in constraints:
+        ctype, raw_idxs, extras = _constraint_fields(spec)
         if ctype == "softplus":
-            bias = c.get("bias", 0.5)
+            bias = extras.get("bias", 0.5)
             out = out.at[jnp.array(raw_idxs)].set(
                 jax.nn.softplus(state_raw[jnp.array(raw_idxs)] + bias)
             )
         elif ctype == "sigmoid_range":
-            low = c.get("low", 0.0)
-            high = c.get("high", 1.0)
+            low = extras.get("low", 0.0)
+            high = extras.get("high", 1.0)
             out = out.at[jnp.array(raw_idxs)].set(
                 low + (high - low) * jax.nn.sigmoid(state_raw[jnp.array(raw_idxs)])
             )
@@ -58,8 +83,9 @@ class Decoder(eqx.Module):
     control_scale: Float[Array, "control_dim"]
     param_scale: float = eqx.field(static=True)
 
-    # Constraint specification stored as a plain Python list (static)
-    constraints: list = eqx.field(static=True)
+    # Constraint specification stored as a hashable tuple of
+    # (type, indices, extras) so Equinox can treat it as static metadata.
+    constraints: tuple = eqx.field(static=True)
 
     def __init__(
         self,
@@ -94,7 +120,9 @@ class Decoder(eqx.Module):
 
         self.output_layer = eqx.nn.Linear(hidden_dim, state_dim, key=keys[-1])
 
-        self.constraints = constraints if constraints is not None else []
+        self.constraints = tuple(
+            _freeze_constraint(item) for item in (constraints or [])
+        )
         self.control_scale = jnp.array(
             control_scale if control_scale is not None else [1.0] * control_dim
         )

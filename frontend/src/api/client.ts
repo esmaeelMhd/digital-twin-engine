@@ -18,6 +18,9 @@ const apiBaseUrl =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ??
   'http://localhost:8000';
 
+// VITE_DTE_API_KEY is inlined into the public JS bundle at build time. That is
+// demo-only: anyone who loads the frontend can read the key. Do not treat a
+// browser-shipped key as production auth; proxy authenticated calls instead.
 const apiKey = (import.meta.env.VITE_DTE_API_KEY as string | undefined)?.trim();
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

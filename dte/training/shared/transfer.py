@@ -141,7 +141,7 @@ def zero_shot_eval(
 
         def rollout_one(idx, k):
             _, z_mean, _ = model.encode(states[idx, 0], params[idx], controls[idx, 0], k)
-            z_traj = model.latent_sde.mean_trajectory(
+            z_traj = model.rollout_latent(
                 ts[idx], z_mean, controls[idx], params[idx], disturbances=disturbances[idx]
             )
             decode_fn = jax.vmap(lambda z, u: model.decode(z, params[idx], u), in_axes=(0, 0))
@@ -296,7 +296,7 @@ class FewShotAdapter:
                     _, z_mean, _ = full_model.encode(
                         states[idx, 0], params[idx], controls[idx, 0], k
                     )
-                    z_traj = full_model.latent_sde.mean_trajectory(
+                    z_traj = full_model.rollout_latent(
                         ts[idx], z_mean, controls[idx], params[idx],
                         disturbances=disturbances[idx],
                     )
