@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,17 @@ from dte.simulators.registry import get_system_spec
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ONBOARDING_ROOT = PROJECT_ROOT / "outputs" / "customer_jobs"
 _JOB_RUNTIME_CACHE: dict[str, UniversalDemoRuntime] = {}
+_ONBOARDING_ID_RE = re.compile(r"^[a-z]+_[0-9a-f]{12}$")
+
+
+class InvalidOnboardingIdError(Exception):
+    """Raised when a client-supplied onboarding path id is malformed."""
+
+
+def _validated_onboarding_id(value: str, kind: str) -> str:
+    if not _ONBOARDING_ID_RE.fullmatch(str(value)):
+        raise InvalidOnboardingIdError(f"Unknown {kind}.")
+    return str(value)
 
 
 def onboarding_root() -> Path:
@@ -73,15 +85,15 @@ def new_id(prefix: str) -> str:
 
 
 def upload_dir(upload_id: str) -> Path:
-    return uploads_root() / upload_id
+    return uploads_root() / _validated_onboarding_id(upload_id, "upload")
 
 
 def preview_dir(preview_id: str) -> Path:
-    return previews_root() / preview_id
+    return previews_root() / _validated_onboarding_id(preview_id, "preview")
 
 
 def job_dir(job_id: str) -> Path:
-    return jobs_root() / job_id
+    return jobs_root() / _validated_onboarding_id(job_id, "job")
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

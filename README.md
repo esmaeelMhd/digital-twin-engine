@@ -68,7 +68,7 @@ graph LR
 7. **Physics Registry** — Resolves system-specific physics losses and evaluation diagnostics
 8. **Universal Backbone** — Shared grouped-state model for one checkpoint across multiple systems
 
-**Total Parameters:** ~120K (optimised for RTX 4070)
+**Total Parameters:** ~120K
 
 ## Supported Systems
 
@@ -311,6 +311,11 @@ docker compose up api
 Endpoints: `GET /health`, `POST /predict`, `POST /ensemble`, `POST /steady_state`.
 Optional API-key auth: set `DTE_API_KEY` in the environment.
 
+`VITE_DTE_API_KEY` is a build-time Vite variable. Shipping it with the frontend
+puts the key in the public JS bundle, so browser-side `X-API-Key` auth is
+demo-only. For a real deployment, keep `DTE_API_KEY` on the API and do not bake
+it into the frontend.
+
 ### 10. Launch the Dashboard
 
 ```bash
@@ -331,7 +336,9 @@ npm run dev
 If `nvm` is not installed, upgrade Node manually to a supported release first. Node 18 is too old for the current Vite toolchain.
 
 The browser frontend expects the API on `http://localhost:8000` by default.
-Override that with `frontend/.env` if needed.
+Override that with `frontend/.env` if needed. `VITE_DTE_API_KEY` is optional and
+demo-only: it is compiled into the public bundle, so it is not a production
+secret.
 
 ### 12. Autoresearch Loop
 

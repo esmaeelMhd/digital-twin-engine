@@ -119,6 +119,8 @@ def test_decoder_constraints():
         assert 250.0 <= T <= 400.0, f"T must be in [250, 400], got {T}"
         assert 250.0 <= Tc <= 400.0, f"Tc must be in [250, 400], got {Tc}"
 
+    hash(decoder.constraints)
+
 
 def test_encoder_decoder_roundtrip():
     """Test 4: Full encode->decode roundtrip has correct shapes."""

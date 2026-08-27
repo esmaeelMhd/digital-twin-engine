@@ -86,7 +86,7 @@ Training and evaluation resolve system-specific physics through
 |---|---|
 | `dte/data/datasets/unit_dataset.py` | `TrajectoryDataset` — HDF5 loader, `sample_batch(key, bs, seq_len=None)` |
 | `dte/data/datasets/universal_unit_dataset.py` | Mixed-system padded dataset for universal training |
-| `dte/data/generation.py` | CSTR-specific data generator (fast, original) |
+| `dte/data/generation.py` | HDF5 dataset loader (generation lives in `dte/data/generators/generic.py`) |
 | `dte/data/generators/generic.py` | `GenericDataGenerator` — works with any `ProcessSimulator` |
 | `dte/data/ingestion/real_data.py` | `RealDataIngestion` — CSV/Parquet ingestion pipeline |
 
@@ -280,6 +280,8 @@ Prefer experiments that:
 | `DTE_SYSTEM_CONFIG` | `configs/cstr_default.yaml` | System YAML path (comma-separated for multiple) |
 | `DTE_MODEL_PATH` | `outputs/best_model.eqx` | Trained checkpoint path |
 | `DTE_TRAINING_CONFIG` | `configs/training_default.yaml` | Training config used to reconstruct model |
+| `DTE_DEMO_CONFIG` | `configs/demo_app.yaml` | Demo / universal-runtime YAML; used by the API when a shared checkpoint is configured |
+| `DTE_DISABLE_UNIVERSAL_RUNTIME` | _(unset)_ | Set to `1` to skip loading the universal demo runtime |
 | `DTE_API_KEY` | _(unset)_ | API key for FastAPI auth; unset = auth disabled |
 | `DTE_CORS_ORIGINS` | localhost Vite/API origins | Comma-separated CORS allowlist; `*` disables credentials |
 | `STREAMLIT_AUTH_PASSWORD` | _(unset)_ | Dashboard password; unset = auth disabled |

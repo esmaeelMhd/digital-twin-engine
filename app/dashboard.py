@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from datetime import datetime
@@ -54,7 +55,7 @@ def _check_auth() -> bool:
         pwd = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login")
         if submitted:
-            if pwd == required_pwd:
+            if len(pwd) == len(required_pwd) and hmac.compare_digest(pwd, required_pwd):
                 st.session_state["_dte_authenticated"] = True
                 st.rerun()
             else:

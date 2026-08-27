@@ -35,6 +35,7 @@ Environment variables
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import threading
@@ -80,6 +81,7 @@ from dte.api.models import (
     SteadyStateResponse,
 )
 from dte.api.onboarding import (
+    InvalidOnboardingIdError,
     build_job_workspace,
     build_onboarding_templates,
     initialize_job_status,
@@ -124,6 +126,7 @@ _specs: Dict[str, SystemSpec] = {}
 _system_configs: Dict[str, dict] = {}
 _universal_runtime: UniversalDemoRuntime | None = None
 _startup_time: float = 0.0
+logger = logging.getLogger(__name__)
 
 
 def _register_system(system_config_path: str):
@@ -260,12 +263,22 @@ app.add_middleware(
 # Global exception handler — always returns ErrorResponse shape
 # ---------------------------------------------------------------------------
 
+@app.exception_handler(InvalidOnboardingIdError)
+async def _invalid_onboarding_id_handler(
+    request: Request, exc: InvalidOnboardingIdError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={"detail": str(exc), "code": "not_found"},
+    )
+
+
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    detail = str(exc) if str(exc) else type(exc).__name__
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"detail": detail, "code": "internal_error"},
+        content={"detail": "Internal server error", "code": "internal_error"},
     )
 
 

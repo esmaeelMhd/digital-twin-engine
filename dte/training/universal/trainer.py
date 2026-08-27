@@ -19,6 +19,7 @@ from dte.data.datasets.universal_unit_dataset import MultiSystemTrajectoryDatase
 from dte.evaluation.universal import normalize_universal_batch
 from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.physics.constraints import bound_penalty, positivity_penalty
+from dte.training.shared.losses import HUBER_DELTA, huber_loss
 
 
 def _non_finite_loss_names(losses: Dict[str, float]) -> list[str]:
@@ -32,12 +33,7 @@ def _masked_mean(values: Array, mask: Array) -> Array:
 
 
 def _masked_huber(diff: Array, mask: Array) -> Array:
-    loss = jnp.where(
-        jnp.abs(diff) < 0.01,
-        0.5 * diff ** 2,
-        0.01 * jnp.abs(diff) - 0.00005,
-    )
-    return _masked_mean(loss, mask)
+    return _masked_mean(huber_loss(diff, HUBER_DELTA), mask)
 
 
 class UniversalTrainer:

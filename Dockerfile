@@ -34,23 +34,24 @@ ENV PATH="/venv/bin:$PATH"
 # Install CPU-only JAX for the API image (no CUDA)
 RUN pip install --no-cache-dir "jax[cpu]>=0.4.20"
 
-# Install remaining deps from pyproject.toml (excluding GPU-specific ones)
+# Install remaining deps from pyproject.toml (excluding GPU-specific ones).
+# Specifiers must be quoted: unquoted `>=` is a shell redirection.
 RUN pip install --no-cache-dir \
-    equinox>=0.11.0 \
-    diffrax>=0.4.0 \
-    optax>=0.1.7 \
-    jaxtyping>=0.2.20 \
-    pyyaml>=6.0 \
-    h5py>=3.9.0 \
-    numpy>=1.24.0 \
-    matplotlib>=3.7.0 \
-    tqdm>=4.66.0 \
-    fastapi>=0.111.0 \
-    python-multipart>=0.0.9 \
-    uvicorn[standard]>=0.29.0 \
-    pydantic>=2.0.0 \
-    httpx>=0.27.0 \
-    pandas>=2.0.0
+    "equinox>=0.11.0" \
+    "diffrax>=0.4.0" \
+    "optax>=0.1.7" \
+    "jaxtyping>=0.2.20" \
+    "pyyaml>=6.0" \
+    "h5py>=3.9.0" \
+    "numpy>=1.24.0" \
+    "matplotlib>=3.7.0" \
+    "tqdm>=4.66.0" \
+    "fastapi>=0.111.0" \
+    "python-multipart>=0.0.9" \
+    "uvicorn[standard]>=0.29.0" \
+    "pydantic>=2.0.0" \
+    "httpx>=0.27.0" \
+    "pandas>=2.0.0"
 
 # ============================================================
 # Stage 2: lean API inference image
@@ -99,9 +100,9 @@ ENV PATH="/venv/bin:$PATH"
 
 # Install additional training-only dependencies
 RUN pip install --no-cache-dir \
-    streamlit>=1.28.0 \
-    plotly>=5.17.0 \
-    scikit-learn>=1.3.0
+    "streamlit>=1.28.0" \
+    "plotly>=5.17.0" \
+    "scikit-learn>=1.3.0"
 
 # Copy full source
 COPY . .

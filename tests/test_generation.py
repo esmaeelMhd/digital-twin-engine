@@ -78,6 +78,29 @@ def test_generate_dataset_retries_until_requested_count(monkeypatch, tmp_path):
     assert generator.last_profile["attempts"] == 7
     assert generator.last_profile["invalid_trajectories"] == 4
     assert generator.last_profile["batch_size"] == 1
+    assert "signal_generation_seconds" not in generator.last_profile
+
+
+def test_generate_dataset_aborts_after_consecutive_empty_batches(monkeypatch, tmp_path):
+    simulator = CSTRSimulator(CSTRParams())
+    generator = GenericDataGenerator(
+        simulator,
+        {"simulation": {"dt": 0.1}, "operating_ranges": {}},
+        simulator.spec,
+    )
+    monkeypatch.setattr(
+        generator,
+        "_generate_trajectory",
+        lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(RuntimeError, match="no valid trajectories"):
+        generator.generate_dataset_to_hdf5(
+            jax.random.PRNGKey(0),
+            str(tmp_path / "empty.h5"),
+            n_trajectories=3,
+            n_steps=5,
+            batch_size=1,
+        )
 
 
 def test_generate_dataset_batched_dataset_mode_returns_expected_shapes():

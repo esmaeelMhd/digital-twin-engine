@@ -5,6 +5,7 @@ from typing import Dict, Optional
 import time
 import jax
 import jax.numpy as jnp
+import numpy as np
 import equinox as eqx
 import optax
 from jaxtyping import Array, PRNGKeyArray
@@ -14,6 +15,23 @@ import os
 from dte.models.unit.digital_twin import DigitalTwin
 from dte.training.shared.losses import LossComputer
 from dte.data.datasets.unit_dataset import TrajectoryDataset
+
+
+def _assert_uniform_timesteps(dataset: TrajectoryDataset | None) -> None:
+    """Physics residuals currently use one scalar dt for the whole batch."""
+    if dataset is None:
+        return
+    time = np.asarray(dataset.data["time"])
+    if time.ndim != 2 or time.shape[1] < 2:
+        return
+    dts = np.diff(time, axis=1)
+    reference = dts.reshape(-1)[0]
+    if not np.allclose(dts, reference, rtol=1e-4, atol=1e-8):
+        raise ValueError(
+            "Physics residual dt is taken from ts[0, 1] - ts[0, 0]; "
+            "dataset timesteps are not uniform. Ingested real data must be "
+            "resampled onto a regular grid before training."
+        )
 
 
 def _non_finite_loss_names(losses: Dict[str, float]) -> list[str]:
@@ -74,6 +92,8 @@ class Trainer:
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.step = 0
+        _assert_uniform_timesteps(train_dataset)
+        _assert_uniform_timesteps(val_dataset)
         
         # Setup optimizer
         opt_config = config["optimizer"]
@@ -246,7 +266,10 @@ class Trainer:
         )
         loss_traj = self.loss_computer.trajectory_loss(pred_states_norm, true_states_norm)
         loss_kl = self.loss_computer.kl_divergence_loss(z_means, z_logvars)
-        dt = ts[0, 1] - ts[0, 0]  # Keep as JAX array, don't convert to float
+        # Scalar dt for the batch. Trainer.__init__ asserts that every
+        # trajectory uses a uniform timestep, so the first interval is
+        # representative. Irregular real-data dt is not supported here.
+        dt = ts[0, 1] - ts[0, 0]
 
         # Diffusion-magnitude penalty when stochastic training is active.
         sde_cfg = self.config.get("sde_training", {})
@@ -547,6 +570,10 @@ class Trainer:
             key, subkey = jax.random.split(key)
             step_arr = jnp.asarray(self.step, dtype=jnp.float32)
             sde_active = self._sde_active_at_step(self.step)
+            # Validation always uses the configured (final) one-step weight,
+            # not the in-progress teacher-forcing anneal, so val "total" is
+            # not comparable to train "total" mid-anneal. Ranking across
+            # epochs is still consistent because this weight is fixed.
             one_step_weight = jnp.asarray(self.loss_computer.w_one_step, dtype=jnp.float32)
             loss_dict = self.eval_step(
                 self.model,

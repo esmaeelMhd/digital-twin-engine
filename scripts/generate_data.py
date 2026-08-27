@@ -127,7 +127,6 @@ def main():
         profile = generator.last_profile
         print("\nGeneration timing:")
         print(f"  Total: {profile['total_generation_seconds']:.2f} s")
-        print(f"  Signal generation: {profile['signal_generation_seconds']:.2f} s")
         print(f"  Steady state: {profile['steady_state_seconds']:.2f} s")
         print(f"  Rollout: {profile['rollout_seconds']:.2f} s")
         print(f"  Measurement noise: {profile['measurement_noise_seconds']:.2f} s")

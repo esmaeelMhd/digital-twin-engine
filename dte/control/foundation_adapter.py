@@ -286,11 +286,12 @@ def predict_one_step(
             )
         else:
             latent_mean_arr = jnp.asarray(latent_mean, dtype=jnp.float32)
-        drift = model.latent_sde.drift(
+        drift = model.latent_drift(
             latent_mean_arr,
             jnp.asarray(control, dtype=jnp.float32),
             jnp.asarray(disturbance, dtype=jnp.float32),
             jnp.asarray(params, dtype=jnp.float32),
+            dt,
         )
         z_next = latent_mean_arr + float(dt) * drift
         next_state = model.decode(

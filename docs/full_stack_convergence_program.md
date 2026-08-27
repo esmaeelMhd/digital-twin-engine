@@ -165,7 +165,7 @@ They should not sit beside the active architecture as if they were source.
 
 ## Non-Negotiable Architecture Decisions
 
-### 1. Universal is Primary; Single-System is Legacy
+### 1. Universal is Primary; Single-System Remains First-Class
 
 `UniversalDigitalTwin` is the primary model path.
 

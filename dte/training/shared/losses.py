@@ -6,6 +6,18 @@ from jaxtyping import Array, Float
 
 from dte.physics.base import PhysicsLoss, NullPhysicsLoss
 
+HUBER_DELTA = 0.01
+
+
+def huber_loss(diff: Array, delta: float = HUBER_DELTA) -> Array:
+    """Elementwise Huber loss with the shared training delta."""
+    abs_diff = jnp.abs(diff)
+    return jnp.where(
+        abs_diff < delta,
+        0.5 * diff ** 2,
+        delta * abs_diff - 0.5 * delta ** 2,
+    )
+
 
 class LossComputer:
     """Computes all loss terms for the digital twin model.
@@ -89,12 +101,8 @@ class LossComputer:
 
     @staticmethod
     def _huber_loss(diff: Array) -> Array:
-        """Elementwise Huber loss with delta=0.01."""
-        return jnp.where(
-            jnp.abs(diff) < 0.01,
-            0.5 * diff ** 2,
-            0.01 * jnp.abs(diff) - 0.00005,
-        )
+        """Elementwise Huber loss with the shared ``HUBER_DELTA``."""
+        return huber_loss(diff)
 
     def _weighted_state_loss(self, diff: Array) -> Float[Array, ""]:
         """State-weighted Huber loss in normalized state space."""
@@ -136,9 +144,6 @@ class LossComputer:
         """
         del dt
         return 0.5 * jnp.mean(diffusion_trajectory ** 2)
-
-    # Backward-compatible alias kept for older call sites and configs.
-    sde_kl_loss = diffusion_magnitude_penalty
 
     def trajectory_loss(
         self,

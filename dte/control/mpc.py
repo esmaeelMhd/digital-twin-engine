@@ -152,7 +152,7 @@ class SamplingMPC:
                 
                 # Predict using mean trajectory (deterministic)
                 z0, _, _ = self.model.encode(current_state, params, controls[0], None)
-                z_traj = self.model.latent_sde.mean_trajectory(
+                z_traj = self.model.rollout_latent(
                     ts,
                     z0,
                     controls,
