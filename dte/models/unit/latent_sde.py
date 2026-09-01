@@ -4,7 +4,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
-import diffrax
 
 
 class LatentDrift(eqx.Module):
@@ -284,7 +283,7 @@ class LatentSDE(eqx.Module):
         self_correcting_weight: float = 0.05,
         correction_hidden_dim: int = 64,
         correction_layers: int = 2,
-        path_representation: str = "delta",
+        path_representation: str = "rate",
         *,
         key: PRNGKeyArray,
     ):
@@ -534,147 +533,3 @@ class LatentSDE(eqx.Module):
         raw_correction = self.correction_out(x)
         return self.self_correcting_weight * jnp.tanh(raw_correction)
 
-    def __call__(
-        self,
-        ts: Float[Array, "n_steps"],
-        z0: Float[Array, "latent_dim"],
-        controls: Float[Array, "n_steps control_dim"],
-        params: Float[Array, "param_dim"],
-        key: PRNGKeyArray,
-        disturbances: Float[Array, "n_steps disturbance_dim"] | None = None,
-    ) -> Float[Array, "n_steps latent_dim"]:
-        """Solve the SDE from z0 over timesteps ts (stochastic path)."""
-        disturbances = self._get_disturbances(ts, disturbances, z0.dtype)
-        control_interp = diffrax.LinearInterpolation(ts, controls)
-
-        if self.disturbance_dim > 0:
-            disturbance_interp = diffrax.LinearInterpolation(ts, disturbances)
-            disturbance_at_time = disturbance_interp.evaluate
-        else:
-            disturbance_at_time = lambda t: jnp.zeros((0,), dtype=z0.dtype)  # noqa: E731
-
-        def drift_fn(t, z, args):
-            u = control_interp.evaluate(t)
-            d = disturbance_at_time(t)
-            return self.drift(z, u, d, params)
-
-        def diffusion_fn(t, z, args):
-            u = control_interp.evaluate(t)
-            d = disturbance_at_time(t)
-            return jnp.diag(self.diffusion(z, u, d, params))
-
-        dt0 = (ts[1] - ts[0]) / 2
-        brownian_motion = diffrax.VirtualBrownianTree(
-            t0=ts[0],
-            t1=ts[-1],
-            tol=dt0 / 2,
-            shape=(self.latent_dim,),
-            key=key,
-        )
-
-        drift_term = diffrax.ODETerm(drift_fn)
-        diffusion_term = diffrax.ControlTerm(diffusion_fn, brownian_motion)
-        terms = diffrax.MultiTerm(drift_term, diffusion_term)
-        solver = diffrax.Euler()
-
-        saveat = diffrax.SaveAt(ts=ts)
-        solution = diffrax.diffeqsolve(
-            terms,
-            solver,
-            t0=ts[0],
-            t1=ts[-1],
-            dt0=dt0,
-            y0=z0,
-            saveat=saveat,
-            max_steps=len(ts) * 10,
-        )
-        return solution.ys
-
-    def sample_trajectories(
-        self,
-        ts: Float[Array, "n_steps"],
-        z0: Float[Array, "latent_dim"],
-        controls: Float[Array, "n_steps control_dim"],
-        params: Float[Array, "param_dim"],
-        key: PRNGKeyArray,
-        n_samples: int = 10,
-        disturbances: Float[Array, "n_steps disturbance_dim"] | None = None,
-    ) -> Float[Array, "n_samples n_steps latent_dim"]:
-        """Sample multiple SDE paths."""
-        keys = jax.random.split(key, n_samples)
-
-        def sample_one(k):
-            return self(ts, z0, controls, params, k, disturbances=disturbances)
-
-        return jax.vmap(sample_one)(keys)
-
-    def mean_trajectory(
-        self,
-        ts: Float[Array, "n_steps"],
-        z0: Float[Array, "latent_dim"],
-        controls: Float[Array, "n_steps control_dim"],
-        params: Float[Array, "param_dim"],
-        disturbances: Float[Array, "n_steps disturbance_dim"] | None = None,
-    ) -> Float[Array, "n_steps latent_dim"]:
-        """Noise-free drift-path integration (not the SDE mean E[z_t])."""
-        disturbances = self._get_disturbances(ts, disturbances, z0.dtype)
-        if self.neural_cde_enabled:
-            dt_steps = ts[1:] - ts[:-1]
-
-            def step_fn(z_prev, step_inputs):
-                u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
-                u_mid = 0.5 * (u_t + u_tp1)
-                d_mid = 0.5 * (d_t + d_tp1)
-                path_features = self.build_path_features(
-                    u_t, u_tp1, d_t, d_tp1, step_dt, z_prev.dtype
-                )
-
-                def total_drift(z_curr):
-                    return self.drift(z_curr, u_mid, d_mid, params) + self.control_path_term(
-                        z_curr, u_mid, d_mid, params, path_features
-                    )
-
-                k1 = total_drift(z_prev)
-                z_euler = z_prev + step_dt * k1
-                k2 = total_drift(z_euler)
-                z_next = z_prev + 0.5 * step_dt * (k1 + k2)
-                return z_next, z_next
-
-            _, z_hist = jax.lax.scan(
-                step_fn,
-                z0,
-                (controls[:-1], controls[1:], disturbances[:-1], disturbances[1:], dt_steps),
-            )
-            return jnp.concatenate([z0[None, :], z_hist], axis=0)
-
-        control_interp = diffrax.LinearInterpolation(ts, controls)
-
-        if self.disturbance_dim > 0:
-            disturbance_interp = diffrax.LinearInterpolation(ts, disturbances)
-            disturbance_at_time = disturbance_interp.evaluate
-        else:
-            disturbance_at_time = lambda t: jnp.zeros((0,), dtype=z0.dtype)  # noqa: E731
-
-        def drift_fn(t, z, args):
-            u = control_interp.evaluate(t)
-            d = disturbance_at_time(t)
-            return self.drift(z, u, d, params)
-
-        term = diffrax.ODETerm(drift_fn)
-        solver = diffrax.Tsit5()
-
-        dt0 = ts[1] - ts[0]
-        saveat = diffrax.SaveAt(ts=ts)
-        stepsize_controller = diffrax.PIDController(rtol=1e-3, atol=1e-4)
-        solution = diffrax.diffeqsolve(
-            term,
-            solver,
-            t0=ts[0],
-            t1=ts[-1],
-            dt0=dt0,
-            y0=z0,
-            saveat=saveat,
-            stepsize_controller=stepsize_controller,
-            max_steps=4096,
-        )
-        return solution.ys

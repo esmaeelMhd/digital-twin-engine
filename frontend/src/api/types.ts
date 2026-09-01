@@ -178,6 +178,7 @@ export type DemoOptimizeControlResponse = {
   tracked_state_names: string[];
   state_names: string[];
   constraint_summary: NumericDict;
+  source: string;
 };
 
 export type OnboardingTemplate = {

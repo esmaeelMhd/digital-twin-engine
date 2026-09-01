@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from dte.data.ingestion.real_data import RealDataIngestion
+from dte.data.ingestion.real_data import RealDataIngestion, _nan_run_gap_mask
 from dte.simulators.registry import get_system_spec
 
 
@@ -130,3 +130,45 @@ def test_real_data_ingestion_interpolates_short_nan_runs(tmp_path: Path):
         states = handle["states"][:]
         assert not np.isnan(states).any()
         assert np.all(states[:, :, 0] > 0.0)
+
+
+def test_nan_run_gap_mask_includes_leading_boundary():
+    ts_seconds = np.arange(10, dtype=float)
+    is_nan = np.zeros(10, dtype=bool)
+    is_nan[:6] = True
+    t_uniform = np.arange(10, dtype=float)
+    mask = _nan_run_gap_mask(ts_seconds, is_nan, t_uniform, max_gap_fill=2.0)
+    assert mask[0]
+    assert mask[5]
+    assert not mask[6]
+
+
+def test_real_data_ingestion_drops_windows_with_leading_nan_run(tmp_path: Path):
+    spec = get_system_spec(_load_yaml("configs/cstr_default.yaml"))
+    kwargs = dict(
+        spec=spec,
+        state_columns=["Ca", "Cb", "T", "Tc"],
+        control_columns=["F_in", "Tc_in"],
+        disturbance_columns=["Ca_in", "T_in"],
+        timestamp_column="timestamp",
+        dt=1.0,
+        max_gap_fill=5.0,
+        drop_large_gaps=True,
+    )
+    baseline = RealDataIngestion(**kwargs).ingest_dataframe(
+        _historian_frame(40),
+        tmp_path / "baseline_leading.h5",
+        trajectory_duration=8.0,
+        trajectory_stride=4.0,
+    )
+    df = _historian_frame(40)
+    df.loc[0:15, "Ca"] = np.nan
+    gapped = RealDataIngestion(**kwargs).ingest_dataframe(
+        df,
+        tmp_path / "leading_nan.h5",
+        trajectory_duration=8.0,
+        trajectory_stride=4.0,
+    )
+    assert gapped["n_trajectories"] < baseline["n_trajectories"]
+    with h5py.File(tmp_path / "leading_nan.h5", "r") as handle:
+        assert not np.isnan(handle["states"][:]).any()

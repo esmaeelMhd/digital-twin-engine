@@ -82,8 +82,9 @@ class PredictResponse(BaseModel):
 class EnsembleRequest(BaseModel):
     """Request body for the /ensemble endpoint.
 
-    Unit checkpoints sample stochastic SDE rollouts. Universal checkpoints
-    sample the encoder's initial latent over a deterministic latent ODE.
+    Unit checkpoints with SDE training enabled sample stochastic SDE rollouts.
+    Otherwise (and for universal checkpoints) the encoder's initial latent is
+    sampled over a deterministic latent rollout.
     """
 
     system: str = Field("cstr", description="Registered system name (e.g. 'cstr', 'heat_exchanger', 'two_tank').")
@@ -107,6 +108,14 @@ class EnsembleResponse(BaseModel):
     state_names: List[str]
     n_samples: int
     dt: float
+    uncertainty_source: str = Field(
+        ...,
+        description=(
+            "How the ensemble was formed: 'sde_rollout' for a trained stochastic "
+            "SDE, or 'encoder_sampling' for encoder initial-latent samples over a "
+            "deterministic rollout."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +374,13 @@ class DemoOptimizeControlResponse(BaseModel):
     tracked_state_names: List[str]
     state_names: List[str]
     constraint_summary: Dict[str, float]
+    source: str = Field(
+        ...,
+        description=(
+            "Where predicted_states came from: 'model' when the winning plan was "
+            "re-evaluated with a loaded digital twin, otherwise 'simulator'."
+        ),
+    )
 
 
 class DemoCompareScenariosRequest(BaseModel):

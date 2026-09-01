@@ -35,6 +35,7 @@ def _clear_service_state():
     service._models.clear()
     service._specs.clear()
     service._system_configs.clear()
+    service._model_sde_enabled.clear()
     service._universal_runtime = None
     service._adapt_job_slots = None
 
@@ -362,7 +363,7 @@ def test_onboarding_optimize_endpoint_keeps_non_active_controls_fixed(monkeypatc
             {"template_system_name": "two_tank"},
             spec,
             simulator,
-            object(),
+            None,
         ),
     )
 
@@ -384,6 +385,7 @@ def test_onboarding_optimize_endpoint_keeps_non_active_controls_fixed(monkeypatc
         assert response.status_code == 200
         payload = response.json()
         assert len(payload["control_sequence"]) == 6
+        assert payload["source"] == "simulator"
         assert all(abs(row[1] - 0.75) < 1e-6 for row in payload["control_sequence"])
 
 

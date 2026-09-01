@@ -231,6 +231,41 @@ def test_process_mpc_interface_rollout_and_random_shooting():
     assert np.asarray(update["corrected_state"]).shape == (spec.state_dim,)
 
 
+def test_process_mpc_interface_previous_control_updates_on_assimilate():
+    spec, simulator, _ = _load_system("two_tank")
+    interface = ProcessMPCInterface(
+        spec,
+        simulator,
+        config=MPCInterfaceConfig(dt=0.1, horizon=8),
+    )
+    midpoint = np.asarray(
+        [0.5 * sum(spec.control_ranges[name]) for name in spec.control_names],
+        dtype=np.float32,
+    )
+    last_applied = np.asarray(
+        [spec.control_ranges[name][1] for name in spec.control_names],
+        dtype=np.float32,
+    )
+    candidate = np.tile(midpoint[None, :], (8, 1))
+
+    before = interface.evaluate_candidate(candidate)
+    interface.assimilate_measurement(
+        np.asarray(spec.default_initial_state, dtype=np.float32),
+        control=last_applied,
+    )
+    after = interface.evaluate_candidate(candidate)
+    assert float(after["metrics"]["control_effort_cost"]) > float(
+        before["metrics"]["control_effort_cost"]
+    )
+
+    interface.reset()
+    after_reset = interface.evaluate_candidate(candidate)
+    assert np.isclose(
+        float(after_reset["metrics"]["control_effort_cost"]),
+        float(before["metrics"]["control_effort_cost"]),
+    )
+
+
 def test_process_mpc_interface_rollout_supports_universal_foundation_model():
     spec, simulator, _ = _load_system("cstr")
     model = UniversalDigitalTwin.from_config(

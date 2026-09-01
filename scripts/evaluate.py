@@ -158,7 +158,8 @@ def _predict_states(
     ts = sample["t"]
 
     if predict_mode == "deterministic":
-        # Match the training/validation rollout path: use z_mean and mean_trajectory.
+        # Match the training/validation rollout path: use z_mean and a
+        # deterministic latent rollout.
         _, z_mean, _ = model.encode(initial_state, params, controls[0], None)
         z_traj = model.rollout_latent(
             ts,

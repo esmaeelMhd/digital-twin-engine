@@ -62,6 +62,13 @@ def _simulate_open_loop(
     return states
 
 
+def _midpoint_control(spec: ProcessUnitSpec) -> np.ndarray:
+    return np.asarray(
+        [0.5 * sum(spec.control_ranges[name]) for name in spec.control_names],
+        dtype=np.float32,
+    )
+
+
 class ProcessMPCInterface:
     """Expose rollout, evaluation, and optimisation hooks for control algorithms."""
 
@@ -86,10 +93,7 @@ class ProcessMPCInterface:
         )
         self.state_correction = state_correction
         self._state_estimate = np.asarray(spec.default_initial_state, dtype=np.float32)
-        self._previous_control = np.asarray(
-            [0.5 * sum(spec.control_ranges[name]) for name in spec.control_names],
-            dtype=np.float32,
-        )
+        self._previous_control = _midpoint_control(spec)
 
     def reset(
         self,
@@ -103,6 +107,7 @@ class ProcessMPCInterface:
             self._state_estimate = np.asarray(self.spec.default_initial_state, dtype=np.float32)
         if params is not None:
             self.params = np.asarray(params, dtype=np.float32)
+        self._previous_control = _midpoint_control(self.spec)
         if self.state_correction is not None:
             self.state_correction.reset(self._state_estimate)
         return self._state_estimate.copy()
@@ -128,6 +133,8 @@ class ProcessMPCInterface:
             if control is not None
             else self._previous_control.copy()
         )
+        if control is not None:
+            self._previous_control = control_arr.copy()
         if self.state_correction is None:
             self._state_estimate = np.asarray(measurement, dtype=np.float32)
             return {

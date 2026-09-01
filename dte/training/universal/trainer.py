@@ -20,6 +20,7 @@ from dte.evaluation.universal import normalize_universal_batch
 from dte.models.universal.digital_twin import UniversalDigitalTwin
 from dte.physics.constraints import bound_penalty, positivity_penalty
 from dte.training.shared.losses import HUBER_DELTA, huber_loss
+from dte.training.unit.trainer import _format_non_finite_reason
 
 
 def _non_finite_loss_names(losses: Dict[str, float]) -> list[str]:
@@ -605,7 +606,7 @@ class UniversalTrainer:
             "state_bounds": [],
             "positivity": [],
         }
-        for _ in range(n_batches):
+        for batch_index in range(n_batches):
             key, sample_key, loss_key = jax.random.split(key, 3)
             batch = dataset.sample_batch(
                 sample_key,
@@ -616,7 +617,15 @@ class UniversalTrainer:
             loss_dict = self.eval_step(self.model, batch, loss_key)
             loss_dict_float = {name: float(value) for name, value in loss_dict.items()}
             if _non_finite_loss_names(loss_dict_float):
-                raise RuntimeError(f"Non-finite validation losses: {loss_dict_float}")
+                raise RuntimeError(
+                    _format_non_finite_reason(
+                        "validation",
+                        loss_dict_float,
+                        step=int(self.step),
+                        batch_index=batch_index,
+                        n_batches=n_batches,
+                    )
+                )
             for name, value in loss_dict_float.items():
                 losses.setdefault(name, []).append(value)
         return {name: float(jnp.mean(jnp.asarray(values))) for name, values in losses.items()}

@@ -3,8 +3,9 @@
 Provides REST endpoints for:
 - ``GET  /health``         -- Health check + loaded system list
 - ``POST /predict``        -- Deterministic rollout (mean trajectory)
-- ``POST /ensemble``       -- Ensemble uncertainty bands (SDE samples on unit
-  checkpoints; encoder initial-latent samples on the universal runtime)
+- ``POST /ensemble``       -- Ensemble uncertainty bands (trained SDE samples on
+  unit checkpoints when SDE training was enabled; otherwise encoder
+  initial-latent samples over a deterministic rollout)
 - ``POST /steady_state``   -- Find steady-state operating point
 
 Authentication
@@ -127,6 +128,7 @@ from dte.simulators.registry import get_system_spec, get_simulator
 _models: Dict[str, DigitalTwin] = {}
 _specs: Dict[str, SystemSpec] = {}
 _system_configs: Dict[str, dict] = {}
+_model_sde_enabled: Dict[str, bool] = {}
 _universal_runtime: UniversalDemoRuntime | None = None
 _startup_time: float = 0.0
 logger = logging.getLogger(__name__)
@@ -192,6 +194,9 @@ def _load_single_system_model(
             system_config=sys_cfg,
         )
         _models[spec.name] = model
+        _model_sde_enabled[spec.name] = bool(
+            (train_cfg.get("sde_training") or {}).get("enabled", False)
+        )
         print(f"[DTE API] Loaded model for system '{spec.name}' from {model_path}")
     else:
         print(
@@ -208,6 +213,7 @@ async def _lifespan(app: FastAPI):
     _models.clear()
     _specs.clear()
     _system_configs.clear()
+    _model_sde_enabled.clear()
     _universal_runtime = None
 
     sys_config_env = os.environ.get("DTE_SYSTEM_CONFIG", "configs/cstr_default.yaml")
@@ -269,8 +275,8 @@ app = FastAPI(
     description=(
         "REST API for running physics-informed latent neural SDE digital twins.  "
         "Provides deterministic rollout, ensemble uncertainty estimation "
-        "(stochastic SDE samples on unit checkpoints; encoder initial-latent "
-        "sampling over a deterministic latent ODE on the universal runtime), "
+        "(trained SDE samples on unit checkpoints when enabled; otherwise "
+        "encoder initial-latent sampling over a deterministic rollout), "
         "and steady-state queries."
     ),
     version="0.1.0",
@@ -382,10 +388,11 @@ def _get_demo_runtime(system: str):
         )
     try:
         simulator = get_simulator(system, system_config)
-    except Exception as exc:
+    except Exception:
+        logger.exception("Could not instantiate simulator for '%s'", system)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Could not instantiate simulator for '{system}': {exc}",
+            detail=f"Could not instantiate simulator for '{system}'.",
         )
     if _universal_runtime is not None and system in _universal_runtime.system_ids:
         model = _universal_runtime
@@ -729,6 +736,7 @@ def _build_optimize_response(
         constraint_summary={
             key: float(value) for key, value in result["constraint_summary"].items()
         },
+        source=str(result["source"]),
     )
 
 
@@ -774,6 +782,7 @@ def _run_demo_optimize(
     spec: SystemSpec,
     simulator,
     req: DemoOptimizeControlRequest,
+    model=None,
 ) -> DemoOptimizeControlResponse:
     disturbances = np.asarray(req.disturbances, dtype=np.float32)
     if disturbances.ndim != 2 or disturbances.shape[1] != spec.disturbance_dim:
@@ -806,6 +815,7 @@ def _run_demo_optimize(
         tracked_state_names=req.tracked_state_names,
         n_candidates=int(req.n_candidates),
         seed=int(req.seed),
+        model=model,
     )
     return _build_optimize_response(system=system, spec=spec, result=result)
 
@@ -931,12 +941,6 @@ async def onboarding_create_job(req: OnboardingCreateJobRequest):
             detail="Could not resolve a valid universal config_path for customer adaptation.",
         )
 
-    if not _try_acquire_adapt_slot():
-        raise HTTPException(
-            status_code=429,
-            detail="Too many adaptation jobs are already running. Retry after one completes.",
-        )
-
     job_id = new_id("job")
     job_directory = job_dir(job_id)
     preview_directory = Path(preview_record["artifacts"]["processed_data_dir"]).parent
@@ -949,6 +953,12 @@ async def onboarding_create_job(req: OnboardingCreateJobRequest):
         "report_markdown": str((job_directory / "validation_report.md").resolve()),
         "log_path": str((job_directory / "logs" / "adapt_customer.log").resolve()),
     }
+
+    if not _try_acquire_adapt_slot():
+        raise HTTPException(
+            status_code=429,
+            detail="Too many adaptation jobs are already running. Retry after one completes.",
+        )
 
     try:
         status_payload = initialize_job_status(
@@ -1080,7 +1090,7 @@ async def onboarding_job_optimize_control(job_id: str, req: DemoOptimizeControlR
     """Recommend a customer control schedule using the adapted workspace context."""
 
     try:
-        _job_payload, preview_record, spec, simulator, _model = _get_onboarding_job_demo_runtime(job_id)
+        _job_payload, preview_record, spec, simulator, model = _get_onboarding_job_demo_runtime(job_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
@@ -1099,6 +1109,7 @@ async def onboarding_job_optimize_control(job_id: str, req: DemoOptimizeControlR
         system=req.system,
         spec=spec,
         simulator=simulator,
+        model=model,
         req=req,
     )
 
@@ -1218,11 +1229,12 @@ async def demo_rollout(req: DemoRolloutRequest):
 async def demo_optimize_control(req: DemoOptimizeControlRequest):
     """Return a lightweight random-shooting control recommendation."""
 
-    spec, simulator, _ = _get_demo_runtime(req.system)
+    spec, simulator, model = _get_demo_runtime(req.system)
     return _run_demo_optimize(
         system=req.system,
         spec=spec,
         simulator=simulator,
+        model=model,
         req=req,
     )
 
@@ -1315,8 +1327,9 @@ async def predict(req: PredictRequest):
 async def ensemble(req: EnsembleRequest):
     """Estimate prediction uncertainty from an ensemble of rollouts.
 
-    Unit checkpoints sample stochastic SDE trajectories. The universal runtime
-    samples the encoder's initial latent and rolls out a deterministic latent ODE.
+    Unit checkpoints with SDE training enabled sample stochastic SDE trajectories.
+    Otherwise the encoder's initial latent is sampled over a deterministic
+    rollout. The universal runtime always uses encoder sampling.
     """
     runtime, spec = _get_inference_runtime_and_spec(req.system)
     controls = _validate_control_sequence(spec, req.controls)
@@ -1336,35 +1349,65 @@ async def ensemble(req: EnsembleRequest):
             n_samples=int(req.n_samples),
             seed=int(req.seed),
         )
+        uncertainty_source = "encoder_sampling"
     else:
         model = runtime
         ts = _build_time_array(controls.shape[0], req.dt)
-        base_key = jax.random.PRNGKey(int(req.seed))
-        enc_key, *sde_keys = jax.random.split(base_key, req.n_samples + 1)
-        _, z_mean, _ = model.encode(
-            jnp.asarray(initial_state, dtype=jnp.float32),
-            jnp.asarray(params, dtype=jnp.float32),
-            jnp.asarray(controls[0], dtype=jnp.float32),
-            enc_key,
+        controls_arr = jnp.asarray(controls, dtype=jnp.float32)
+        params_arr = jnp.asarray(params, dtype=jnp.float32)
+        disturbances_arr = jnp.asarray(disturbances, dtype=jnp.float32)
+        initial_arr = jnp.asarray(initial_state, dtype=jnp.float32)
+        sde_enabled = bool(_model_sde_enabled.get(spec.name, False))
+        decode_fn = jax.vmap(
+            lambda z, u: model.decode(z, params_arr, u),
+            in_axes=(0, 0),
         )
-
-        def _one_sample(sde_key):
-            z_traj = model.rollout_latent(
-                ts,
-                z_mean,
-                jnp.asarray(controls, dtype=jnp.float32),
-                jnp.asarray(params, dtype=jnp.float32),
-                disturbances=jnp.asarray(disturbances, dtype=jnp.float32),
-                key=sde_key,
-                stochastic=True,
+        if sde_enabled:
+            uncertainty_source = "sde_rollout"
+            base_key = jax.random.PRNGKey(int(req.seed))
+            enc_key, *sde_keys = jax.random.split(base_key, req.n_samples + 1)
+            _, z_mean, _ = model.encode(
+                initial_arr,
+                params_arr,
+                controls_arr[0],
+                enc_key,
             )
-            decode_fn = jax.vmap(
-                lambda z, u: model.decode(z, jnp.asarray(params, dtype=jnp.float32), u),
-                in_axes=(0, 0),
-            )
-            return decode_fn(z_traj, jnp.asarray(controls, dtype=jnp.float32))
 
-        all_samples = np.asarray(jax.vmap(_one_sample)(jnp.stack(sde_keys)))
+            def _one_sde_sample(sde_key):
+                z_traj = model.rollout_latent(
+                    ts,
+                    z_mean,
+                    controls_arr,
+                    params_arr,
+                    disturbances=disturbances_arr,
+                    key=sde_key,
+                    stochastic=True,
+                )
+                return decode_fn(z_traj, controls_arr)
+
+            all_samples = np.asarray(jax.vmap(_one_sde_sample)(jnp.stack(sde_keys)))
+        else:
+            uncertainty_source = "encoder_sampling"
+            keys = jax.random.split(jax.random.PRNGKey(int(req.seed)), int(req.n_samples))
+
+            def _one_encoder_sample(sample_key):
+                z0, _, _ = model.encode(
+                    initial_arr,
+                    params_arr,
+                    controls_arr[0],
+                    sample_key,
+                )
+                z_traj = model.rollout_latent(
+                    ts,
+                    z0,
+                    controls_arr,
+                    params_arr,
+                    disturbances=disturbances_arr,
+                    stochastic=False,
+                )
+                return decode_fn(z_traj, controls_arr)
+
+            all_samples = np.asarray(jax.vmap(_one_encoder_sample)(keys))
         mean = np.mean(all_samples, axis=0)
         std = np.std(all_samples, axis=0)
         p05 = np.percentile(all_samples, 5.0, axis=0)
@@ -1379,6 +1422,7 @@ async def ensemble(req: EnsembleRequest):
         state_names=spec.state_names,
         n_samples=req.n_samples,
         dt=req.dt,
+        uncertainty_source=uncertainty_source,
     )
 
 

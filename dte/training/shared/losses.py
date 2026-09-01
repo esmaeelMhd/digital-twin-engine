@@ -118,7 +118,7 @@ class LossComputer:
         predicted_states: Float[Array, "batch state_dim"],
         true_states: Float[Array, "batch state_dim"],
     ) -> Float[Array, ""]:
-        """MSE in normalized state space (initial step)."""
+        """Huber loss in normalized state space (initial step only)."""
         return self._weighted_state_loss(predicted_states - true_states)
 
     def kl_divergence_loss(
