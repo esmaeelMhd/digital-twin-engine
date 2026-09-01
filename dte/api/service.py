@@ -747,6 +747,7 @@ def _run_demo_compare(
     simulator,
     model,
     req: DemoCompareScenariosRequest,
+    sde_trained: bool = False,
 ) -> DemoCompareScenariosResponse:
     baseline_controls = _validate_control_sequence(spec, req.baseline_controls)
     candidate_controls = _validate_control_sequence(spec, req.candidate_controls)
@@ -772,6 +773,7 @@ def _run_demo_compare(
         params=_validate_params(spec, req.params) if req.params is not None else None,
         n_samples=int(req.n_samples),
         seed=int(req.seed),
+        sde_trained=sde_trained,
     )
     return _build_compare_response(system=system, spec=spec, result=result)
 
@@ -783,6 +785,7 @@ def _run_demo_optimize(
     simulator,
     req: DemoOptimizeControlRequest,
     model=None,
+    sde_trained: bool = False,
 ) -> DemoOptimizeControlResponse:
     disturbances = np.asarray(req.disturbances, dtype=np.float32)
     if disturbances.ndim != 2 or disturbances.shape[1] != spec.disturbance_dim:
@@ -816,6 +819,7 @@ def _run_demo_optimize(
         n_candidates=int(req.n_candidates),
         seed=int(req.seed),
         model=model,
+        sde_trained=sde_trained,
     )
     return _build_optimize_response(system=system, spec=spec, result=result)
 
@@ -1204,6 +1208,7 @@ async def demo_rollout(req: DemoRolloutRequest):
         params=_validate_params(spec, req.params) if req.params is not None else None,
         n_samples=int(req.n_samples),
         seed=int(req.seed),
+        sde_trained=_model_sde_enabled.get(req.system, False),
     )
     return DemoRolloutResponse(
         system=req.system,
@@ -1236,6 +1241,7 @@ async def demo_optimize_control(req: DemoOptimizeControlRequest):
         simulator=simulator,
         model=model,
         req=req,
+        sde_trained=_model_sde_enabled.get(req.system, False),
     )
 
 
@@ -1255,6 +1261,7 @@ async def demo_compare_scenarios(req: DemoCompareScenariosRequest):
         simulator=simulator,
         model=model,
         req=req,
+        sde_trained=_model_sde_enabled.get(req.system, False),
     )
 
 

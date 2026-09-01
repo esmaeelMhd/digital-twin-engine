@@ -467,6 +467,7 @@ def rollout_with_model(
     *,
     n_samples: int = 16,
     seed: int = 0,
+    sde_trained: bool = False,
 ) -> dict[str, Any]:
     """Generate mean and uncertainty bands from a trained DigitalTwin."""
 
@@ -479,6 +480,7 @@ def rollout_with_model(
         ts,
         jax.random.PRNGKey(seed),
         n_samples=n_samples,
+        stochastic=sde_trained,
     )
     samples = np.asarray(result["states_samples"])
     mean = np.asarray(result["states_mean"])
@@ -680,6 +682,7 @@ def rollout_scenario(
     params: np.ndarray | None = None,
     n_samples: int = 16,
     seed: int = 0,
+    sde_trained: bool = False,
 ) -> dict[str, Any]:
     """Run a demo rollout using a model if available, else simulator ensemble."""
 
@@ -719,6 +722,7 @@ def rollout_scenario(
             dt,
             n_samples=n_samples,
             seed=seed,
+            sde_trained=sde_trained,
         )
     return rollout_with_simulator_ensemble(
         spec,
@@ -745,6 +749,7 @@ def compare_scenarios(
     params: np.ndarray | None = None,
     n_samples: int = 16,
     seed: int = 0,
+    sde_trained: bool = False,
 ) -> dict[str, Any]:
     """Compare baseline and candidate control schedules."""
 
@@ -759,6 +764,7 @@ def compare_scenarios(
         params=params,
         n_samples=n_samples,
         seed=seed,
+        sde_trained=sde_trained,
     )
     candidate = rollout_scenario(
         spec,
@@ -771,6 +777,7 @@ def compare_scenarios(
         params=params,
         n_samples=n_samples,
         seed=seed,
+        sde_trained=sde_trained,
     )
     final_delta = candidate["mean"][-1] - baseline["mean"][-1]
     mean_abs_delta = np.mean(np.abs(candidate["mean"] - baseline["mean"]), axis=0)
@@ -807,6 +814,7 @@ def optimize_control_sequence(
     model: DigitalTwin | UniversalDemoRuntime | None = None,
     params: np.ndarray | None = None,
     n_samples: int = 16,
+    sde_trained: bool = False,
 ) -> dict[str, Any]:
     """Simple random-shooting demo optimizer over ramp control sequences.
 
@@ -931,9 +939,12 @@ def optimize_control_sequence(
             params=params,
             n_samples=n_samples,
             seed=seed,
+            sde_trained=sde_trained,
         )
-        predicted_states = np.asarray(rollout["mean"], dtype=np.float32)
-        source = "model"
+        model_states = np.asarray(rollout["mean"], dtype=np.float32)
+        if np.all(np.isfinite(model_states)):
+            predicted_states = model_states
+            source = "model"
 
     return {
         "control_sequence": best_controls,

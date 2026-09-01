@@ -435,7 +435,7 @@ The FastAPI service now exposes:
 
 - `/health`
 - `/predict`
-- `/ensemble`
+- `/ensemble` — falls back to encoder initial-latent sampling when SDE training was disabled and reports `uncertainty_source`
 - `/steady_state`
 - `/demo/*`
 - `/onboarding/*`
