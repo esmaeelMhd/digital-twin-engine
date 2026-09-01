@@ -198,6 +198,7 @@ def test_single_system_trainer_sde_kl_branch_computes_loss():
     assert jnp.isfinite(total_loss)
     assert "sde_kl" in loss_dict
     assert jnp.isfinite(loss_dict["sde_kl"])
+    assert float(loss_dict["one_step"]) == 0.0
 
 
 def test_kl_annealing_and_sde_gate_are_not_frozen_by_jit():

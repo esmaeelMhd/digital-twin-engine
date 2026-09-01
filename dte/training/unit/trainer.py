@@ -268,10 +268,13 @@ class Trainer:
         loss_recon = self.loss_computer.reconstruction_loss(
             pred_states_norm[:, 0], true_states_norm[:, 0]
         )
-        loss_one_step = self.loss_computer.one_step_loss(
-            (pred_next_states_batch - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
-            (states[:, 1:] - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
-        )
+        if self.one_step_enabled:
+            loss_one_step = self.loss_computer.one_step_loss(
+                (pred_next_states_batch - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
+                (states[:, 1:] - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
+            )
+        else:
+            loss_one_step = jnp.array(0.0)
         loss_traj = self.loss_computer.trajectory_loss(pred_states_norm, true_states_norm)
         loss_kl = self.loss_computer.kl_divergence_loss(z_means, z_logvars)
         # Scalar dt for the batch. Trainer.__init__ asserts that every

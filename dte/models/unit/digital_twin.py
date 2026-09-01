@@ -265,20 +265,19 @@ class DigitalTwin(eqx.Module):
                 raise ValueError("rollout_latent(stochastic=True) requires a PRNG key.")
             dt_steps = ts[1:] - ts[:-1]
             n_intervals = dt_steps.shape[0]
+            noise = None
             if stochastic:
                 noise = jax.random.normal(
                     key,
                     (n_intervals, self.latent_sde.latent_dim),
                     dtype=z0.dtype,
                 )
-            else:
-                noise = jnp.zeros(
-                    (n_intervals, self.latent_sde.latent_dim),
-                    dtype=z0.dtype,
-                )
 
             def step_fn(z_prev, step_inputs):
-                u_t, u_tp1, d_t, d_tp1, step_dt, eps_t = step_inputs
+                if stochastic:
+                    u_t, u_tp1, d_t, d_tp1, step_dt, eps_t = step_inputs
+                else:
+                    u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
                 u_mid = 0.5 * (u_t + u_tp1)
                 d_mid = 0.5 * (d_t + d_tp1)
                 path_features = self.latent_sde.build_path_features(
@@ -312,22 +311,21 @@ class DigitalTwin(eqx.Module):
                     params,
                     step_dt,
                 )
-                sigma = self.latent_sde.diffusion(z_prev, u_mid, d_mid, params)
-                z_next = z_next + sigma * jnp.sqrt(jnp.maximum(step_dt, 1e-8)) * eps_t
+                if stochastic:
+                    sigma = self.latent_sde.diffusion(z_prev, u_mid, d_mid, params)
+                    z_next = z_next + sigma * jnp.sqrt(jnp.maximum(step_dt, 1e-8)) * eps_t
                 return z_next, z_next
 
-            _, z_hist = jax.lax.scan(
-                step_fn,
-                z0,
-                (
-                    controls[:-1],
-                    controls[1:],
-                    disturbances[:-1],
-                    disturbances[1:],
-                    dt_steps,
-                    noise,
-                ),
+            scan_inputs = (
+                controls[:-1],
+                controls[1:],
+                disturbances[:-1],
+                disturbances[1:],
+                dt_steps,
             )
+            if stochastic:
+                scan_inputs = (*scan_inputs, noise)
+            _, z_hist = jax.lax.scan(step_fn, z0, scan_inputs)
             return jnp.concatenate([z0[None, :], z_hist], axis=0)
 
         if stochastic:
@@ -450,13 +448,31 @@ class DigitalTwin(eqx.Module):
         ts: Float[Array, "n_steps"],
         key: PRNGKeyArray,
         n_samples: int = 20,
+        stochastic: bool = True,
     ) -> Dict[str, Array]:
-        """Sample multiple trajectories for uncertainty quantification."""
+        """Sample multiple trajectories for uncertainty quantification.
+
+        When ``stochastic`` is false, each sample draws a damped encoder
+        initial latent and rolls out deterministically — used when SDE
+        training was never enabled so the diffusion net is untrained.
+        """
         keys = jax.random.split(key, n_samples)
 
         def predict_one(k):
-            result = self.predict(initial_state, controls, disturbances, params, ts, k)
-            return result["states"]
+            if stochastic:
+                result = self.predict(initial_state, controls, disturbances, params, ts, k)
+                return result["states"]
+            z0, _, _ = self.encode(initial_state, params, controls[0], k)
+            z_traj = self.rollout_latent(
+                ts,
+                z0,
+                controls,
+                params,
+                disturbances=disturbances,
+                stochastic=False,
+            )
+            decode_fn = jax.vmap(lambda z, u: self.decode(z, params, u), in_axes=(0, 0))
+            return decode_fn(z_traj, controls)
 
         states_samples = jax.vmap(predict_one)(keys)
 

@@ -236,3 +236,53 @@ def test_cstr_optimizer_rejects_unstable_candidates_without_runtime_warnings():
     assert not runtime_warnings
     assert np.isfinite(optimized["objective"])
     assert np.all(np.isfinite(optimized["predicted_states"]))
+
+
+def test_optimize_falls_back_when_model_rollout_is_non_finite(monkeypatch):
+    spec, simulator, _ = _load_system("heat_exchanger")
+    disturbances = default_disturbance_sequence(spec, 8)
+    nan_mean = np.full((8, spec.state_dim), np.nan, dtype=np.float32)
+
+    monkeypatch.setattr(
+        "dte.demo.engine.rollout_scenario",
+        lambda *args, **kwargs: {"mean": nan_mean, "source": "model"},
+    )
+    optimized = optimize_control_sequence(
+        spec,
+        simulator,
+        initial_state=np.asarray(spec.default_initial_state, dtype=np.float32),
+        disturbances=disturbances,
+        dt=0.1,
+        target_state=np.asarray(spec.default_initial_state, dtype=np.float32),
+        tracked_state_names=["T_hot", "T_cold"],
+        n_candidates=4,
+        seed=3,
+        model=object(),
+    )
+    assert optimized["source"] == "simulator"
+    assert np.all(np.isfinite(optimized["predicted_states"]))
+
+
+def test_optimize_uses_model_states_when_finite(monkeypatch):
+    spec, simulator, _ = _load_system("heat_exchanger")
+    disturbances = default_disturbance_sequence(spec, 8)
+    stub_mean = np.ones((8, spec.state_dim), dtype=np.float32) * 3.0
+
+    monkeypatch.setattr(
+        "dte.demo.engine.rollout_scenario",
+        lambda *args, **kwargs: {"mean": stub_mean, "source": "model"},
+    )
+    optimized = optimize_control_sequence(
+        spec,
+        simulator,
+        initial_state=np.asarray(spec.default_initial_state, dtype=np.float32),
+        disturbances=disturbances,
+        dt=0.1,
+        target_state=np.asarray(spec.default_initial_state, dtype=np.float32),
+        tracked_state_names=["T_hot", "T_cold"],
+        n_candidates=4,
+        seed=3,
+        model=object(),
+    )
+    assert optimized["source"] == "model"
+    assert np.allclose(optimized["predicted_states"], stub_mean)

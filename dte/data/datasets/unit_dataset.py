@@ -261,9 +261,8 @@ class TrajectoryDataset:
         n_val = max(1, min(n_val, n_trajectories - 1))
         n_train = n_trajectories - n_val
         perm = np.random.default_rng(int(seed)).permutation(n_trajectories)
-        idx = jnp.asarray(perm)
-        train_idx = idx[:n_train]
-        val_idx = idx[n_train:]
+        train_idx = perm[:n_train]
+        val_idx = perm[n_train:]
         
         # Create new datasets with split data
         train_data = {
