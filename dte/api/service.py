@@ -3,7 +3,8 @@
 Provides REST endpoints for:
 - ``GET  /health``         -- Health check + loaded system list
 - ``POST /predict``        -- Deterministic rollout (mean trajectory)
-- ``POST /ensemble``       -- Stochastic ensemble rollout (uncertainty bands)
+- ``POST /ensemble``       -- Ensemble uncertainty bands (SDE samples on unit
+  checkpoints; encoder initial-latent samples on the universal runtime)
 - ``POST /steady_state``   -- Find steady-state operating point
 
 Authentication
@@ -31,6 +32,7 @@ Environment variables
   release checkpoint, the API will use that shared runtime first
 - ``DTE_API_KEY``        Optional API key for authentication
 - ``DTE_CORS_ORIGINS``   Comma-separated allowed origins (default: localhost Vite/API)
+- ``DTE_MAX_ADAPT_JOBS`` Max concurrent customer-adaptation jobs (default: 1)
 """
 
 from __future__ import annotations
@@ -84,6 +86,7 @@ from dte.api.onboarding import (
     InvalidOnboardingIdError,
     build_job_workspace,
     build_onboarding_templates,
+    fail_stale_running_jobs,
     initialize_job_status,
     job_dir,
     load_completed_job_context,
@@ -127,6 +130,36 @@ _system_configs: Dict[str, dict] = {}
 _universal_runtime: UniversalDemoRuntime | None = None
 _startup_time: float = 0.0
 logger = logging.getLogger(__name__)
+_adapt_job_slots: threading.BoundedSemaphore | None = None
+_adapt_job_slots_lock = threading.Lock()
+
+
+def _max_adapt_jobs() -> int:
+    raw = os.environ.get("DTE_MAX_ADAPT_JOBS", "1")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, value)
+
+
+def _get_adapt_job_slots() -> threading.BoundedSemaphore:
+    global _adapt_job_slots
+    with _adapt_job_slots_lock:
+        if _adapt_job_slots is None:
+            _adapt_job_slots = threading.BoundedSemaphore(_max_adapt_jobs())
+        return _adapt_job_slots
+
+
+def _try_acquire_adapt_slot() -> bool:
+    return _get_adapt_job_slots().acquire(blocking=False)
+
+
+def _release_adapt_slot() -> None:
+    try:
+        _get_adapt_job_slots().release()
+    except ValueError:
+        pass
 
 
 def _register_system(system_config_path: str):
@@ -218,6 +251,10 @@ async def _lifespan(app: FastAPI):
         for sys_path in system_paths:
             _load_single_system_model(sys_path, model_path_env, train_config_env)
 
+    stale_jobs = fail_stale_running_jobs()
+    if stale_jobs:
+        print(f"[DTE API] Marked {len(stale_jobs)} in-flight adaptation job(s) failed after restart.")
+
     print(f"[DTE API] Ready.  Loaded systems: {list(_specs.keys())}")
     yield
     # Cleanup (nothing to do for JAX models)
@@ -231,8 +268,10 @@ app = FastAPI(
     title="Digital Twin Engine API",
     description=(
         "REST API for running physics-informed latent neural SDE digital twins.  "
-        "Provides deterministic and stochastic rollout, ensemble uncertainty "
-        "estimation, and steady-state queries."
+        "Provides deterministic rollout, ensemble uncertainty estimation "
+        "(stochastic SDE samples on unit checkpoints; encoder initial-latent "
+        "sampling over a deterministic latent ODE on the universal runtime), "
+        "and steady-state queries."
     ),
     version="0.1.0",
     lifespan=_lifespan,
@@ -409,6 +448,8 @@ def _start_onboarding_job(
                 progress_message="Customer adaptation failed.",
                 error=str(exc),
             )
+        finally:
+            _release_adapt_slot()
 
     threading.Thread(target=_runner, daemon=True).start()
 
@@ -543,6 +584,7 @@ def _ensemble_with_universal_runtime(
     params: np.ndarray,
     dt: float,
     n_samples: int,
+    seed: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     model = runtime.model
     context = _prepare_universal_inputs(
@@ -554,7 +596,7 @@ def _ensemble_with_universal_runtime(
         params=params,
         dt=dt,
     )
-    keys = jax.random.split(jax.random.PRNGKey(0), int(n_samples))
+    keys = jax.random.split(jax.random.PRNGKey(int(seed)), int(n_samples))
 
     def _one_sample(sample_key):
         z0 = model.encode(
@@ -889,6 +931,12 @@ async def onboarding_create_job(req: OnboardingCreateJobRequest):
             detail="Could not resolve a valid universal config_path for customer adaptation.",
         )
 
+    if not _try_acquire_adapt_slot():
+        raise HTTPException(
+            status_code=429,
+            detail="Too many adaptation jobs are already running. Retry after one completes.",
+        )
+
     job_id = new_id("job")
     job_directory = job_dir(job_id)
     preview_directory = Path(preview_record["artifacts"]["processed_data_dir"]).parent
@@ -902,17 +950,21 @@ async def onboarding_create_job(req: OnboardingCreateJobRequest):
         "log_path": str((job_directory / "logs" / "adapt_customer.log").resolve()),
     }
 
-    status_payload = initialize_job_status(
-        job_id=job_id,
-        preview_id=req.preview_id,
-        artifacts=job_artifacts,
-    )
-    _start_onboarding_job(
-        job_id,
-        preview_record,
-        req.model_dump(),
-        demo_config_path,
-    )
+    try:
+        status_payload = initialize_job_status(
+            job_id=job_id,
+            preview_id=req.preview_id,
+            artifacts=job_artifacts,
+        )
+        _start_onboarding_job(
+            job_id,
+            preview_record,
+            req.model_dump(),
+            demo_config_path,
+        )
+    except Exception:
+        _release_adapt_slot()
+        raise
     return OnboardingJobResponse.model_validate(status_payload)
 
 
@@ -1261,9 +1313,10 @@ async def predict(req: PredictRequest):
     dependencies=[Depends(_verify_api_key)],
 )
 async def ensemble(req: EnsembleRequest):
-    """Run stochastic SDE ensemble rollout to estimate uncertainty.
+    """Estimate prediction uncertainty from an ensemble of rollouts.
 
-    Returns mean, standard deviation, and 5th/95th percentile bands.
+    Unit checkpoints sample stochastic SDE trajectories. The universal runtime
+    samples the encoder's initial latent and rolls out a deterministic latent ODE.
     """
     runtime, spec = _get_inference_runtime_and_spec(req.system)
     controls = _validate_control_sequence(spec, req.controls)
@@ -1281,11 +1334,12 @@ async def ensemble(req: EnsembleRequest):
             params=params,
             dt=float(req.dt),
             n_samples=int(req.n_samples),
+            seed=int(req.seed),
         )
     else:
         model = runtime
         ts = _build_time_array(controls.shape[0], req.dt)
-        base_key = jax.random.PRNGKey(0)
+        base_key = jax.random.PRNGKey(int(req.seed))
         enc_key, *sde_keys = jax.random.split(base_key, req.n_samples + 1)
         _, z_mean, _ = model.encode(
             jnp.asarray(initial_state, dtype=jnp.float32),

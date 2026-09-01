@@ -21,12 +21,13 @@ def _assert_uniform_timesteps(dataset: TrajectoryDataset | None) -> None:
     """Physics residuals currently use one scalar dt for the whole batch."""
     if dataset is None:
         return
-    time = np.asarray(dataset.data["time"])
+    time = np.asarray(dataset.data["time"], dtype=np.float64)
     if time.ndim != 2 or time.shape[1] < 2:
         return
     dts = np.diff(time, axis=1)
-    reference = dts.reshape(-1)[0]
-    if not np.allclose(dts, reference, rtol=1e-4, atol=1e-8):
+    reference = float(np.median(dts))
+    atol = 1e-2 * max(abs(reference), 1e-12)
+    if not np.allclose(dts, reference, rtol=0.0, atol=atol):
         raise ValueError(
             "Physics residual dt is taken from ts[0, 1] - ts[0, 0]; "
             "dataset timesteps are not uniform. Ingested real data must be "

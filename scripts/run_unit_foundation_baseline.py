@@ -74,13 +74,14 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _attach_per_system_losses(summary: dict[str, Any], trainer, losses) -> None:
+def _attach_per_system_losses(summary: dict[str, Any], trainer, losses) -> dict[str, Any]:
     key = (
         "per_system_val_losses"
         if getattr(trainer, "val_dataset", None) is not None
         else "per_system_train_fallback"
     )
     summary[key] = losses
+    return summary
 
 
 def _read_per_system_losses(summary: dict[str, Any]) -> dict[str, Any]:
@@ -945,14 +946,11 @@ def _run_transfer_benchmark(
                 "rollout_metrics": warm_rollout,
             },
             "scratch": {
-                "train_summary": {
-                    **scratch_train_summary,
-                    (
-                        "per_system_val_losses"
-                        if scratch_eval_trainer.val_dataset is not None
-                        else "per_system_train_fallback"
-                    ): scratch_per_system,
-                },
+                "train_summary": _attach_per_system_losses(
+                    {**scratch_train_summary},
+                    scratch_eval_trainer,
+                    scratch_per_system,
+                ),
                 "forecast_metrics": scratch_forecast,
                 "rollout_metrics": scratch_rollout,
             },

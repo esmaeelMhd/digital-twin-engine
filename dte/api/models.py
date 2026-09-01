@@ -82,7 +82,8 @@ class PredictResponse(BaseModel):
 class EnsembleRequest(BaseModel):
     """Request body for the /ensemble endpoint.
 
-    Runs N stochastic SDE samples to estimate prediction uncertainty.
+    Unit checkpoints sample stochastic SDE rollouts. Universal checkpoints
+    sample the encoder's initial latent over a deterministic latent ODE.
     """
 
     system: str = Field("cstr", description="Registered system name (e.g. 'cstr', 'heat_exchanger', 'two_tank').")
@@ -91,7 +92,8 @@ class EnsembleRequest(BaseModel):
     disturbances: Optional[List[List[float]]] = Field(None, description="Disturbance sequence, shape [T, disturbance_dim]. Zeros if omitted.")
     params: Optional[List[float]] = Field(None, description="Parameter vector (length = param_dim). Ones if omitted.")
     dt: float = Field(0.1, gt=0, description="Sampling interval in seconds.")
-    n_samples: int = Field(50, ge=1, le=1000, description="Number of stochastic SDE samples for uncertainty estimation.")
+    n_samples: int = Field(50, ge=1, le=1000, description="Number of ensemble samples for uncertainty estimation.")
+    seed: int = Field(0, ge=0, description="PRNG seed for ensemble sampling.")
 
 
 class EnsembleResponse(BaseModel):

@@ -1,5 +1,7 @@
 """Tests for trainer failure detection helpers."""
 
+import numpy as np
+import pytest
 import jax
 import jax.numpy as jnp
 import yaml
@@ -10,6 +12,7 @@ from dte.simulators.registry import get_system_spec
 from dte.training.shared.losses import LossComputer
 from dte.training.unit.trainer import (
     Trainer,
+    _assert_uniform_timesteps,
     _format_non_finite_reason,
     _non_finite_loss_names,
 )
@@ -388,3 +391,19 @@ def test_cusum_slack_is_relative_to_reference():
             alarmed = True
             break
     assert alarmed is True
+
+
+class _TimeDataset:
+    def __init__(self, time):
+        self.data = {"time": time}
+
+
+def test_assert_uniform_timesteps_accepts_long_float32_grid():
+    time = np.linspace(0.0, 500.0, 5000, dtype=np.float32)[None, :]
+    _assert_uniform_timesteps(_TimeDataset(time))
+
+
+def test_assert_uniform_timesteps_rejects_irregular_grid():
+    time = np.asarray([[0.0, 0.1, 0.5, 0.6]], dtype=np.float32)
+    with pytest.raises(ValueError, match="not uniform"):
+        _assert_uniform_timesteps(_TimeDataset(time))

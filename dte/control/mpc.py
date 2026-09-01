@@ -1,12 +1,76 @@
 """Model Predictive Control using sampling-based optimization (Cross-Entropy Method)."""
 
 from typing import Dict
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
 from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.cstr import CSTRSimulator
+
+
+def _sequence_cost(
+    predicted_states: Float[Array, "horizon state_dim"],
+    control_sequence: Float[Array, "horizon control_dim"],
+    setpoints: Float[Array, "state_dim"],
+    u_prev: Float[Array, "control_dim"],
+    state_weights: Float[Array, "state_dim"],
+    control_weights: Float[Array, "control_dim"],
+    terminal_weight: Float[Array, ""],
+) -> Float[Array, ""]:
+    """Scalar CEM tracking cost for one candidate control sequence."""
+
+    state_errors = predicted_states - setpoints[None, :]
+    state_cost = jnp.sum((state_errors ** 2) * state_weights[None, :])
+    control_changes = jnp.diff(
+        jnp.concatenate([u_prev[None, :], control_sequence], axis=0),
+        axis=0,
+    )
+    control_cost = jnp.sum((control_changes ** 2) * control_weights[None, :])
+    terminal_error = predicted_states[-1] - setpoints
+    terminal_cost = terminal_weight * jnp.sum((terminal_error ** 2) * state_weights)
+    return state_cost + control_cost + terminal_cost
+
+
+@eqx.filter_jit
+def _candidate_costs(
+    model: DigitalTwin,
+    candidates: Float[Array, "n_candidates horizon control_dim"],
+    current_state: Float[Array, "state_dim"],
+    params: Float[Array, "param_dim"],
+    setpoints: Float[Array, "state_dim"],
+    disturbance_forecast: Float[Array, "horizon disturbance_dim"],
+    ts: Float[Array, "horizon"],
+    u_prev: Float[Array, "control_dim"],
+    state_weights: Float[Array, "state_dim"],
+    control_weights: Float[Array, "control_dim"],
+    terminal_weight: Float[Array, ""],
+) -> Float[Array, "n_candidates"]:
+    """Vectorized candidate evaluation; compiled once across CEM iterations."""
+
+    def evaluate_candidate(controls):
+        z0, _, _ = model.encode(current_state, params, controls[0], None)
+        z_traj = model.rollout_latent(
+            ts,
+            z0,
+            controls,
+            params,
+            disturbances=disturbance_forecast,
+        )
+        decode_fn = jax.vmap(lambda z, u: model.decode(z, params, u), in_axes=(0, 0))
+        pred_states = decode_fn(z_traj, controls)
+        return _sequence_cost(
+            pred_states,
+            controls,
+            setpoints,
+            u_prev,
+            state_weights,
+            control_weights,
+            terminal_weight,
+        )
+
+    return jax.vmap(evaluate_candidate)(candidates)
 
 
 class SamplingMPC:
@@ -71,24 +135,16 @@ class SamplingMPC:
         Returns:
             Scalar cost
         """
-        # State tracking cost
-        state_errors = predicted_states - setpoints[None, :]
-        state_cost = jnp.sum((state_errors ** 2) * self.state_weights[None, :])
-        
-        # Control effort cost (penalize changes from previous control)
-        control_changes = jnp.diff(
-            jnp.concatenate([u_prev[None, :], control_sequence], axis=0),
-            axis=0
+        return _sequence_cost(
+            predicted_states,
+            control_sequence,
+            setpoints,
+            u_prev,
+            self.state_weights,
+            self.control_weights,
+            self.terminal_weight,
         )
-        control_cost = jnp.sum((control_changes ** 2) * self.control_weights[None, :])
-        
-        # Terminal cost
-        terminal_error = predicted_states[-1] - setpoints
-        terminal_cost = self.terminal_weight * jnp.sum((terminal_error ** 2) * self.state_weights)
-        
-        return state_cost + control_cost + terminal_cost
-    
-    @jax.jit
+
     def solve(
         self,
         current_state: Float[Array, "state_dim"],
@@ -128,57 +184,46 @@ class SamplingMPC:
             )
         
         std = jnp.ones_like(mean) * self.initial_std
-        
+        ts = jnp.arange(self.horizon) * dt
+
         # CEM iterations
-        for iteration in range(self.n_iterations):
+        for _iteration in range(self.n_iterations):
             key, subkey = jax.random.split(key)
-            
+
             # Sample candidate control sequences
             keys = jax.random.split(subkey, self.n_candidates)
             noise = jax.vmap(lambda k: jax.random.normal(k, shape=mean.shape))(keys)
             candidates = mean[None, :, :] + std[None, :, :] * noise
-            
+
             # Clip to bounds
             candidates = jnp.clip(
                 candidates,
                 self.control_bounds[:, 0][None, None, :],
                 self.control_bounds[:, 1][None, None, :],
             )
-            
-            # Evaluate each candidate (vectorized)
-            def evaluate_candidate(controls):
-                # Create time points
-                ts = jnp.arange(self.horizon) * dt
-                
-                # Predict using mean trajectory (deterministic)
-                z0, _, _ = self.model.encode(current_state, params, controls[0], None)
-                z_traj = self.model.rollout_latent(
-                    ts,
-                    z0,
-                    controls,
-                    params,
-                    disturbances=disturbance_forecast,
-                )
-                
-                # Decode
-                decode_fn = jax.vmap(lambda z, u: self.model.decode(z, params, u), in_axes=(0, 0))
-                pred_states = decode_fn(z_traj, controls)
-                
-                # Compute cost
-                cost = self.compute_cost(pred_states, controls, setpoints, u_prev)
-                return cost
-            
-            # Evaluate all candidates in parallel
-            costs = jax.vmap(evaluate_candidate)(candidates)
-            
+
+            costs = _candidate_costs(
+                self.model,
+                candidates,
+                current_state,
+                params,
+                setpoints,
+                disturbance_forecast,
+                ts,
+                u_prev,
+                self.state_weights,
+                self.control_weights,
+                self.terminal_weight,
+            )
+
             # Select elite samples
             elite_indices = jnp.argsort(costs)[:self.n_elite]
             elite_candidates = candidates[elite_indices]
-            
+
             # Update mean and std
             mean = jnp.mean(elite_candidates, axis=0)
             std = jnp.std(elite_candidates, axis=0) + 1e-6  # Add small value for numerical stability
-        
+
         return mean
     
     def step(

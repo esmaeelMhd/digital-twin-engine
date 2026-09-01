@@ -370,7 +370,7 @@ def main() -> None:
         default=["heat_exchanger"],
         help=(
             "Systems to compare. Defaults to the representative heat-exchanger "
-            "milestone proof; add systems explicitly for broader ablations."
+            "single-seed comparison; add seeds/systems for stronger evidence."
         ),
     )
     parser.add_argument(

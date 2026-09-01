@@ -46,7 +46,7 @@ def test_cstr_law_bundle_exposes_features_deltas_and_residuals():
     assert spec.name == "cstr"
     assert len(bundle.modules) == 2
     assert "chemistry_primary_reaction_reaction_rate" in bundle.feature_names()
-    assert "thermo_liquid_cp_enthalpy_transform_consistency" in bundle.residual_names()
+    assert "thermo_liquid_cp_enthalpy_transform_consistency" not in bundle.residual_names()
 
     state = jnp.asarray([0.8, 0.2, 330.0, 300.0], dtype=jnp.float32)
     control = jnp.asarray([50.0, 300.0], dtype=jnp.float32)
@@ -96,3 +96,37 @@ def test_biology_law_bundle_example_is_usable():
     assert delta.shape == (spec.state_dim,)
     assert float(delta[1]) != 0.0
     assert set(residuals) == set(bundle.residual_names())
+
+
+def test_chemistry_state_delta_residual_is_gated_by_closed_system_flag():
+    from dte.laws.chemistry import ChemistryLaw
+
+    kwargs = dict(
+        module_name="primary_reaction",
+        state_dim=4,
+        stoichiometry=jnp.asarray([-1.0, 1.0, 0.0, 0.0], dtype=jnp.float32),
+        reactant_indices=(0,),
+        reaction_orders=jnp.asarray([1.0], dtype=jnp.float32),
+        temperature_index=2,
+        pre_exponential=0.75,
+        activation_energy_over_r=1200.0,
+        heat_of_reaction=-2.5,
+        thermal_state_index=2,
+        thermal_gain=0.01,
+    )
+    open_law = ChemistryLaw(**kwargs, closed_system=False)
+    closed_law = ChemistryLaw(**kwargs, closed_system=True)
+    states = jnp.asarray(
+        [[0.8, 0.2, 330.0, 300.0], [0.79, 0.21, 330.2, 300.1]],
+        dtype=jnp.float32,
+    )
+    controls = jnp.asarray([[50.0, 300.0], [50.0, 300.0]], dtype=jnp.float32)
+    disturbances = jnp.asarray([[1.0, 320.0], [1.0, 320.0]], dtype=jnp.float32)
+
+    open_residuals = open_law.trajectory_residuals(states, controls, disturbances, 0.1, None)
+    closed_residuals = closed_law.trajectory_residuals(states, controls, disturbances, 0.1, None)
+
+    assert float(open_residuals["state_delta_consistency"][0]) == 0.0
+    assert float(closed_residuals["state_delta_consistency"][0]) > 0.0
+    assert "nonnegative_rate" in open_residuals
+    assert "nonnegative_rate" in closed_residuals

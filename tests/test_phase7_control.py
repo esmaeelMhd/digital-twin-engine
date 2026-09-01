@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from dte.control.mpc import SamplingMPC
 from dte.control.mpc_interface import MPCInterfaceConfig, ProcessMPCInterface
 from dte.control.rl_env import ProcessControlEnv, ProcessControlEnvConfig
 from dte.control.state_correction import StateCorrectionConfig, StateCorrectionHook
@@ -333,3 +334,50 @@ def test_run_mpc_pid_builder_uses_requested_cstr_setpoints():
     assert controller.pid_Ca.setpoint == pytest.approx(0.82)
     assert controller.pid_T.setpoint == pytest.approx(338.0)
     assert controller.dt == pytest.approx(0.2)
+
+
+def test_sampling_mpc_step_returns_finite_control_within_bounds():
+    spec, _, _ = _load_system("cstr")
+    model = DigitalTwin.from_config(_tiny_model_config(), jax.random.PRNGKey(0), system_spec=spec)
+    controller = SamplingMPC(
+        model,
+        {
+            "mpc": {
+                "horizon": 4,
+                "n_candidates": 8,
+                "n_elite": 2,
+                "n_iterations": 2,
+                "initial_std": 0.3,
+                "control_bounds": {"F_in": [10.0, 100.0], "Tc_in": [280.0, 320.0]},
+                "cost_weights": {
+                    "state": [0.0, 0.0, 10.0, 0.0],
+                    "control_effort": [0.01, 0.1],
+                    "terminal": 5.0,
+                },
+            }
+        },
+    )
+    current_state = jnp.asarray(spec.default_initial_state, dtype=jnp.float32)
+    params = jnp.ones(spec.param_dim, dtype=jnp.float32)
+    disturbance_forecast = jnp.tile(
+        jnp.asarray(spec.default_nominal_disturbance, dtype=jnp.float32)[None, :],
+        (4, 1),
+    )
+    u_prev = jnp.asarray([50.0, 300.0], dtype=jnp.float32)
+
+    control = controller.step(
+        current_state,
+        params,
+        current_state,
+        disturbance_forecast,
+        0.1,
+        jax.random.PRNGKey(1),
+        u_prev,
+    )
+
+    assert control.shape == (2,)
+    assert bool(jnp.all(jnp.isfinite(control)))
+    assert float(control[0]) >= 10.0 - 1e-5
+    assert float(control[0]) <= 100.0 + 1e-5
+    assert float(control[1]) >= 280.0 - 1e-5
+    assert float(control[1]) <= 320.0 + 1e-5

@@ -49,6 +49,37 @@ import numpy as np
 from dte.simulators.base import SystemSpec
 
 
+def _nan_run_gap_mask(
+    ts_seconds: np.ndarray,
+    is_nan: np.ndarray,
+    t_uniform: np.ndarray,
+    max_gap_fill: float,
+) -> np.ndarray:
+    """Flag uniform-grid points that fall inside long NaN outages.
+
+    Timestamp-spacing gaps are handled separately. This covers the case where
+    samples keep arriving on a regular clock but a sensor is NaN for longer
+    than ``max_gap_fill``.
+    """
+    mask = np.zeros(len(t_uniform), dtype=bool)
+    if ts_seconds.size == 0 or not np.any(is_nan):
+        return mask
+
+    padded = np.concatenate([[False], np.asarray(is_nan, dtype=bool), [False]])
+    edges = np.diff(padded.astype(np.int8))
+    starts = np.where(edges == 1)[0]
+    ends = np.where(edges == -1)[0]
+    n = len(ts_seconds)
+    for start, end in zip(starts, ends):
+        prev_idx = start - 1
+        next_idx = end
+        t_left = ts_seconds[prev_idx] if prev_idx >= 0 else ts_seconds[0]
+        t_right = ts_seconds[next_idx] if next_idx < n else ts_seconds[-1]
+        if (t_right - t_left) > max_gap_fill:
+            mask |= (t_uniform > t_left) & (t_uniform < t_right)
+    return mask
+
+
 class RealDataIngestion:
     """Ingest real-world plant data and convert to DTE HDF5 format.
 
@@ -253,6 +284,9 @@ class RealDataIngestion:
                 gap_end_t = ts_seconds[gap_idx + 1]
                 in_gap = (t_uniform > gap_start_t) & (t_uniform < gap_end_t)
                 large_gap_mask |= in_gap
+            large_gap_mask |= _nan_run_gap_mask(
+                ts_seconds, is_nan, t_uniform, self.max_gap_fill
+            )
 
             if self.drop_large_gaps:
                 # Replace with NaN, handled during segment extraction
