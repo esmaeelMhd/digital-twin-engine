@@ -770,7 +770,7 @@ def compare_scenarios(
         model=model,
         params=params,
         n_samples=n_samples,
-        seed=seed + 1,
+        seed=seed,
     )
     final_delta = candidate["mean"][-1] - baseline["mean"][-1]
     mean_abs_delta = np.mean(np.abs(candidate["mean"] - baseline["mean"]), axis=0)
@@ -804,8 +804,16 @@ def optimize_control_sequence(
     tracked_state_names: list[str] | None = None,
     n_candidates: int = 48,
     seed: int = 0,
+    model: DigitalTwin | UniversalDemoRuntime | None = None,
+    params: np.ndarray | None = None,
+    n_samples: int = 16,
 ) -> dict[str, Any]:
-    """Simple random-shooting demo optimizer over ramp control sequences."""
+    """Simple random-shooting demo optimizer over ramp control sequences.
+
+    Candidates are screened with the physical simulator. When ``model`` is
+    provided, the winning plan is re-evaluated with that model so
+    ``predicted_states`` come from the digital twin.
+    """
 
     disturbances = _clip_disturbances(spec, np.asarray(disturbances, dtype=np.float32))
     n_steps = disturbances.shape[0]
@@ -909,12 +917,31 @@ def optimize_control_sequence(
             best_controls = controls
             best_states = states
 
+    source = "simulator"
+    predicted_states = best_states
+    if model is not None:
+        rollout = rollout_scenario(
+            spec,
+            simulator,
+            initial_state=np.asarray(initial_state, dtype=np.float32),
+            controls=best_controls,
+            disturbances=disturbances,
+            dt=dt,
+            model=model,
+            params=params,
+            n_samples=n_samples,
+            seed=seed,
+        )
+        predicted_states = np.asarray(rollout["mean"], dtype=np.float32)
+        source = "model"
+
     return {
         "control_sequence": best_controls,
-        "predicted_states": best_states,
+        "predicted_states": predicted_states,
         "objective": float(best_cost),
         "tracked_state_names": tracked_state_names,
-        "constraint_summary": constraint_summary(spec, best_states),
+        "constraint_summary": constraint_summary(spec, predicted_states),
+        "source": source,
     }
 
 

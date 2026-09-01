@@ -265,6 +265,11 @@ export function DemoWorkspace({
             {optimizedResult ? (
               <div className={styles.optimizedBlock}>
                 <h4 className={styles.optimizedTitle}>Recommended stabilization plan</h4>
+                <div className="helper-note">
+                  {optimizedResult.source === 'model'
+                    ? 'Source: digital-twin model. The winning schedule was re-evaluated with the loaded runtime.'
+                    : 'Source: physical simulator. The winning schedule was scored with the process simulator.'}
+                </div>
                 <div className="metric-grid">
                   {editableControlNames.map((controlName) => {
                     const index = demo.system_spec.control_names.indexOf(controlName);

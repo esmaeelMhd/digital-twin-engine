@@ -80,6 +80,7 @@ class Decoder(eqx.Module):
     output_layer: eqx.nn.Linear
 
     # Normalization for conditioning inputs
+    control_center: Float[Array, "control_dim"]
     control_scale: Float[Array, "control_dim"]
     param_scale: float = eqx.field(static=True)
 
@@ -96,6 +97,7 @@ class Decoder(eqx.Module):
         hidden_dim: int = 128,
         n_layers: int = 3,
         constraints: List[dict] | None = None,
+        control_center: list | None = None,
         control_scale: list | None = None,
         param_scale: float = 0.1,
         *,
@@ -106,7 +108,8 @@ class Decoder(eqx.Module):
             constraints: List of constraint dicts applied to raw decoder output.
                 Each dict must have ``"type"`` and ``"indices"`` keys.
                 Defaults to no constraints (pass-through).
-            control_scale: Per-element scale applied to control before concat.
+            control_center: Per-element center subtracted from control before scale.
+            control_scale: Per-element scale applied to centered control before concat.
             param_scale: Scalar scale applied to log-params before concat.
         """
         keys = jax.random.split(key, n_layers + 1)
@@ -123,6 +126,9 @@ class Decoder(eqx.Module):
         self.constraints = tuple(
             _freeze_constraint(item) for item in (constraints or [])
         )
+        self.control_center = jnp.array(
+            control_center if control_center is not None else [0.0] * control_dim
+        )
         self.control_scale = jnp.array(
             control_scale if control_scale is not None else [1.0] * control_dim
         )
@@ -136,7 +142,7 @@ class Decoder(eqx.Module):
     ) -> Float[Array, "state_dim"]:
         """Decode latent vector to physical state."""
         log_params = jnp.sign(params) * jnp.log1p(jnp.abs(params)) * self.param_scale
-        scaled_control = control * self.control_scale
+        scaled_control = (control - self.control_center) * self.control_scale
 
         x = jnp.concatenate([z, log_params, scaled_control])
 

@@ -7,6 +7,8 @@ import yaml
 import tempfile
 import os
 
+import equinox as eqx
+
 from dte.models.unit.digital_twin import DigitalTwin
 from dte.simulators.registry import get_system_spec
 
@@ -212,6 +214,41 @@ def test_jit_compatibility():
     
     # Should be identical (same key)
     assert jnp.allclose(result1["states"], result2["states"], atol=1e-5)
+
+
+def test_zero_diffusion_stochastic_matches_deterministic():
+    """With a learned solver, zeroed diffusion must match the deterministic scan."""
+    config = load_config()
+    key = jax.random.PRNGKey(7)
+    model = build_model(config, key)
+    assert model.latent_sde.learned_solver_enabled
+    model = eqx.tree_at(
+        lambda current: current.latent_sde.diffusion.scale,
+        model,
+        jnp.zeros_like(model.latent_sde.diffusion.scale),
+    )
+
+    n_steps = 20
+    initial_state = jnp.array([0.5, 0.5, 350.0, 300.0])
+    controls = jax.random.uniform(key, shape=(n_steps, 2))
+    disturbances = jax.random.uniform(key, shape=(n_steps, 2))
+    params = jnp.ones(6)
+    ts = jnp.linspace(0.0, 2.0, n_steps)
+    _, z_mean, _ = model.encode(initial_state, params, controls[0], None)
+
+    z_det = model.rollout_latent(
+        ts, z_mean, controls, params, disturbances=disturbances, stochastic=False
+    )
+    z_stoch = model.rollout_latent(
+        ts,
+        z_mean,
+        controls,
+        params,
+        disturbances=disturbances,
+        key=jax.random.PRNGKey(99),
+        stochastic=True,
+    )
+    assert jnp.allclose(z_det, z_stoch, atol=1e-5)
 
 
 if __name__ == "__main__":

@@ -176,6 +176,7 @@ def test_compare_and_optimize_control_sequences():
     assert "final_state_delta_norm" in comparison["summary"]
     assert optimized["control_sequence"].shape == (12, spec.control_dim)
     assert optimized["predicted_states"].shape == (12, spec.state_dim)
+    assert optimized["source"] == "simulator"
     assert np.isfinite(optimized["objective"])
 
 

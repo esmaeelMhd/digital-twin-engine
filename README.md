@@ -69,7 +69,7 @@ graph LR
 7. **Physics Registry** — Resolves system-specific physics losses and evaluation diagnostics
 8. **Universal Backbone** — Shared grouped-state model for one checkpoint across multiple systems
 
-**Total Parameters:** ~120K
+**Total Parameters:** ~343K with the default CSTR config (exact count printed at startup)
 
 ## Supported Systems
 
@@ -401,7 +401,7 @@ digital-twin-engine/
 |---|---|---|
 | Stochastic SDE training | `sde_training.enabled` | Euler–Maruyama path plus L2 diffusion-magnitude regularisation |
 | Curriculum learning | `curriculum.enabled` | seq_len ramps from `initial_seq_len` to `final_seq_len` over `warmup_epochs` |
-| Teacher-forcing annealing | `teacher_forcing.initial_ratio` | Shifts weight from one-step to free-rollout loss |
+| Teacher-forcing annealing | `teacher_forcing.initial_ratio` | Implemented; shipped default configs disable it (`one_step: 0.0`) |
 
 ### Online Adaptation
 

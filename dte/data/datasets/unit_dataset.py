@@ -238,11 +238,17 @@ class TrajectoryDataset:
         stats = self.get_normalization_stats()
         return params * (stats["param_std"] + 1e-8) + stats["param_mean"]
 
-    def split(self, val_fraction: float = 0.2) -> tuple["TrajectoryDataset", "TrajectoryDataset"]:
+    def split(
+        self, val_fraction: float = 0.2, *, seed: int = 0
+    ) -> tuple["TrajectoryDataset", "TrajectoryDataset"]:
         """Split dataset into train and validation.
+
+        Trajectories are randomly permuted with a fixed seed before the
+        head/tail split so the validation set is not just the last files.
         
         Args:
             val_fraction: Fraction for validation set
+            seed: PRNG seed for the trajectory permutation
             
         Returns:
             Tuple of (train_dataset, val_dataset)
@@ -254,23 +260,27 @@ class TrajectoryDataset:
         n_val = int(n_trajectories * val_fraction)
         n_val = max(1, min(n_val, n_trajectories - 1))
         n_train = n_trajectories - n_val
+        perm = np.random.default_rng(int(seed)).permutation(n_trajectories)
+        idx = jnp.asarray(perm)
+        train_idx = idx[:n_train]
+        val_idx = idx[n_train:]
         
         # Create new datasets with split data
         train_data = {
-            "states": self.data["states"][:n_train],
-            "controls": self.data["controls"][:n_train],
-            "disturbances": self.data["disturbances"][:n_train],
-            "params": self.data["params"][:n_train],
-            "time": self.data["time"][:n_train],
+            "states": self.data["states"][train_idx],
+            "controls": self.data["controls"][train_idx],
+            "disturbances": self.data["disturbances"][train_idx],
+            "params": self.data["params"][train_idx],
+            "time": self.data["time"][train_idx],
             "normalization": self.data["normalization"],
         }
         
         val_data = {
-            "states": self.data["states"][n_train:],
-            "controls": self.data["controls"][n_train:],
-            "disturbances": self.data["disturbances"][n_train:],
-            "params": self.data["params"][n_train:],
-            "time": self.data["time"][n_train:],
+            "states": self.data["states"][val_idx],
+            "controls": self.data["controls"][val_idx],
+            "disturbances": self.data["disturbances"][val_idx],
+            "params": self.data["params"][val_idx],
+            "time": self.data["time"][val_idx],
             "normalization": self.data["normalization"],
         }
         

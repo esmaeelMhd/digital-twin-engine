@@ -75,7 +75,8 @@ Training and evaluation resolve system-specific physics through
   into the jitted unit trainer; do not read `self.step` inside `@eqx.filter_jit`.
 - **Curriculum learning** — `seq_len` ramps from `curriculum.initial_seq_len` to
   `curriculum.final_seq_len` over `curriculum.warmup_epochs`.
-- **Teacher-forcing annealing** — one-step loss weight anneals from
+- **Teacher-forcing annealing** — implemented; shipped default configs disable it
+  (`one_step: 0.0`). When enabled, one-step loss weight anneals from
   `teacher_forcing.initial_ratio` to `teacher_forcing.final_ratio` over
   `teacher_forcing.anneal_epochs`. Pass the weight as a traced scalar; do not
   mutate `LossComputer.w_one_step` across jitted steps.

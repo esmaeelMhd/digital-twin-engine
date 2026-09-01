@@ -41,6 +41,7 @@ def _clear_service_state():
     service._models.clear()
     service._specs.clear()
     service._system_configs.clear()
+    service._model_sde_enabled.clear()
     service._universal_runtime = None
 
 
@@ -144,6 +145,7 @@ def test_demo_catalog_and_routes_work_without_loaded_models(monkeypatch):
         )
         assert optimize_response.status_code == 200
         assert len(optimize_response.json()["control_sequence"]) == 10
+        assert optimize_response.json()["source"] == "simulator"
 
         compare_response = client.post(
             "/demo/compare_scenarios",
@@ -217,3 +219,4 @@ def test_demo_and_inference_routes_use_universal_runtime_when_configured(monkeyp
         ensemble_json = ensemble_response.json()
         assert len(ensemble_json["mean"]) == 8
         assert len(ensemble_json["p95"]) == 8
+        assert ensemble_json["uncertainty_source"] == "encoder_sampling"

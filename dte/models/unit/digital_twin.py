@@ -142,6 +142,7 @@ class DigitalTwin(eqx.Module):
             hidden_dim=hidden_dim,
             n_layers=n_layers,
             constraints=decoder_constraints,
+            control_center=control_center,
             control_scale=control_scale,
             param_scale=param_scale,
             key=key_dec,
@@ -178,7 +179,7 @@ class DigitalTwin(eqx.Module):
             self_correcting_weight=float(correction_cfg.get("weight", 0.05)),
             correction_hidden_dim=int(correction_cfg.get("hidden_dim", 64)),
             correction_layers=int(correction_cfg.get("n_layers", 2)),
-            path_representation=str(neural_cde_cfg.get("path_representation", "delta")),
+            path_representation=str(neural_cde_cfg.get("path_representation", "rate")),
             key=key_sde,
         )
 
@@ -259,43 +260,25 @@ class DigitalTwin(eqx.Module):
 
         saveat = diffrax.SaveAt(ts=ts)
 
-        if stochastic:
-            if key is None:
-                raise ValueError("rollout_latent(stochastic=True) requires a PRNG key.")
-
-            def diffusion_fn(t, z, args):
-                u = control_interp.evaluate(t)
-                d = disturbance_at_time(t)
-                return jnp.diag(self.latent_sde.diffusion(z, u, d, params))
-
-            dt0 = base_dt / 2.0
-            brownian_motion = diffrax.VirtualBrownianTree(
-                t0=ts[0],
-                t1=ts[-1],
-                tol=dt0 / 2.0,
-                shape=(self.latent_sde.latent_dim,),
-                key=key,
-            )
-            drift_term = diffrax.ODETerm(drift_fn)
-            diffusion_term = diffrax.ControlTerm(diffusion_fn, brownian_motion)
-            terms = diffrax.MultiTerm(drift_term, diffusion_term)
-            solution = diffrax.diffeqsolve(
-                terms,
-                diffrax.Euler(),
-                t0=ts[0],
-                t1=ts[-1],
-                dt0=dt0,
-                y0=z0,
-                saveat=saveat,
-                max_steps=len(ts) * 10,
-            )
-            return solution.ys
-
         if self.latent_sde.learned_solver_enabled:
+            if stochastic and key is None:
+                raise ValueError("rollout_latent(stochastic=True) requires a PRNG key.")
             dt_steps = ts[1:] - ts[:-1]
+            n_intervals = dt_steps.shape[0]
+            if stochastic:
+                noise = jax.random.normal(
+                    key,
+                    (n_intervals, self.latent_sde.latent_dim),
+                    dtype=z0.dtype,
+                )
+            else:
+                noise = jnp.zeros(
+                    (n_intervals, self.latent_sde.latent_dim),
+                    dtype=z0.dtype,
+                )
 
             def step_fn(z_prev, step_inputs):
-                u_t, u_tp1, d_t, d_tp1, step_dt = step_inputs
+                u_t, u_tp1, d_t, d_tp1, step_dt, eps_t = step_inputs
                 u_mid = 0.5 * (u_t + u_tp1)
                 d_mid = 0.5 * (d_t + d_tp1)
                 path_features = self.latent_sde.build_path_features(
@@ -329,14 +312,55 @@ class DigitalTwin(eqx.Module):
                     params,
                     step_dt,
                 )
+                sigma = self.latent_sde.diffusion(z_prev, u_mid, d_mid, params)
+                z_next = z_next + sigma * jnp.sqrt(jnp.maximum(step_dt, 1e-8)) * eps_t
                 return z_next, z_next
 
             _, z_hist = jax.lax.scan(
                 step_fn,
                 z0,
-                (controls[:-1], controls[1:], disturbances[:-1], disturbances[1:], dt_steps),
+                (
+                    controls[:-1],
+                    controls[1:],
+                    disturbances[:-1],
+                    disturbances[1:],
+                    dt_steps,
+                    noise,
+                ),
             )
             return jnp.concatenate([z0[None, :], z_hist], axis=0)
+
+        if stochastic:
+            if key is None:
+                raise ValueError("rollout_latent(stochastic=True) requires a PRNG key.")
+
+            def diffusion_fn(t, z, args):
+                u = control_interp.evaluate(t)
+                d = disturbance_at_time(t)
+                return jnp.diag(self.latent_sde.diffusion(z, u, d, params))
+
+            dt0 = base_dt / 2.0
+            brownian_motion = diffrax.VirtualBrownianTree(
+                t0=ts[0],
+                t1=ts[-1],
+                tol=dt0 / 2.0,
+                shape=(self.latent_sde.latent_dim,),
+                key=key,
+            )
+            drift_term = diffrax.ODETerm(drift_fn)
+            diffusion_term = diffrax.ControlTerm(diffusion_fn, brownian_motion)
+            terms = diffrax.MultiTerm(drift_term, diffusion_term)
+            solution = diffrax.diffeqsolve(
+                terms,
+                diffrax.Euler(),
+                t0=ts[0],
+                t1=ts[-1],
+                dt0=dt0,
+                y0=z0,
+                saveat=saveat,
+                max_steps=len(ts) * 10,
+            )
+            return solution.ys
 
         solution = diffrax.diffeqsolve(
             diffrax.ODETerm(drift_fn),
@@ -495,6 +519,8 @@ class DigitalTwin(eqx.Module):
         ):
             if hasattr(encoder, name):
                 frozen.append(getattr(encoder, name))
+        if hasattr(self.decoder, "control_center"):
+            frozen.append(self.decoder.control_center)
         if hasattr(self.decoder, "control_scale"):
             frozen.append(self.decoder.control_scale)
         for module in (self.latent_sde.drift, self.latent_sde.diffusion):

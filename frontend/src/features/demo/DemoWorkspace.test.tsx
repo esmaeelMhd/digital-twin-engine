@@ -168,6 +168,7 @@ const optimizeResponse: DemoOptimizeControlResponse = {
     above_upper_bound_rate: 0,
     below_lower_bound_rate: 0,
   },
+  source: 'simulator',
 };
 
 afterEach(() => {

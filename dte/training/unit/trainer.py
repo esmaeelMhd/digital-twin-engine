@@ -128,6 +128,7 @@ class Trainer:
         
         self.best_val_loss = float("inf")
         self.last_train_summary: Dict[str, float | int | bool | str | None] = {}
+        self.one_step_enabled = float(self.loss_computer.w_one_step) > 0.0
     
     def _sde_active_at_step(self, step: int) -> bool:
         sde_cfg = self.config.get("sde_training", {})
@@ -164,6 +165,7 @@ class Trainer:
         weights = self.loss_computer.get_loss_weights(step, one_step_weight=one_step_weight)
 
         # Process each sequence in batch
+        key, diff_key = jax.random.split(key)
         keys = jax.random.split(key, batch_size)
 
         def process_one(idx, k):
@@ -204,49 +206,52 @@ class Trainer:
             )
             pred_states = decode_fn(z_traj, controls[idx])
 
-            def teacher_forced_one_step(
-                state_t,
-                control_t,
-                control_tp1,
-                disturbance_t,
-                disturbance_tp1,
-                t_t,
-                t_tp1,
-            ):
-                _, z_mean_t, _ = model.encode(
+            if self.one_step_enabled:
+                def teacher_forced_one_step(
                     state_t,
-                    params_batch[idx],
                     control_t,
-                    None,
-                )
-                step_dt = t_tp1 - t_t
-                k1 = model.latent_drift(
-                    z_mean_t, control_t, disturbance_t, params_batch[idx]
-                    , step_dt
-                )
-                control_mid = 0.5 * (control_t + control_tp1)
-                dist_mid = 0.5 * (disturbance_t + disturbance_tp1)
-                k2 = model.latent_drift(
-                    z_mean_t + 0.5 * step_dt * k1, control_mid, dist_mid, params_batch[idx], step_dt
-                )
-                k3 = model.latent_drift(
-                    z_mean_t + 0.5 * step_dt * k2, control_mid, dist_mid, params_batch[idx], step_dt
-                )
-                k4 = model.latent_drift(
-                    z_mean_t + step_dt * k3, control_tp1, disturbance_tp1, params_batch[idx], step_dt
-                )
-                z_next = z_mean_t + (step_dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-                return model.decode(z_next, params_batch[idx], control_tp1)
+                    control_tp1,
+                    disturbance_t,
+                    disturbance_tp1,
+                    t_t,
+                    t_tp1,
+                ):
+                    _, z_mean_t, _ = model.encode(
+                        state_t,
+                        params_batch[idx],
+                        control_t,
+                        None,
+                    )
+                    step_dt = t_tp1 - t_t
+                    k1 = model.latent_drift(
+                        z_mean_t, control_t, disturbance_t, params_batch[idx]
+                        , step_dt
+                    )
+                    control_mid = 0.5 * (control_t + control_tp1)
+                    dist_mid = 0.5 * (disturbance_t + disturbance_tp1)
+                    k2 = model.latent_drift(
+                        z_mean_t + 0.5 * step_dt * k1, control_mid, dist_mid, params_batch[idx], step_dt
+                    )
+                    k3 = model.latent_drift(
+                        z_mean_t + 0.5 * step_dt * k2, control_mid, dist_mid, params_batch[idx], step_dt
+                    )
+                    k4 = model.latent_drift(
+                        z_mean_t + step_dt * k3, control_tp1, disturbance_tp1, params_batch[idx], step_dt
+                    )
+                    z_next = z_mean_t + (step_dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+                    return model.decode(z_next, params_batch[idx], control_tp1)
 
-            pred_next_states = jax.vmap(teacher_forced_one_step)(
-                states[idx, :-1],
-                controls[idx, :-1],
-                controls[idx, 1:],
-                disturbances[idx, :-1],
-                disturbances[idx, 1:],
-                ts[idx, :-1],
-                ts[idx, 1:],
-            )
+                pred_next_states = jax.vmap(teacher_forced_one_step)(
+                    states[idx, :-1],
+                    controls[idx, :-1],
+                    controls[idx, 1:],
+                    disturbances[idx, :-1],
+                    disturbances[idx, 1:],
+                    ts[idx, :-1],
+                    ts[idx, 1:],
+                )
+            else:
+                pred_next_states = jnp.zeros_like(states[idx, 1:])
             
             return pred_states, z_mean, z_logvar, pred_next_states
         
@@ -260,7 +265,9 @@ class Trainer:
         true_states_norm = (states - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8)
         
         # Compute losses in normalized space
-        loss_recon = self.loss_computer.reconstruction_loss(pred_states_norm, true_states_norm)
+        loss_recon = self.loss_computer.reconstruction_loss(
+            pred_states_norm[:, 0], true_states_norm[:, 0]
+        )
         loss_one_step = self.loss_computer.one_step_loss(
             (pred_next_states_batch - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
             (states[:, 1:] - norm_stats["state_mean"]) / (norm_stats["state_std"] + 1e-8),
@@ -293,7 +300,7 @@ class Trainer:
                 )
                 return sigma_fn(z_traj_i, controls[idx], disturbances[idx])
 
-            keys_diff = jax.random.split(key, batch_size)
+            keys_diff = jax.random.split(diff_key, batch_size)
             diff_values = jax.vmap(_diffusion_at_traj, in_axes=(0, 0))(
                 jnp.arange(batch_size), keys_diff
             )

@@ -76,7 +76,9 @@ def _nan_run_gap_mask(
         t_left = ts_seconds[prev_idx] if prev_idx >= 0 else ts_seconds[0]
         t_right = ts_seconds[next_idx] if next_idx < n else ts_seconds[-1]
         if (t_right - t_left) > max_gap_fill:
-            mask |= (t_uniform > t_left) & (t_uniform < t_right)
+            left_ok = t_uniform >= t_left if prev_idx < 0 else t_uniform > t_left
+            right_ok = t_uniform <= t_right if next_idx >= n else t_uniform < t_right
+            mask |= left_ok & right_ok
     return mask
 
 
