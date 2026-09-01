@@ -12,6 +12,7 @@ laws:
       heat_of_reaction: -2.5
       thermal_state_index: 2
       thermal_gain: 0.01
+      # Open CSTR: source-term-only dx/dt residual is a no-op unless closed_system is true.
   thermo:
     - name: liquid_cp
       kind: constant_heat_capacity

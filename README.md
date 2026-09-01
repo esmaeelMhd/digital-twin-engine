@@ -12,7 +12,8 @@ physics-informed latent neural SDEs. It provides:
   t=0 (standard VAE KL). Diffusion magnitude is L2-regularised; there is no
   path-space posterior/prior KL.
 - **Conservation-law residuals** (mass, energy) as physics-informed training
-  losses and evaluation diagnostics
+  losses and evaluation diagnostics for single-system training. Universal
+  training uses bound/positivity penalties and law-based conditioning.
 - **A decoupled system interface**, so a new process is added through a config,
   a simulator class, and registry entries rather than by editing the model
 - **Few-shot transfer** across unit variants, including decoder-only

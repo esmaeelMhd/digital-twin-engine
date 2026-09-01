@@ -58,9 +58,9 @@ CSTR values in the model code.
 | Teacher-forcing annealing | `teacher_forcing.initial_ratio` | Implemented; off by default |
 | KL annealing | `kl_annealing.*` | Always active |
 
-The training loop in `dte/training/unit/trainer.py` uses `model.latent_sde.mean_trajectory(...)`
-when `sde_training.enabled` is false (the default). When enabled, it switches to the full
-stochastic `model.latent_sde(...)` call.
+The training loop in `dte/training/unit/trainer.py` uses `model.rollout_latent(..., stochastic=False)`
+when `sde_training.enabled` is false (the default). When enabled, it switches to
+`model.rollout_latent(..., stochastic=True)`.
 
 ---
 

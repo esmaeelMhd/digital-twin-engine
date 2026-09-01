@@ -702,15 +702,14 @@ class GenericDataGenerator:
                 exceptions += current_batch_size
                 valid_trajs = []
 
-            pbar.set_postfix(
-                attempts=attempts,
-                invalid=invalid,
-                valid=generated,
-            )
-            pbar.refresh()
-
             if not valid_trajs:
                 consecutive_empty += 1
+                pbar.set_postfix(
+                    attempts=attempts,
+                    invalid=invalid,
+                    valid=generated,
+                )
+                pbar.refresh()
                 if consecutive_empty >= max_consecutive_empty:
                     pbar.close()
                     raise RuntimeError(
@@ -730,6 +729,13 @@ class GenericDataGenerator:
                 all_times.append(np.array(traj["t"]))
                 generated += 1
                 pbar.update(1)
+
+            pbar.set_postfix(
+                attempts=attempts,
+                invalid=invalid,
+                valid=generated,
+            )
+            pbar.refresh()
 
         pbar.close()
 

@@ -49,6 +49,7 @@ def _build_chemistry_module(spec: ProcessUnitSpec, item: dict) -> ChemistryLaw:
         ),
         state_gain=float(item.get("state_gain", 1.0)),
         thermal_gain=float(item.get("thermal_gain", 0.0)),
+        closed_system=bool(item.get("closed_system", False)),
     )
 
 

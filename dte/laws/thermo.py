@@ -57,7 +57,7 @@ class ThermoLaw(LawModule):
         return ("heat_capacity", "enthalpy_like", "phase_indicator")
 
     def residual_names(self) -> tuple[str, ...]:
-        return ("enthalpy_transform_consistency",)
+        return ()
 
     def heat_capacity(self, state: Float[Array, "state_dim"]) -> Float[Array, ""]:
         return linear_heat_capacity(
@@ -124,14 +124,8 @@ class ThermoLaw(LawModule):
         dt: float | Array,
         params: Float[Array, "param_dim"] | None,
     ) -> dict[str, Float[Array, "n_steps_minus_one"]]:
-        del controls, disturbances, params
-        if states.shape[0] < 2:
-            return {"enthalpy_transform_consistency": jnp.zeros((1,), dtype=states.dtype)}
-
-        safe_dt = jnp.maximum(jnp.asarray(dt, dtype=states.dtype), 1e-6)
-        enthalpy = jax.vmap(self.enthalpy_like)(states)
-        cp = jax.vmap(self.heat_capacity)(states[:-1])
-        dH_dt = jnp.diff(enthalpy) / safe_dt
-        dT_dt = jnp.diff(states[:, self.temperature_index]) / safe_dt
-        residual = jnp.abs(dH_dt - self.density * cp * dT_dt)
-        return {"enthalpy_transform_consistency": residual}
+        # H is a pointwise function of T, so an enthalpy-consistency residual
+        # is either identically zero (constant Cp) or punishes exact data
+        # (temperature-dependent Cp) when the chain rule is omitted.
+        del states, controls, disturbances, dt, params
+        return {}

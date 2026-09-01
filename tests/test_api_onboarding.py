@@ -36,6 +36,7 @@ def _clear_service_state():
     service._specs.clear()
     service._system_configs.clear()
     service._universal_runtime = None
+    service._adapt_job_slots = None
 
 
 def _write_historian_csv(path: Path) -> None:
@@ -91,6 +92,7 @@ def _create_completed_job(
         default_metrics.update(status_metrics)
 
     def _fake_start(job_id: str, preview_record: dict, request_payload: dict, demo_config_path: str):
+        service._release_adapt_slot()
         job_directory = service.job_dir(job_id)
         job_directory.mkdir(parents=True, exist_ok=True)
         summary = {
@@ -463,3 +465,40 @@ def test_onboarding_path_helpers_reject_traversal_ids():
         onboarding.upload_dir("upl_not-hex-id!!")
     with pytest.raises(onboarding.InvalidOnboardingIdError):
         onboarding.preview_dir("prv_zzzzzzzzzzzz")
+
+
+def test_fail_stale_running_jobs_marks_non_terminal_jobs(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("DTE_ONBOARDING_ROOT", str(tmp_path / "customer_jobs"))
+    running_id = "job_aaaaaaaaaaaa"
+    completed_id = "job_bbbbbbbbbbbb"
+    onboarding.initialize_job_status(job_id=running_id, preview_id="prv_aaaaaaaaaaaa", artifacts={})
+    onboarding.update_job_status(running_id, status="running", stage="adaptation")
+    onboarding.initialize_job_status(job_id=completed_id, preview_id="prv_bbbbbbbbbbbb", artifacts={})
+    onboarding.update_job_status(completed_id, status="completed", stage="adaptation")
+
+    failed = onboarding.fail_stale_running_jobs()
+    assert running_id in failed
+    assert completed_id not in failed
+    assert onboarding.load_job_status(running_id)["status"] == "failed"
+    assert "interrupted by server restart" in onboarding.load_job_status(running_id)["error"]
+    assert onboarding.load_job_status(completed_id)["status"] == "completed"
+
+
+def test_onboarding_create_job_returns_429_when_adapt_slots_full(monkeypatch, tmp_path: Path):
+    _demo_env(monkeypatch)
+    monkeypatch.setenv("DTE_DISABLE_UNIVERSAL_RUNTIME", "1")
+    monkeypatch.setenv("DTE_ONBOARDING_ROOT", str(tmp_path / "customer_jobs"))
+    _clear_service_state()
+
+    with TestClient(service.app) as client:
+        _upload_json, preview_json, _job_json = _create_completed_job(client, monkeypatch, tmp_path)
+        monkeypatch.setattr(service, "_try_acquire_adapt_slot", lambda: False)
+        response = client.post(
+            "/onboarding/jobs",
+            json={
+                "preview_id": preview_json["preview_id"],
+                "model_path": str(tmp_path / "model.eqx"),
+                "config_path": str(tmp_path / "config.yaml"),
+            },
+        )
+        assert response.status_code == 429

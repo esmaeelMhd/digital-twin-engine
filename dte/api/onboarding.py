@@ -189,6 +189,34 @@ def update_job_status(job_id: str, **updates: Any) -> dict[str, Any]:
     return payload
 
 
+_TERMINAL_JOB_STATUSES = {"completed", "failed"}
+
+
+def fail_stale_running_jobs() -> list[str]:
+    """Mark non-terminal jobs failed after a process restart."""
+
+    failed_ids: list[str] = []
+    root = jobs_root()
+    if not root.exists():
+        return failed_ids
+    for path in root.iterdir():
+        if not path.is_dir() or not _ONBOARDING_ID_RE.fullmatch(path.name):
+            continue
+        payload = _read_json(path / "status.json") or {}
+        status = str(payload.get("status", "")).lower()
+        if not status or status in _TERMINAL_JOB_STATUSES:
+            continue
+        update_job_status(
+            path.name,
+            status="failed",
+            stage=payload.get("stage") or "interrupted",
+            progress_message="Customer adaptation was interrupted by a server restart.",
+            error="interrupted by server restart",
+        )
+        failed_ids.append(path.name)
+    return failed_ids
+
+
 def build_onboarding_templates(
     system_configs: dict[str, dict[str, Any]],
     *,

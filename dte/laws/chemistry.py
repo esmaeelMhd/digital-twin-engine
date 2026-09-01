@@ -47,6 +47,7 @@ class ChemistryLaw(LawModule):
     thermal_state_index: int | None = None
     state_gain: float = 1.0
     thermal_gain: float = 0.0
+    closed_system: bool = False
 
     def __post_init__(self):
         object.__setattr__(
@@ -155,6 +156,17 @@ class ChemistryLaw(LawModule):
             }
 
         safe_dt = jnp.maximum(jnp.asarray(dt, dtype=states.dtype), 1e-6)
+        rates = jax.vmap(self.reaction_rate)(states[:-1])
+        nonnegative_rate = jax.nn.relu(-rates)
+        if not self.closed_system:
+            # Source-term-only dx/dt balance holds for closed reactors, not
+            # open flow systems whose observed dx/dt includes transport.
+            zeros = jnp.zeros((states.shape[0] - 1,), dtype=states.dtype)
+            return {
+                "state_delta_consistency": zeros,
+                "nonnegative_rate": nonnegative_rate,
+            }
+
         predicted_delta = jax.vmap(
             lambda s, u, d: self.mechanistic_delta(s, u, d, None, safe_dt)
         )(states[:-1], controls[:-1], disturbances[:-1])
@@ -167,8 +179,7 @@ class ChemistryLaw(LawModule):
             jnp.abs(observed_delta - predicted_delta) * active_mask[None, :],
             axis=-1,
         ) / active_count
-        rates = jax.vmap(self.reaction_rate)(states[:-1])
         return {
             "state_delta_consistency": state_residual,
-            "nonnegative_rate": jax.nn.relu(-rates),
+            "nonnegative_rate": nonnegative_rate,
         }

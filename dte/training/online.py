@@ -591,7 +591,7 @@ class OnlineAdapter:
         opt_tuple = (self._optimizer, self._opt_state)
 
         for _ in range(n_steps):
-            start = int(self._rng.integers(0, n_steps_in_buf - seq_len))
+            start = int(self._rng.integers(0, n_steps_in_buf - seq_len + 1))
             batch = {
                 "states": jnp.array(traj["states"][start : start + seq_len]),
                 "controls": jnp.array(traj["controls"][start : start + seq_len]),

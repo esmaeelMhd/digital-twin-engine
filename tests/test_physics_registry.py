@@ -30,7 +30,7 @@ def test_get_physics_loss_for_cstr_can_be_augmented_with_law_layers():
     residual_names = physics_loss.residual_names()
     assert "mass" in residual_names
     assert "chemistry_primary_reaction_state_delta_consistency" in residual_names
-    assert "thermo_liquid_cp_enthalpy_transform_consistency" in residual_names
+    assert "thermo_liquid_cp_enthalpy_transform_consistency" not in residual_names
 
     residuals = physics_loss.compute_residuals(
         states=jnp.asarray(
@@ -58,7 +58,7 @@ def test_get_physics_loss_for_cstr_can_be_augmented_with_law_layers():
     )
 
     assert "chemistry_primary_reaction_state_delta_consistency" in residuals
-    assert "thermo_liquid_cp_enthalpy_transform_consistency" in residuals
+    assert "thermo_liquid_cp_enthalpy_transform_consistency" not in residuals
 
 
 def test_get_physics_loss_for_unknown_system_falls_back_to_null():
