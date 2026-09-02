@@ -82,9 +82,11 @@ class PredictResponse(BaseModel):
 class EnsembleRequest(BaseModel):
     """Request body for the /ensemble endpoint.
 
-    Unit checkpoints with SDE training enabled sample stochastic SDE rollouts.
-    Otherwise (and for universal checkpoints) the encoder's initial latent is
-    sampled over a deterministic latent rollout.
+    Unit checkpoints with SDE training enabled draw a damped encoder
+    initial-latent sample plus a stochastic SDE rollout (``sde_rollout``).
+    Otherwise each sample is a damped encoder initial-latent draw over a
+    deterministic rollout (``encoder_sampling``). Universal checkpoints
+    always report ``encoder_sampling``.
     """
 
     system: str = Field("cstr", description="Registered system name (e.g. 'cstr', 'heat_exchanger', 'two_tank').")
@@ -111,9 +113,11 @@ class EnsembleResponse(BaseModel):
     uncertainty_source: str = Field(
         ...,
         description=(
-            "How the ensemble was formed: 'sde_rollout' for a trained stochastic "
-            "SDE, or 'encoder_sampling' for encoder initial-latent samples over a "
-            "deterministic rollout."
+            "How the ensemble was formed: 'sde_rollout' for a damped encoder "
+            "initial-latent sample plus a stochastic SDE rollout, or "
+            "'encoder_sampling' for a damped encoder initial-latent sample over "
+            "a deterministic rollout. Universal checkpoints always report "
+            "'encoder_sampling'."
         ),
     )
 

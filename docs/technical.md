@@ -435,7 +435,7 @@ The FastAPI service now exposes:
 
 - `/health`
 - `/predict`
-- `/ensemble` — falls back to encoder initial-latent sampling when SDE training was disabled and reports `uncertainty_source`
+- `/ensemble` — unit checkpoints delegate to `DigitalTwin.predict_ensemble(stochastic=sde_training.enabled)` (the same path `/demo/rollout` uses) and report `uncertainty_source`
 - `/steady_state`
 - `/demo/*`
 - `/onboarding/*`
