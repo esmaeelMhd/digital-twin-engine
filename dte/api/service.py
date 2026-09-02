@@ -1365,60 +1365,22 @@ async def ensemble(req: EnsembleRequest):
         disturbances_arr = jnp.asarray(disturbances, dtype=jnp.float32)
         initial_arr = jnp.asarray(initial_state, dtype=jnp.float32)
         sde_enabled = bool(_model_sde_enabled.get(spec.name, False))
-        decode_fn = jax.vmap(
-            lambda z, u: model.decode(z, params_arr, u),
-            in_axes=(0, 0),
+        result = model.predict_ensemble(
+            initial_arr,
+            controls_arr,
+            disturbances_arr,
+            params_arr,
+            ts,
+            jax.random.PRNGKey(int(req.seed)),
+            n_samples=int(req.n_samples),
+            stochastic=sde_enabled,
         )
-        if sde_enabled:
-            uncertainty_source = "sde_rollout"
-            base_key = jax.random.PRNGKey(int(req.seed))
-            enc_key, *sde_keys = jax.random.split(base_key, req.n_samples + 1)
-            _, z_mean, _ = model.encode(
-                initial_arr,
-                params_arr,
-                controls_arr[0],
-                enc_key,
-            )
-
-            def _one_sde_sample(sde_key):
-                z_traj = model.rollout_latent(
-                    ts,
-                    z_mean,
-                    controls_arr,
-                    params_arr,
-                    disturbances=disturbances_arr,
-                    key=sde_key,
-                    stochastic=True,
-                )
-                return decode_fn(z_traj, controls_arr)
-
-            all_samples = np.asarray(jax.vmap(_one_sde_sample)(jnp.stack(sde_keys)))
-        else:
-            uncertainty_source = "encoder_sampling"
-            keys = jax.random.split(jax.random.PRNGKey(int(req.seed)), int(req.n_samples))
-
-            def _one_encoder_sample(sample_key):
-                z0, _, _ = model.encode(
-                    initial_arr,
-                    params_arr,
-                    controls_arr[0],
-                    sample_key,
-                )
-                z_traj = model.rollout_latent(
-                    ts,
-                    z0,
-                    controls_arr,
-                    params_arr,
-                    disturbances=disturbances_arr,
-                    stochastic=False,
-                )
-                return decode_fn(z_traj, controls_arr)
-
-            all_samples = np.asarray(jax.vmap(_one_encoder_sample)(keys))
+        all_samples = np.asarray(result["states_samples"])
         mean = np.mean(all_samples, axis=0)
         std = np.std(all_samples, axis=0)
         p05 = np.percentile(all_samples, 5.0, axis=0)
         p95 = np.percentile(all_samples, 95.0, axis=0)
+        uncertainty_source = "sde_rollout" if sde_enabled else "encoder_sampling"
 
     return EnsembleResponse(
         system=req.system,

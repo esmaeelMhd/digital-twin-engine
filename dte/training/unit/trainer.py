@@ -165,7 +165,7 @@ class Trainer:
         weights = self.loss_computer.get_loss_weights(step, one_step_weight=one_step_weight)
 
         # Process each sequence in batch
-        key, diff_key = jax.random.split(key)
+        key, _ = jax.random.split(key)
         keys = jax.random.split(key, batch_size)
 
         def process_one(idx, k):
@@ -253,11 +253,11 @@ class Trainer:
             else:
                 pred_next_states = jnp.zeros_like(states[idx, 1:])
             
-            return pred_states, z_mean, z_logvar, pred_next_states
+            return pred_states, z_mean, z_logvar, pred_next_states, z_traj
         
         # Process batch
         results = jax.vmap(process_one, in_axes=(0, 0))(jnp.arange(batch_size), keys)
-        pred_states_batch, z_means, z_logvars, pred_next_states_batch = results
+        pred_states_batch, z_means, z_logvars, pred_next_states_batch, z_trajs = results
         
         # Normalize states for losses
         norm_stats = self.train_dataset.get_normalization_stats()
@@ -286,26 +286,15 @@ class Trainer:
         sde_cfg = self.config.get("sde_training", {})
         sde_kl_weight = float(sde_cfg.get("sde_kl_weight", 0.0))
         if sde_active and sde_kl_weight > 0:
-            # Compute diffusion magnitudes over the batch using vmap.
-            def _diffusion_at_traj(idx, k):
-                _, z_mean_i, _ = model.encode(
-                    states[idx, 0], params_batch[idx], controls[idx, 0], k
-                )
-                # Mean trajectory: shape (seq_len, latent_dim)
-                z_traj_i = model.rollout_latent(
-                    ts[idx], z_mean_i, controls[idx], params_batch[idx],
-                    disturbances=disturbances[idx],
-                    stochastic=False,
-                )
+            def _diffusion_at_traj(z_traj, control_traj, disturbance_traj, params_i):
                 sigma_fn = jax.vmap(
-                    lambda z, u, d: model.latent_sde.diffusion(z, u, d, params_batch[idx]),
-                    in_axes=(0, 0, 0)
+                    lambda z, u, d: model.latent_sde.diffusion(z, u, d, params_i),
+                    in_axes=(0, 0, 0),
                 )
-                return sigma_fn(z_traj_i, controls[idx], disturbances[idx])
+                return sigma_fn(z_traj, control_traj, disturbance_traj)
 
-            keys_diff = jax.random.split(diff_key, batch_size)
-            diff_values = jax.vmap(_diffusion_at_traj, in_axes=(0, 0))(
-                jnp.arange(batch_size), keys_diff
+            diff_values = jax.vmap(_diffusion_at_traj)(
+                z_trajs, controls, disturbances, params_batch
             )
             loss_sde_kl = self.loss_computer.diffusion_magnitude_penalty(diff_values, dt)
         else:

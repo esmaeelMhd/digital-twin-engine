@@ -21,7 +21,6 @@ from dte.simulators.registry import get_simulator, get_system_spec
 from dte.utils.plotting import (
     plot_trajectory_comparison,
     plot_conservation_violation,
-    plot_latent_space,
     plot_prediction_error,
 )
 
@@ -126,6 +125,13 @@ def _resolve_evaluation_paths(args: argparse.Namespace) -> dict[str, Path]:
         "data_dir": data_dir,
         "output_dir": output_dir,
     }
+
+
+def _resolve_uncertainty_source(config: dict) -> tuple[bool, str]:
+    """Return whether SDE training was enabled and the matching ensemble label."""
+    sde_enabled = bool((config.get("sde_training") or {}).get("enabled", False))
+    source = "sde_rollout" if sde_enabled else "encoder_sampling"
+    return sde_enabled, source
 
 
 def _init_metric_store():
@@ -485,6 +491,12 @@ def main():
     # Load configs
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
+    sde_enabled, uncertainty_source = _resolve_uncertainty_source(config)
+    if args.predict_mode == "stochastic" and not sde_enabled:
+        print(
+            "Warning: --predict_mode stochastic requested but sde_training.enabled "
+            "is false; the diffusion net was never trained."
+        )
 
     with open(args.system_config, "r") as f:
         system_config = yaml.safe_load(f)
@@ -672,6 +684,7 @@ def main():
                     sample["t"],
                     subkey,
                     n_samples=args.n_samples,
+                    stochastic=sde_enabled,
                 )
                 if plot_sample is None:
                     plot_sample = sample
@@ -702,6 +715,7 @@ def main():
                 "within_2sigma_percent": calibration,
                 "includes_measurement_noise": True,
                 "measurement_noise_std": noise_std.tolist(),
+                "uncertainty_source": uncertainty_source,
             }
 
             print(f"\nUncertainty Calibration ({split_label}, {len(cal_indices)} trajectories):")
@@ -717,6 +731,7 @@ def main():
         "test_data": args.test_data,
         "split": split_label,
         "predict_mode": args.predict_mode,
+        "sde_training_enabled": sde_enabled,
         "sample_count": int(n_eval),
         "sample_indices": [int(idx) for idx in sample_indices.tolist()],
         "plot_selection": args.plot_selection,

@@ -132,6 +132,7 @@ def rollout_model_ensemble(
     dt: float,
     n_samples: int,
     seed: int = 0,
+    stochastic: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Roll out one model-backed candidate and return mean/std in physical units."""
 
@@ -155,6 +156,7 @@ def rollout_model_ensemble(
                 ts,
                 jax.random.PRNGKey(seed),
                 n_samples=sample_count,
+                stochastic=stochastic,
             )
             return (
                 np.asarray(ensemble["states_mean"], dtype=np.float32),

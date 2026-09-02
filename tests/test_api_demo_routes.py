@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import jax
+import numpy as np
 import yaml
 from fastapi.testclient import TestClient
 
@@ -262,19 +263,26 @@ def test_unit_checkpoint_ensemble_and_optimize_respect_sde_training_flag(monkeyp
     _clear_service_state()
 
     with TestClient(service.app) as client:
-        ensemble_response = client.post(
-            "/ensemble",
-            json={
-                "system": "cstr",
-                "initial_state": [0.5, 0.5, 350.0, 300.0],
-                "controls": [[55.0, 302.0]] * 6,
-                "disturbances": [[1.25, 320.0]] * 6,
-                "dt": 0.1,
-                "n_samples": 3,
-            },
-        )
+        payload = {
+            "system": "cstr",
+            "initial_state": [0.5, 0.5, 350.0, 300.0],
+            "controls": [[55.0, 302.0]] * 6,
+            "disturbances": [[1.25, 320.0]] * 6,
+            "dt": 0.1,
+            "n_samples": 3,
+            "seed": 0,
+        }
+        ensemble_response = client.post("/ensemble", json=payload)
         assert ensemble_response.status_code == 200
-        assert ensemble_response.json()["uncertainty_source"] == "encoder_sampling"
+        ensemble_json = ensemble_response.json()
+        assert ensemble_json["uncertainty_source"] == "encoder_sampling"
+
+        rollout_response = client.post("/demo/rollout", json=payload)
+        assert rollout_response.status_code == 200
+        assert np.allclose(
+            np.asarray(ensemble_json["mean"]),
+            np.asarray(rollout_response.json()["mean"]),
+        )
 
         optimize_response = client.post(
             "/demo/optimize_control",
