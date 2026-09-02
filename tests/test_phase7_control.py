@@ -306,6 +306,75 @@ def test_process_mpc_interface_rollout_supports_universal_foundation_model():
     assert np.isfinite(np.asarray(rollout["states"])).all()
 
 
+def test_process_mpc_interface_unit_rollout_respects_stochastic_flag():
+    spec, simulator, _ = _load_system("cstr")
+    model = DigitalTwin.from_config(_tiny_model_config(), jax.random.PRNGKey(0), system_spec=spec)
+    controls = np.tile(
+        np.asarray(
+            [0.5 * sum(spec.control_ranges[name]) for name in spec.control_names],
+            dtype=np.float32,
+        )[None, :],
+        (6, 1),
+    )
+    disturbances = np.tile(
+        np.asarray(spec.default_nominal_disturbance, dtype=np.float32)[None, :],
+        (6, 1),
+    )
+    params = np.ones(spec.param_dim, dtype=np.float32)
+    dt = 0.05
+    ts = jnp.linspace(0.0, max(controls.shape[0] - 1, 0) * dt, controls.shape[0], dtype=jnp.float32)
+    seed = 9
+    n_samples = 3
+
+    deterministic_interface = ProcessMPCInterface(
+        spec,
+        simulator,
+        model=model,
+        params=params,
+        config=MPCInterfaceConfig(dt=dt, horizon=6, rollout_samples=n_samples, stochastic_rollout=False),
+    )
+    deterministic_rollout = deterministic_interface.rollout_candidate(
+        controls,
+        disturbances=disturbances,
+        use_model=True,
+        n_samples=n_samples,
+        seed=seed,
+    )
+    expected = model.predict_ensemble(
+        jnp.asarray(spec.default_initial_state, dtype=jnp.float32),
+        jnp.asarray(controls, dtype=jnp.float32),
+        jnp.asarray(disturbances, dtype=jnp.float32),
+        jnp.asarray(params, dtype=jnp.float32),
+        ts,
+        jax.random.PRNGKey(seed),
+        n_samples=n_samples,
+        stochastic=False,
+    )
+    assert np.allclose(
+        np.asarray(deterministic_rollout["states"]),
+        np.asarray(expected["states_mean"]),
+    )
+
+    stochastic_interface = ProcessMPCInterface(
+        spec,
+        simulator,
+        model=model,
+        params=params,
+        config=MPCInterfaceConfig(dt=dt, horizon=6, rollout_samples=n_samples, stochastic_rollout=True),
+    )
+    stochastic_rollout = stochastic_interface.rollout_candidate(
+        controls,
+        disturbances=disturbances,
+        use_model=True,
+        n_samples=n_samples,
+        seed=seed,
+    )
+    assert not np.allclose(
+        np.asarray(deterministic_rollout["states"]),
+        np.asarray(stochastic_rollout["states"]),
+    )
+
+
 def test_process_control_env_runs_gymnasium_style_loop():
     spec, simulator, _ = _load_system("two_tank")
     env = ProcessControlEnv(

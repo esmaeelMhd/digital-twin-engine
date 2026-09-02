@@ -247,4 +247,25 @@ describe('DemoWorkspace', () => {
     expect(optimizePayload.n_candidates).toBe(12);
     expect(optimizePayload.seed).toBe(17);
   });
+
+  it('describes unit-checkpoint forecast bands without claiming simulator ensembles', async () => {
+    const modelCompareResponse: DemoCompareScenariosResponse = {
+      ...compareResponse,
+      baseline_source: 'model',
+      candidate_source: 'model',
+    };
+    const compareScenario = vi.fn().mockResolvedValue(modelCompareResponse);
+    const optimizeScenario = vi.fn().mockResolvedValue(optimizeResponse);
+
+    renderWorkspace(createDemo(), compareScenario, optimizeScenario);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /A trained digital-twin checkpoint is generating the forecast bands/i,
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/simulator ensembles/i)).not.toBeInTheDocument();
+  });
 });

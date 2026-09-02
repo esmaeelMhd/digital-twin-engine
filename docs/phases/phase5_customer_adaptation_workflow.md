@@ -79,7 +79,7 @@ The validation report is generated from the calibrated model and includes:
 - one-step physical forecast metrics
 - multi-step rollout metrics
 - local control-sensitivity mismatch against the matched simulator
-- uncertainty calibration metrics from stochastic rollout samples
+- uncertainty calibration metrics from encoder initial-latent sampling (the universal runtime has no stochastic diffusion path)
 - bound and positivity summaries from predicted trajectories
 
 ## Current Scope

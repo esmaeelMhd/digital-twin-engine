@@ -27,6 +27,7 @@ class MPCInterfaceConfig:
     horizon: int = 20
     constraint_penalty: float = 10.0
     rollout_samples: int = 8
+    stochastic_rollout: bool = False
 
 
 def _clip_controls(spec: ProcessUnitSpec, controls: np.ndarray) -> np.ndarray:
@@ -198,6 +199,7 @@ class ProcessMPCInterface:
                 dt=self.config.dt,
                 n_samples=max(int(n_samples or self.config.rollout_samples), 1),
                 seed=seed,
+                stochastic=self.config.stochastic_rollout,
             )
             return {
                 "source": "model",

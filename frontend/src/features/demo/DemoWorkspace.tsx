@@ -259,7 +259,9 @@ export function DemoWorkspace({
             <div className="helper-note">
               {comparison.candidate_source === 'universal_model'
                 ? 'The shared runtime is generating the forecast bands for the baseline and alternative plans. The recommendation then searches for a nearby stabilization schedule you could review with operations.'
-                : 'This run is using simulator ensembles because the shared runtime is unavailable. The comparison flow stays the same, but the uncertainty bands are coming from the physical simulator.'}
+                : comparison.candidate_source === 'model'
+                  ? 'A trained digital-twin checkpoint is generating the forecast bands for the baseline and alternative plans. The recommendation then searches for a nearby stabilization schedule you could review with operations.'
+                  : 'This run is using simulator ensembles because the shared runtime is unavailable. The comparison flow stays the same, but the uncertainty bands are coming from the physical simulator.'}
             </div>
 
             {optimizedResult ? (
