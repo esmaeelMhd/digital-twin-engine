@@ -1334,9 +1334,11 @@ async def predict(req: PredictRequest):
 async def ensemble(req: EnsembleRequest):
     """Estimate prediction uncertainty from an ensemble of rollouts.
 
-    Unit checkpoints with SDE training enabled sample stochastic SDE trajectories.
-    Otherwise the encoder's initial latent is sampled over a deterministic
-    rollout. The universal runtime always uses encoder sampling.
+    Unit checkpoints with SDE training enabled draw a damped encoder
+    initial-latent sample plus a stochastic SDE rollout. Otherwise each
+    sample is a damped encoder initial-latent draw over a deterministic
+    rollout. Unit checkpoints share ``DigitalTwin.predict_ensemble`` with
+    ``/demo/rollout``. The universal runtime always uses encoder sampling.
     """
     runtime, spec = _get_inference_runtime_and_spec(req.system)
     controls = _validate_control_sequence(spec, req.controls)
